@@ -1,0 +1,134 @@
+# Rust/Cargo build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock
+# Note: For library projects, Cargo.lock should typically be ignored
+# For binary projects, Cargo.lock should typically be committed
+# Currently keeping Cargo.lock (for binary projects)
+# If this is a library project, uncomment the line below:
+# Cargo.lock
+
+# Incremental compilation cache
+*.rlib
+*.so
+*.dylib
+*.dll
+
+# Test-generated executables
+/target/debug/
+/target/release/
+
+# Backup files
+**/*~
+**/*.swp
+**/*.swo
+**/*~
+
+# IDE/Editor configuration files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+.metadata/
+*.sublime-project
+*.sublime-workspace
+
+# Visual Studio Code
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# JetBrains IDEs (IntelliJ IDEA, CLion, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.idea_modules/
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# OS-generated files
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# Environment variable files
+.env
+.env.local
+.env.*.local
+
+# Debug files
+*.log
+*.out
+debug/
+*.dSYM/
+
+# Profiling
+perf.data
+perf.data.old
+flamegraph.svg
+*.profraw
+*.profdata
+
+# Coverage reports
+*.gcda
+*.gcno
+*.gcov
+lcov.info
+coverage/
+tarpaulin-report.html
+cobertura.xml
+
+# Rust documentation
+/doc/
+
+# Other
+*.orig
+.cargo/
+
+
+# AI
+AGENTS.md
+CLAUDE.md
+GEMINI.md
