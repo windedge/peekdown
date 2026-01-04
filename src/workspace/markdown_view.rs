@@ -20,16 +20,24 @@ impl MarkdownView {
         div()
             .size_full()
             .bg(theme.background)
+            .flex()
+            .justify_center() // Center horizontally
             .child(
-                TextView::markdown(
-                    ElementId::Name("markdown".into()), 
-                    content.clone(),
-                    window,
-                    cx
-                )
-                    .scrollable(true)
-                    .p_8()
-                    .text_size(rems(1.0))
+                div()
+                    .w_full()
+                    .max_w(px(1200.)) // Limit reading width
+                    .h_full()
+                    .child(
+                        TextView::markdown(
+                            ElementId::Name("markdown".into()), 
+                            content.clone(),
+                            window,
+                            cx
+                        )
+                            .scrollable(true)
+                            .p_8()
+                            .text_size(rems(1.0))
+                    )
             )
     }
 }
