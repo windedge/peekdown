@@ -15,6 +15,7 @@ fn main() {
     Application::new()
         .with_assets(Assets)
         .run(move |cx: &mut App| {
+            gpui_component::init(cx);
             workspace::init(cx, initial_file.clone());
         });
 }
