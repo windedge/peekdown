@@ -1,6 +1,10 @@
 //! UI Views and layout.
 
 use gpui::*;
+use crate::state::theme::Theme;
+
+mod welcome;
+use welcome::WelcomeView;
 
 pub fn init(cx: &mut App) {
     cx.open_window(
@@ -23,22 +27,28 @@ pub fn init(cx: &mut App) {
     .unwrap();
 }
 
-struct WorkspaceView;
+struct WorkspaceView {
+    theme: Theme,
+}
 
 impl WorkspaceView {
     pub fn new() -> Self {
-        Self
+        Self {
+            theme: Theme::dark(),
+        }
     }
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = &self.theme;
+        
         div()
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0x1e1e1e)) // Dark background base
-            .text_color(rgb(0xffffff))
+            .bg(theme.bg_base)
+            .text_color(theme.text_primary)
             .child(
                 // Header
                 div()
@@ -46,9 +56,9 @@ impl Render for WorkspaceView {
                     .items_center()
                     .h_10()
                     .px_4()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(theme.bg_header)
                     .border_b_1()
-                    .border_color(rgb(0x3d3d3d))
+                    .border_color(theme.border)
                     .child("Peekdown Header"),
             )
             .child(
@@ -56,8 +66,7 @@ impl Render for WorkspaceView {
                 div()
                     .flex()
                     .flex_grow()
-                    .p_4()
-                    .child("Markdown Content Area"),
+                    .child(cx.new(|_cx| WelcomeView::new())),
             )
             .child(
                 // Footer
@@ -66,9 +75,9 @@ impl Render for WorkspaceView {
                     .items_center()
                     .h_8()
                     .px_4()
-                    .bg(rgb(0x252526))
+                    .bg(theme.bg_footer)
                     .border_t_1()
-                    .border_color(rgb(0x3d3d3d))
+                    .border_color(theme.border)
                     .text_xs()
                     .child("Ready"),
             )
