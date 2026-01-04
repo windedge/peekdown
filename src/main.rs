@@ -1,12 +1,17 @@
-#![warn(clippy::all)]
+use gpui::*;
+use assets::Assets;
 
-mod app;
-mod core;
-mod io;
-mod parser;
-mod ui;
+mod assets;
+mod services;
+mod state;
+mod workspace;
 
-fn main() -> eframe::Result {
+fn main() {
     tracing_subscriber::fmt::init();
-    app::run()
+
+    Application::new()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
+            workspace::init(cx);
+        });
 }

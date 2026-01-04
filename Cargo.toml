@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.30"
-egui = "0.30"
+gpui = "0.2.2"
+gpui-component = "0.5.0"
+smol = "2.0"
+async-fs = "2.0"
+futures = "0.3"
+rust-embed = "8.2.0"
 pulldown-cmark = { version = "0.12", features = ["simd"] }
 syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
-ureq = "2.10"
-rayon = "1.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 notify = "6.1"
 encoding_rs = "0.8"
