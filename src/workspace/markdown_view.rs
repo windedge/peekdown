@@ -1,5 +1,5 @@
 use gpui::*;
-use pulldown_cmark::{Parser, Options, Event, Tag};
+use pulldown_cmark::{Parser, Options, Event, Tag, TagEnd};
 use crate::state::document::Document;
 use crate::state::theme::Theme;
 
@@ -36,7 +36,7 @@ impl MarkdownView {
 
         for event in parser {
             match event {
-                Event::Start(Tag::Heading(level, _, _)) => {
+                Event::Start(Tag::Heading { level, .. }) => {
                     in_header = true;
                     // pulldown_cmark::HeadingLevel::H1 -> 1, etc.
                     current_level = match level {
@@ -49,7 +49,7 @@ impl MarkdownView {
                     };
                     current_text.clear();
                 }
-                Event::End(Tag::Heading(_, _, _)) => {
+                Event::End(TagEnd::Heading(_)) => {
                     in_header = false;
                     blocks.push(Block::Header(current_text.clone(), current_level));
                     current_text.clear();
@@ -57,7 +57,7 @@ impl MarkdownView {
                 Event::Start(Tag::Paragraph) => {
                     current_text.clear();
                 }
-                Event::End(Tag::Paragraph) => {
+                Event::End(TagEnd::Paragraph) => {
                     if !current_text.trim().is_empty() {
                         blocks.push(Block::Paragraph(current_text.clone()));
                     }
@@ -82,24 +82,24 @@ impl MarkdownView {
             .size_full()
             .p_8()
             .gap_4()
-            .bg(theme.bg_base)
-            .overflow_y_scroll();
+            .bg(theme.bg_base);
+            // .overflow_y(Overflow::Scroll) // TODO: Fix scrolling
 
         for block in blocks {
             match block {
                 Block::Header(text, level) => {
                     let size = match level {
-                        1 => text_3xl(),
-                        2 => text_2xl(),
-                        3 => text_xl(),
-                        _ => text_lg(),
+                        1 => rems(2.25),
+                        2 => rems(1.75),
+                        3 => rems(1.5),
+                        _ => rems(1.25),
                     };
                     doc_div = doc_div.child(
                         div()
                             .child(text)
                             .text_color(theme.text_primary)
                             .font_weight(FontWeight::BOLD)
-                            .with_text_style(size)
+                            .text_size(size)
                     );
                 }
                 Block::Paragraph(text) => {
@@ -107,7 +107,7 @@ impl MarkdownView {
                         div()
                             .child(text)
                             .text_color(theme.text_secondary)
-                            .text_base()
+                            .text_size(rems(1.0))
                     );
                 }
             }
