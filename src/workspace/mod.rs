@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use crate::state::document::Document;
 use gpui_component::ActiveTheme;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{IconName, Sizable};
+use gpui_component::IconName;
 
 mod welcome;
 use welcome::WelcomeView;
@@ -152,10 +151,21 @@ impl Render for WorkspaceView {
                                 Tab::new()
                                     .label(tab.title.clone())
                                     .suffix(
-                                        Button::new(("close_tab", ix))
-                                            .icon(IconName::Close)
-                                            .ghost()
-                                            .xsmall()
+                                        div()
+                                            .id(("close_tab", ix))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .w_5()
+                                            .h_5()
+                                            .rounded_md()
+                                            .text_color(theme.muted_foreground)
+                                            .hover(|style| {
+                                                style
+                                                    .bg(theme.danger)
+                                                    .text_color(theme.danger_foreground)
+                                            })
+                                            .child(IconName::Close)
                                             .on_click(cx.listener(move |workspace, _, _window, cx| {
                                                 cx.stop_propagation();
                                                 workspace.close_tab(ix, cx);
