@@ -147,6 +147,7 @@ impl Render for WorkspaceView {
                     .border_color(theme.border)
                     .child(
                         TabBar::new("tab_bar")
+                            .pill() // Use Pill variant for high contrast active state
                             .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
                                 Tab::new()
                                     .label(tab.title.clone())
