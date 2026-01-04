@@ -79,7 +79,6 @@ fn render_block(block: &Block, theme: &Theme, ix: usize) -> Div {
                                 .font_family("Consolas")
                                 .text_size(rems(0.85))
                                 .overflow_x_scroll()
-                                .whitespace_nowrap()
                                 .child(
                                     StyledText::new(code.clone())
                                         .with_highlights(highlights.clone())
