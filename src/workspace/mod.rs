@@ -1,14 +1,11 @@
 //! UI Views and layout.
 
 use gpui::*;
-use std::path::PathBuf;
 use crate::state::theme::Theme;
-use crate::state::document::Document;
 
 mod welcome;
 use welcome::WelcomeView;
 mod markdown_view;
-use markdown_view::MarkdownView;
 
 pub fn init(cx: &mut App) {
     cx.open_window(
@@ -25,7 +22,7 @@ pub fn init(cx: &mut App) {
             ..Default::default()
         },
         |_, cx| {
-            cx.new(|cx| WorkspaceView::new(cx))
+            cx.new(WorkspaceView::new)
         },
     )
     .unwrap();
@@ -37,31 +34,11 @@ struct WorkspaceView {
 }
 
 impl WorkspaceView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let view = Self {
+    pub fn new(_cx: &mut Context<Self>) -> Self {
+        Self {
             theme: Theme::dark(),
             active_view: None,
-        };
-        
-        // Auto-load README.md for verification
-        let path = PathBuf::from("README.md");
-        cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
-             let mut cx = cx.clone();
-             async move {
-                 let content = smol::fs::read_to_string(&path).await;
-                 
-                 if let Ok(content) = content {
-                     workspace.update(&mut cx, |workspace, cx| {
-                         let doc = cx.new(|_cx| Document::new(content, path));
-                         let view = cx.new(|_cx| MarkdownView::new(doc));
-                         workspace.active_view = Some(view.into());
-                         cx.notify();
-                     }).ok();
-                 }
-             }
-        }).detach();
-
-        view
+        }
     }
 }
 
