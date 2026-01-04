@@ -66,32 +66,35 @@ fn render_block(block: &Block, theme: &Theme, ix: usize) -> Div {
         }
         Block::Code(code, lang, highlights) => {
             div()
-                .relative()
                 .p_4()
                 .bg(rgb(0x1e1e1e))
                 .rounded_md()
                 .border_1()
                 .border_color(theme.border)
                 .child(
-                     div()
-                        .id(ix)
-                        .text_color(theme.text_secondary)
-                        .font_family("Consolas")
-                        .text_size(rems(0.85))
-                        .overflow_x_scroll()
+                    div()
+                        .flex()
+                        .justify_between()
+                        .items_center() // Center vertically
                         .child(
-                            StyledText::new(code.clone())
-                                .with_highlights(highlights.clone())
+                             div()
+                                .id(ix)
+                                .text_color(theme.text_secondary)
+                                .font_family("Consolas")
+                                .text_size(rems(0.85))
+                                .overflow_x_scroll()
+                                .child(
+                                    StyledText::new(code.clone())
+                                        .with_highlights(highlights.clone())
+                                )
                         )
-                )
-                .child(
-                     div()
-                        .absolute()
-                        .top_2()
-                        .right_2()
-                        .child(lang.clone())
-                        .text_xs()
-                        .text_color(rgb(0x888888))
+                        .child(
+                             div().child(lang.clone())
+                                .text_xs()
+                                .text_color(rgb(0x888888))
+                                .pl_2()
+                                .flex_shrink_0() // Ensure label doesn't shrink
+                        )
                 )
         }
         Block::List(items, _is_ordered) => {
