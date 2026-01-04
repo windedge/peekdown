@@ -1,13 +1,16 @@
 //! UI Views and layout.
 
 use gpui::*;
+use std::path::PathBuf;
 use crate::state::theme::Theme;
+use crate::state::document::Document;
 
 mod welcome;
 use welcome::WelcomeView;
 mod markdown_view;
+use markdown_view::MarkdownView;
 
-pub fn init(cx: &mut App) {
+pub fn init(cx: &mut App, initial_file: Option<PathBuf>) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -21,8 +24,14 @@ pub fn init(cx: &mut App) {
             ))),
             ..Default::default()
         },
-        |_, cx| {
-            cx.new(WorkspaceView::new)
+        move |_, cx| {
+            cx.new(|cx| {
+                let mut view = WorkspaceView::new(cx);
+                if let Some(path) = initial_file.clone() {
+                    view.open_file(path, cx);
+                }
+                view
+            })
         },
     )
     .unwrap();
@@ -40,6 +49,23 @@ impl WorkspaceView {
             active_view: None,
         }
     }
+
+    pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                let content = smol::fs::read_to_string(&path).await;
+                if let Ok(content) = content {
+                     workspace.update(&mut cx, |workspace, cx| {
+                         let doc = cx.new(|_cx| Document::new(content, path));
+                         let view = cx.new(|_cx| MarkdownView::new(doc));
+                         workspace.active_view = Some(view.into());
+                         cx.notify();
+                     }).ok();
+                }
+            }
+        }).detach();
+    }
 }
 
 impl Render for WorkspaceView {
@@ -47,9 +73,9 @@ impl Render for WorkspaceView {
         let theme = &self.theme;
         
         let body_content = if let Some(view) = &self.active_view {
-            div().child(view.clone())
+            div().size_full().child(view.clone())
         } else {
-            div().child(cx.new(|_cx| WelcomeView::new()))
+            div().size_full().child(cx.new(|_cx| WelcomeView::new()))
         };
 
         div()
