@@ -101,6 +101,7 @@ impl Render for WorkspaceView {
                 div()
                     .flex()
                     .flex_grow()
+                    .overflow_hidden()
                     .child(body_content),
             )
             .child(
