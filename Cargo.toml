@@ -1,0 +1,25 @@
+[package]
+name = "peekdown"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.30"
+egui = "0.30"
+pulldown-cmark = { version = "0.12", features = ["simd"] }
+syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+ureq = "2.10"
+rayon = "1.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+notify = "6.1"
+encoding_rs = "0.8"
+chardetng = "0.1"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
