@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::text::TextView;
+use gpui_component::ActiveTheme;
 use crate::state::document::Document;
-use crate::state::theme::Theme;
 
 pub struct MarkdownView {
     document: Entity<Document>,
@@ -15,11 +15,11 @@ impl MarkdownView {
     fn render_markdown(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let document = self.document.read(cx);
         let content = &document.content;
-        let theme = Theme::dark();
+        let theme = cx.theme();
 
         div()
             .size_full()
-            .bg(theme.bg_base)
+            .bg(theme.background)
             .child(
                 TextView::markdown(
                     ElementId::Name("markdown".into()), 

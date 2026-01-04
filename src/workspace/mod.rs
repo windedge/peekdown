@@ -2,8 +2,8 @@
 
 use gpui::*;
 use std::path::PathBuf;
-use crate::state::theme::Theme;
 use crate::state::document::Document;
+use gpui_component::ActiveTheme;
 
 mod welcome;
 use welcome::WelcomeView;
@@ -38,14 +38,12 @@ pub fn init(cx: &mut App, initial_file: Option<PathBuf>) {
 }
 
 struct WorkspaceView {
-    theme: Theme,
     active_view: Option<AnyView>,
 }
 
 impl WorkspaceView {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
-            theme: Theme::dark(),
             active_view: None,
         }
     }
@@ -70,7 +68,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = &self.theme;
+        let theme = cx.theme().clone();
         
         let body_content = if let Some(view) = &self.active_view {
             div().size_full().child(view.clone())
@@ -82,8 +80,8 @@ impl Render for WorkspaceView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.bg_base)
-            .text_color(theme.text_primary)
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .child(
                 // Header
                 div()
@@ -91,7 +89,7 @@ impl Render for WorkspaceView {
                     .items_center()
                     .h_10()
                     .px_4()
-                    .bg(theme.bg_header)
+                    .bg(theme.title_bar)
                     .border_b_1()
                     .border_color(theme.border)
                     .child("Peekdown Header"),
@@ -111,7 +109,7 @@ impl Render for WorkspaceView {
                     .items_center()
                     .h_8()
                     .px_4()
-                    .bg(theme.bg_footer)
+                    .bg(theme.tab_bar)
                     .border_t_1()
                     .border_color(theme.border)
                     .text_xs()

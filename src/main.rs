@@ -1,5 +1,6 @@
 use gpui::*;
 use assets::Assets;
+use gpui_component::theme::{Theme, ThemeMode};
 
 mod assets;
 mod services;
@@ -16,6 +17,7 @@ fn main() {
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
+            Theme::change(ThemeMode::Dark, None, cx);
             workspace::init(cx, initial_file.clone());
         });
 }
