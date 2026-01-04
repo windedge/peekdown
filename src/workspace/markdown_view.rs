@@ -29,7 +29,7 @@ impl MarkdownView {
                     .flex()
                     .flex_col()
                     .w_full()
-                    .max_w(px(800.)) // Limit reading width
+                    .max_w(px(1200.)) // Increased reading width
                     .p_8()
                     .gap_4()
                     .children(blocks.iter().enumerate().map(|(ix, block)| render_block(block, &theme, ix)))
