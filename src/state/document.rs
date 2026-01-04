@@ -3,6 +3,8 @@ use gpui::*;
 use anyhow::Result;
 use smol::fs;
 use pulldown_cmark::{Parser, Options, Event, Tag, TagEnd};
+use std::ops::Range;
+use crate::services::syntax::SyntaxService;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -11,7 +13,7 @@ pub enum Block {
     Paragraph(String),
     List(Vec<Block>, bool), // items, is_ordered
     ListItem(Vec<Block>),
-    Code(String, String), // content, language
+    Code(String, String, Vec<(Range<usize>, HighlightStyle)>), // content, language, highlights
     Quote(Vec<Block>),
     Image(String, String), // src, alt
     Rule,
@@ -99,7 +101,8 @@ impl Document {
                    current_text.clear();
                 }
                  Event::End(TagEnd::CodeBlock) => {
-                    blocks.push(Block::Code(current_text.clone(), current_lang.clone()));
+                    let highlights = SyntaxService::global().highlight(&current_text, &current_lang);
+                    blocks.push(Block::Code(current_text.clone(), current_lang.clone(), highlights));
                     current_text.clear();
                 }
                 // ... (other cases)

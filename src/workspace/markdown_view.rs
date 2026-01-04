@@ -61,7 +61,7 @@ fn render_block(block: &Block, theme: &Theme) -> Div {
                     .line_height(rems(1.6))
             )
         }
-        Block::Code(code, lang) => {
+        Block::Code(code, lang, highlights) => {
             div()
                 .p_4()
                 .bg(rgb(0x2d2d2d))
@@ -73,10 +73,14 @@ fn render_block(block: &Block, theme: &Theme) -> Div {
                         .flex()
                         .justify_between()
                         .child(
-                             div().child(code.clone())
+                             div()
                                 .text_color(theme.text_secondary)
                                 .font_family("Consolas")
                                 .text_size(rems(0.9))
+                                .child(
+                                    StyledText::new(code.clone())
+                                        .with_highlights(highlights.clone())
+                                )
                         )
                         .child(
                              div().child(lang.clone())
