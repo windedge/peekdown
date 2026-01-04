@@ -66,33 +66,32 @@ fn render_block(block: &Block, theme: &Theme, ix: usize) -> Div {
         }
         Block::Code(code, lang, highlights) => {
             div()
+                .relative()
                 .p_4()
                 .bg(rgb(0x1e1e1e))
                 .rounded_md()
                 .border_1()
                 .border_color(theme.border)
                 .child(
-                    div()
-                        .flex()
-                        .justify_between()
+                     div()
+                        .id(ix)
+                        .text_color(theme.text_secondary)
+                        .font_family("Consolas")
+                        .text_size(rems(0.85))
+                        .overflow_x_scroll()
                         .child(
-                             div()
-                                .id(ix) // Assign ID for scrolling state
-                                .text_color(theme.text_secondary)
-                                .font_family("Consolas")
-                                .text_size(rems(0.85))
-                                .overflow_x_scroll()
-                                .child(
-                                    StyledText::new(code.clone())
-                                        .with_highlights(highlights.clone())
-                                )
+                            StyledText::new(code.clone())
+                                .with_highlights(highlights.clone())
                         )
-                        .child(
-                             div().child(lang.clone())
-                                .text_xs()
-                                .text_color(rgb(0x888888))
-                                .pl_2()
-                        )
+                )
+                .child(
+                     div()
+                        .absolute()
+                        .top_2()
+                        .right_2()
+                        .child(lang.clone())
+                        .text_xs()
+                        .text_color(rgb(0x888888))
                 )
         }
         Block::List(items, _is_ordered) => {
