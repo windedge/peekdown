@@ -23,10 +23,13 @@ impl MarkdownView {
             .bg(theme.bg_base)
             .id("markdown-content")
             .overflow_scroll()
+            .items_center() // Center content horizontally
             .child(
                 div()
                     .flex()
                     .flex_col()
+                    .w_full()
+                    .max_w(px(800.)) // Limit reading width
                     .p_8()
                     .gap_4()
                     .children(blocks.iter().enumerate().map(|(ix, block)| render_block(block, &theme, ix)))
