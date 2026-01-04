@@ -11,7 +11,7 @@ impl MarkdownView {
         Self { document }
     }
 
-    fn render_markdown(&self, cx: &mut Context<Self>) -> Div {
+    fn render_markdown(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let document = self.document.read(cx);
         let blocks = &document.blocks;
         let theme = Theme::dark();
@@ -21,7 +21,8 @@ impl MarkdownView {
             .flex_col()
             .size_full()
             .bg(theme.bg_base)
-            // .scroll_y() // TODO: Fix scrolling (method not found)
+            .id("markdown-content")
+            .overflow_scroll()
             .child(
                 div()
                     .flex()
