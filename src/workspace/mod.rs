@@ -4,7 +4,6 @@ use gpui::*;
 use std::path::PathBuf;
 use crate::state::document::Document;
 use gpui_component::ActiveTheme;
-use gpui_component::tab::{Tab, TabBar};
 use gpui_component::IconName;
 
 mod welcome;
@@ -59,7 +58,6 @@ impl WorkspaceView {
     }
 
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        // Check if already open
         if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
             self.active_tab_index = index;
             cx.notify();
@@ -146,11 +144,52 @@ impl Render for WorkspaceView {
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
-                        TabBar::new("tab_bar")
+                        div()
+                            .id("tab-bar-container")
+                            .flex()
+                            .flex_row()
+                            .overflow_x_scroll()
                             .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
-                                Tab::new()
-                                    .label(tab.title.clone())
-                                    .suffix(
+                                let is_active = ix == self.active_tab_index;
+                                
+                                div()
+                                    .id(("tab", ix))
+                                    .flex()
+                                    .items_center()
+                                    .h_full()
+                                    .px_4()
+                                    .gap_2()
+                                    .border_r_1()
+                                    .border_color(theme.border)
+                                    .cursor_pointer()
+                                    .bg(if is_active {
+                                        theme.background
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .text_color(if is_active {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .hover(|s| {
+                                        if !is_active {
+                                            s.bg(theme.secondary)
+                                        } else {
+                                            s
+                                        }
+                                    })
+                                    .on_click(cx.listener(move |workspace, _, _window, cx| {
+                                        workspace.activate_tab(ix, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .max_w(px(150.))
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .child(tab.title.clone())
+                                    )
+                                    .child(
                                         div()
                                             .id(("close_tab", ix))
                                             .flex()
@@ -159,7 +198,6 @@ impl Render for WorkspaceView {
                                             .w_5()
                                             .h_5()
                                             .rounded_md()
-                                            .text_color(theme.muted_foreground)
                                             .hover(|style| {
                                                 style
                                                     .bg(theme.danger)
@@ -171,10 +209,6 @@ impl Render for WorkspaceView {
                                                 workspace.close_tab(ix, cx);
                                             }))
                                     )
-                            }))
-                            .selected_index(self.active_tab_index)
-                            .on_click(cx.listener(|workspace, index, _window, cx| {
-                                workspace.activate_tab(*index, cx);
                             }))
                     ),
             )
