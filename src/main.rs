@@ -1,8 +1,7 @@
 use gpui::*;
-use assets::Assets;
+use gpui_component_assets::Assets;
 use gpui_component::theme::{Theme, ThemeMode};
 
-mod assets;
 mod services;
 mod state;
 mod workspace;
