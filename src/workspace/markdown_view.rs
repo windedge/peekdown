@@ -18,15 +18,16 @@ impl MarkdownView {
         let theme = cx.theme();
 
         div()
+            .id("markdown-container")
             .size_full()
             .bg(theme.background)
             .flex()
-            .justify_center() // Center horizontally
+            .justify_center()
+            .overflow_y_scroll() // Scrollbar on the right (window level)
             .child(
                 div()
                     .w_full()
-                    .max_w(px(1200.)) // Limit reading width
-                    .h_full()
+                    .max_w(px(1200.))
                     .child(
                         TextView::markdown(
                             ElementId::Name("markdown".into()), 
@@ -34,7 +35,7 @@ impl MarkdownView {
                             window,
                             cx
                         )
-                            .scrollable(true)
+                            .scrollable(false) // Let content grow
                             .p_8()
                             .text_size(rems(1.0))
                     )
