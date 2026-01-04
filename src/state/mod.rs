@@ -2,7 +2,7 @@
 
 use gpui::App;
 
-// pub mod document;
+pub mod document;
 // pub mod tabs;
 pub mod theme;
 
