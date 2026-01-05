@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::text::TextView;
+use gpui_component::text::markdown;
 use gpui_component::ActiveTheme;
 use crate::state::document::Document;
 
@@ -12,7 +12,7 @@ impl MarkdownView {
         Self { document }
     }
 
-    fn render_markdown(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_markdown(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let document = self.document.read(cx);
         let content = &document.content;
         let theme = cx.theme();
@@ -23,19 +23,16 @@ impl MarkdownView {
             .bg(theme.background)
             .flex()
             .justify_center()
-            .overflow_y_scroll() // Scrollbar on the right (window level)
             .child(
                 div()
                     .w_full()
+                    .h_full()
                     .max_w(px(1200.))
+                    .min_w(px(0.))
                     .child(
-                        TextView::markdown(
-                            ElementId::Name("markdown".into()), 
-                            content.clone(),
-                            window,
-                            cx
-                        )
-                            .scrollable(false) // Let content grow
+                        markdown(content.clone())
+                            .scrollable(true)
+                            .selectable(true)
                             .p_8()
                             .text_size(rems(1.0))
                     )
