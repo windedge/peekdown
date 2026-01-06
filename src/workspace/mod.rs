@@ -4,7 +4,11 @@ use gpui::*;
 use std::path::PathBuf;
 use crate::state::document::Document;
 use gpui_component::ActiveTheme;
-use gpui_component::IconName;
+use gpui_component::{Icon, IconName, Sizable};
+use crate::state::config::{AppConfig, AppThemeMode};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::popover::Popover;
+use gpui_component::button::{Button, ButtonVariants};
 
 mod welcome;
 use welcome::WelcomeView;
@@ -13,7 +17,7 @@ use markdown_view::MarkdownView;
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
-pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>) {
+pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>, config: Entity<AppConfig>) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -28,8 +32,12 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
             ..Default::default()
         },
         move |_, cx| {
+            // Apply theme (F6)
+            let theme = config.read(cx).appearance.theme;
+            theme.apply(None, cx);
+
             cx.new(|cx| {
-                let mut view = WorkspaceView::new(cx);
+                let mut view = WorkspaceView::new(cx, config.clone());
                 for path in initial_files.clone() {
                     view.open_file(path, cx);
                 }
@@ -68,13 +76,19 @@ struct WorkspaceTab {
 struct WorkspaceView {
     tabs: Vec<WorkspaceTab>,
     active_tab_index: usize,
+    config: Entity<AppConfig>,
 }
 
 impl WorkspaceView {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>, config: Entity<AppConfig>) -> Self {
+        cx.observe(&config, |_, _, cx| {
+            cx.notify();
+        }).detach();
+
         Self {
             tabs: Vec::new(),
             active_tab_index: 0,
+            config,
         }
     }
 
@@ -104,10 +118,10 @@ impl WorkspaceView {
                              let title = path.file_name()
                                 .map(|s| s.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "Untitled".to_string());
-                             
+
                              let doc = cx.new(|_cx| Document::new(content, path.clone()));
                              let view = cx.new(|_cx| MarkdownView::new(doc));
-                             
+
                              workspace.tabs.push(WorkspaceTab {
                                  path,
                                  view: view.into(),
@@ -122,12 +136,20 @@ impl WorkspaceView {
         }).detach();
     }
 
+    fn update_theme(&mut self, mode: AppThemeMode, window: &mut Window, cx: &mut Context<Self>) {
+        self.config.update(cx, |config, _| {
+            config.appearance.theme = mode;
+            config.save();
+        });
+        mode.apply(Some(window), cx);
+    }
+
     fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
         }
         self.tabs.remove(index);
-        
+
         if self.tabs.is_empty() {
             self.active_tab_index = 0;
         } else {
@@ -152,7 +174,7 @@ impl WorkspaceView {
 impl Render for WorkspaceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        
+
         let body_content = if self.tabs.is_empty() {
             div().size_full().child(cx.new(|_cx| WelcomeView::new()))
         } else {
@@ -183,10 +205,11 @@ impl Render for WorkspaceView {
                             .id("tab-bar-container")
                             .flex()
                             .flex_row()
+                            .flex_grow()
                             .overflow_x_scroll()
                             .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
                                 let is_active = ix == self.active_tab_index;
-                                
+
                                 div()
                                     .id(("tab", ix))
                                     .flex()
@@ -245,6 +268,63 @@ impl Render for WorkspaceView {
                                             }))
                                     )
                             }))
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .child(
+                                {
+                                    let config = self.config.clone();
+                                    let workspace_handle = cx.entity().downgrade();
+                                    Popover::new("settings-popover")
+                                        .trigger(
+                                            Button::new("settings-btn")
+                                                .icon(Icon::new(IconName::Settings))
+                                                .ghost()
+                                                .small()
+                                        )
+                                        .content(move |_, window, cx| {
+                                            let config = config.clone();
+                                            let current_theme = config.read(cx).appearance.theme;
+                                            let workspace_handle = workspace_handle.clone();
+
+                                            PopupMenu::build(window, cx, move |menu, _, _cx| {
+                                                let handle1 = workspace_handle.clone();
+                                                let handle2 = workspace_handle.clone();
+                                                let handle3 = workspace_handle.clone();
+
+                                                menu
+                                                    .item(
+                                                        PopupMenuItem::new("Light")
+                                                            .checked(current_theme == AppThemeMode::Light)
+                                                            .on_click(move |_, window, cx| {
+                                                                handle1.update(cx, |workspace, cx| {
+                                                                    workspace.update_theme(AppThemeMode::Light, window, cx);
+                                                                }).ok();
+                                                            })
+                                                    )
+                                                    .item(
+                                                        PopupMenuItem::new("Dark")
+                                                            .checked(current_theme == AppThemeMode::Dark)
+                                                            .on_click(move |_, window, cx| {
+                                                                handle2.update(cx, |workspace, cx| {
+                                                                    workspace.update_theme(AppThemeMode::Dark, window, cx);
+                                                                }).ok();
+                                                            })
+                                                    )
+                                                    .item(
+                                                        PopupMenuItem::new("Auto")
+                                                            .checked(current_theme == AppThemeMode::Auto)
+                                                            .on_click(move |_, window, cx| {
+                                                                handle3.update(cx, |workspace, cx| {
+                                                                    workspace.update_theme(AppThemeMode::Auto, window, cx);
+                                                                }).ok();
+                                                            })
+                                                    )
+                                            })
+                                        })
+                                }
+                            )
                     ),
             )
             .child(

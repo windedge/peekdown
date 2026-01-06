@@ -132,3 +132,4 @@ cobertura.xml
 AGENTS.md
 CLAUDE.md
 GEMINI.md
+.claude/settings.local.json

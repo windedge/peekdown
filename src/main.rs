@@ -2,7 +2,7 @@
 
 use gpui::*;
 use gpui_component_assets::Assets;
-use gpui_component::theme::{Theme, ThemeMode};
+use crate::state::config::AppConfig;
 
 mod services;
 mod state;
@@ -50,7 +50,7 @@ fn main() {
         .with_assets(Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
-            workspace::init(cx, initial_files.clone(), Some(rx));
+            let config_model = cx.new(|_| AppConfig::load());
+            workspace::init(cx, initial_files.clone(), Some(rx), config_model);
         });
 }
