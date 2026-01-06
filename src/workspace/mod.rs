@@ -77,6 +77,7 @@ struct WorkspaceView {
     tabs: Vec<WorkspaceTab>,
     active_tab_index: usize,
     config: Entity<AppConfig>,
+    settings_menu_open: bool,
 }
 
 impl WorkspaceView {
@@ -89,6 +90,7 @@ impl WorkspaceView {
             tabs: Vec::new(),
             active_tab_index: 0,
             config,
+            settings_menu_open: false,
         }
     }
 
@@ -277,6 +279,10 @@ impl Render for WorkspaceView {
                                     let config = self.config.clone();
                                     let workspace_handle = cx.entity().downgrade();
                                     Popover::new("settings-popover")
+                                        .open(self.settings_menu_open)
+                                        .on_open_change(cx.listener(|workspace, open, _, _cx| {
+                                            workspace.settings_menu_open = *open;
+                                        }))
                                         .trigger(
                                             Button::new("settings-btn")
                                                 .icon(Icon::new(IconName::Settings))
@@ -300,6 +306,7 @@ impl Render for WorkspaceView {
                                                             .on_click(move |_, window, cx| {
                                                                 handle1.update(cx, |workspace, cx| {
                                                                     workspace.update_theme(AppThemeMode::Light, window, cx);
+                                                                    cx.notify();
                                                                 }).ok();
                                                             })
                                                     )
@@ -309,6 +316,7 @@ impl Render for WorkspaceView {
                                                             .on_click(move |_, window, cx| {
                                                                 handle2.update(cx, |workspace, cx| {
                                                                     workspace.update_theme(AppThemeMode::Dark, window, cx);
+                                                                    cx.notify();
                                                                 }).ok();
                                                             })
                                                     )
@@ -318,6 +326,7 @@ impl Render for WorkspaceView {
                                                             .on_click(move |_, window, cx| {
                                                                 handle3.update(cx, |workspace, cx| {
                                                                     workspace.update_theme(AppThemeMode::Auto, window, cx);
+                                                                    cx.notify();
                                                                 }).ok();
                                                             })
                                                     )
