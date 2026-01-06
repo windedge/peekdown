@@ -10,8 +10,10 @@ mod welcome;
 use welcome::WelcomeView;
 mod markdown_view;
 use markdown_view::MarkdownView;
+use smol::channel::Receiver;
+use crate::ipc::IpcMessage;
 
-pub fn init(cx: &mut App, initial_files: Vec<PathBuf>) {
+pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -31,6 +33,25 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>) {
                 for path in initial_files.clone() {
                     view.open_file(path, cx);
                 }
+
+                if let Some(rx) = ipc_rx {
+                    cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+                        let mut cx = cx.clone();
+                        async move {
+                        while let Ok(msg) = rx.recv().await {
+                            let mut cx_clone = cx.clone();
+                            workspace.update(&mut cx_clone, |workspace, cx| {
+                                match msg {
+                                    IpcMessage::OpenFiles(paths) => workspace.open_files(paths, cx),
+                                    IpcMessage::FocusWindow => {}, // Just activate below
+                                }
+                                cx.activate(true);
+                            }).ok();
+                        }
+                        }
+                    }).detach();
+                }
+
                 view
             })
         },
@@ -58,31 +79,42 @@ impl WorkspaceView {
     }
 
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
-            self.active_tab_index = index;
-            cx.notify();
-            return;
-        }
+        self.open_files(vec![path], cx);
+    }
 
+    pub fn open_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                let content = smol::fs::read_to_string(&path).await;
-                if let Ok(content) = content {
+                let mut loaded = Vec::new();
+                for path in paths {
+                    if let Ok(content) = smol::fs::read_to_string(&path).await {
+                        loaded.push((path, content));
+                    }
+                }
+
+                if !loaded.is_empty() {
                      workspace.update(&mut cx, |workspace, cx| {
-                         let title = path.file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Untitled".to_string());
-                         
-                         let doc = cx.new(|_cx| Document::new(content, path.clone()));
-                         let view = cx.new(|_cx| MarkdownView::new(doc));
-                         
-                         workspace.tabs.push(WorkspaceTab {
-                             path,
-                             view: view.into(),
-                             title,
-                         });
-                         workspace.active_tab_index = workspace.tabs.len() - 1;
+                         for (path, content) in loaded {
+                             if let Some(index) = workspace.tabs.iter().position(|t| t.path == path) {
+                                 workspace.active_tab_index = index;
+                                 continue;
+                             }
+
+                             let title = path.file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Untitled".to_string());
+                             
+                             let doc = cx.new(|_cx| Document::new(content, path.clone()));
+                             let view = cx.new(|_cx| MarkdownView::new(doc));
+                             
+                             workspace.tabs.push(WorkspaceTab {
+                                 path,
+                                 view: view.into(),
+                                 title,
+                             });
+                             workspace.active_tab_index = workspace.tabs.len() - 1;
+                         }
                          cx.notify();
                      }).ok();
                 }
@@ -134,6 +166,9 @@ impl Render for WorkspaceView {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .on_drop(cx.listener(|workspace, event: &ExternalPaths, _, cx| {
+                workspace.open_files(event.paths().to_vec(), cx);
+            }))
             .child(
                 // Header
                 div()
