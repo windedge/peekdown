@@ -6,8 +6,7 @@ use crate::state::document::Document;
 use gpui_component::ActiveTheme;
 use gpui_component::{Icon, IconName, Sizable};
 use crate::state::config::{AppConfig, AppThemeMode};
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::popover::Popover;
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::button::{Button, ButtonVariants};
 
 mod welcome;
@@ -77,7 +76,6 @@ struct WorkspaceView {
     tabs: Vec<WorkspaceTab>,
     active_tab_index: usize,
     config: Entity<AppConfig>,
-    settings_menu_open: bool,
 }
 
 impl WorkspaceView {
@@ -90,7 +88,6 @@ impl WorkspaceView {
             tabs: Vec::new(),
             active_tab_index: 0,
             config,
-            settings_menu_open: false,
         }
     }
 
@@ -277,60 +274,41 @@ impl Render for WorkspaceView {
                             .child(
                                 {
                                     let config = self.config.clone();
-                                    let workspace_handle = cx.entity().downgrade();
-                                    Popover::new("settings-popover")
-                                        .open(self.settings_menu_open)
-                                        .on_open_change(cx.listener(|workspace, open, _, _cx| {
-                                            workspace.settings_menu_open = *open;
-                                        }))
-                                        .trigger(
-                                            Button::new("settings-btn")
-                                                .icon(Icon::new(IconName::Settings))
-                                                .ghost()
-                                                .small()
-                                        )
-                                        .content(move |_, window, cx| {
-                                            let config = config.clone();
-                                            let current_theme = config.read(cx).appearance.theme;
-                                            let workspace_handle = workspace_handle.clone();
+                                    let view = cx.entity();
+                                    let current_theme = config.read(cx).appearance.theme;
+                                    Button::new("settings-btn")
+                                        .icon(Icon::new(IconName::Settings))
+                                        .ghost()
+                                        .small()
+                                        .dropdown_menu(move |menu, window, _cx| {
+                                            let view = view.clone();
+                                            let current_theme = current_theme;
 
-                                            PopupMenu::build(window, cx, move |menu, _, _cx| {
-                                                let handle1 = workspace_handle.clone();
-                                                let handle2 = workspace_handle.clone();
-                                                let handle3 = workspace_handle.clone();
-
-                                                menu
-                                                    .item(
-                                                        PopupMenuItem::new("Light")
-                                                            .checked(current_theme == AppThemeMode::Light)
-                                                            .on_click(move |_, window, cx| {
-                                                                handle1.update(cx, |workspace, cx| {
-                                                                    workspace.update_theme(AppThemeMode::Light, window, cx);
-                                                                    cx.notify();
-                                                                }).ok();
-                                                            })
-                                                    )
-                                                    .item(
-                                                        PopupMenuItem::new("Dark")
-                                                            .checked(current_theme == AppThemeMode::Dark)
-                                                            .on_click(move |_, window, cx| {
-                                                                handle2.update(cx, |workspace, cx| {
-                                                                    workspace.update_theme(AppThemeMode::Dark, window, cx);
-                                                                    cx.notify();
-                                                                }).ok();
-                                                            })
-                                                    )
-                                                    .item(
-                                                        PopupMenuItem::new("Auto")
-                                                            .checked(current_theme == AppThemeMode::Auto)
-                                                            .on_click(move |_, window, cx| {
-                                                                handle3.update(cx, |workspace, cx| {
-                                                                    workspace.update_theme(AppThemeMode::Auto, window, cx);
-                                                                    cx.notify();
-                                                                }).ok();
-                                                            })
-                                                    )
-                                            })
+                                            menu
+                                                .item(
+                                                    PopupMenuItem::new("Light")
+                                                        .checked(current_theme == AppThemeMode::Light)
+                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
+                                                            workspace.update_theme(AppThemeMode::Light, window, cx);
+                                                            cx.notify();
+                                                        }))
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Dark")
+                                                        .checked(current_theme == AppThemeMode::Dark)
+                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
+                                                            workspace.update_theme(AppThemeMode::Dark, window, cx);
+                                                            cx.notify();
+                                                        }))
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Auto")
+                                                        .checked(current_theme == AppThemeMode::Auto)
+                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
+                                                            workspace.update_theme(AppThemeMode::Auto, window, cx);
+                                                            cx.notify();
+                                                        }))
+                                                )
                                         })
                                 }
                             )
