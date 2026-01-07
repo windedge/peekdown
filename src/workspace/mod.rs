@@ -3,16 +3,15 @@
 use gpui::*;
 use std::path::PathBuf;
 use crate::state::document::Document;
-use gpui_component::ActiveTheme;
-use gpui_component::{Icon, IconName, Sizable, Root};
+use gpui_component::{ActiveTheme, Root};
 use crate::state::config::AppConfig;
-use gpui_component::button::{Button, ButtonVariants};
 
 mod welcome;
 use welcome::WelcomeView;
 mod markdown_view;
 use markdown_view::MarkdownView;
 mod settings_dialog;
+mod header;
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
@@ -193,98 +192,7 @@ impl Render for WorkspaceView {
             }))
             .child(
                 // Header
-                div()
-                    .flex()
-                    .items_center()
-                    .h_10()
-                    .bg(theme.title_bar)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .id("tab-bar-container")
-                            .flex()
-                            .flex_row()
-                            .flex_grow()
-                            .overflow_x_scroll()
-                            .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
-                                let is_active = ix == self.active_tab_index;
-
-                                div()
-                                    .id(("tab", ix))
-                                    .flex()
-                                    .items_center()
-                                    .h_full()
-                                    .px_4()
-                                    .gap_2()
-                                    .border_r_1()
-                                    .border_color(theme.border)
-                                    .cursor_pointer()
-                                    .bg(if is_active {
-                                        theme.background
-                                    } else {
-                                        gpui::transparent_black()
-                                    })
-                                    .text_color(if is_active {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                                    .hover(|s| {
-                                        if !is_active {
-                                            s.bg(theme.secondary)
-                                        } else {
-                                            s
-                                        }
-                                    })
-                                    .on_click(cx.listener(move |workspace, _, _window, cx| {
-                                        workspace.activate_tab(ix, cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .max_w(px(150.))
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .child(tab.title.clone())
-                                    )
-                                    .child(
-                                        div()
-                                            .id(("close_tab", ix))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .w_5()
-                                            .h_5()
-                                            .rounded_md()
-                                            .hover(|style| {
-                                                style
-                                                    .bg(theme.danger)
-                                                    .text_color(theme.danger_foreground)
-                                            })
-                                            .child(IconName::Close)
-                                            .on_click(cx.listener(move |workspace, _, _window, cx| {
-                                                cx.stop_propagation();
-                                                workspace.close_tab(ix, cx);
-                                            }))
-                                    )
-                            }))
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .child(
-                                {
-                                    let config = self.config.clone();
-                                    Button::new("settings-btn")
-                                        .icon(Icon::new(IconName::Settings))
-                                        .ghost()
-                                        .small()
-                                        .on_click(move |_, window, cx| {
-                                            settings_dialog::open_settings_dialog(config.clone(), window, cx);
-                                        })
-                                }
-                            )
-                    ),
+                header::render_header(self, cx)
             )
             .child(
                 // Body
