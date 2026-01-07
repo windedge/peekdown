@@ -11,11 +11,10 @@ use gpui::{
     prelude::FluentBuilder as _, px, relative, rems,
 };
 use markdown::mdast;
-use gpui_component::input::Rope;
 
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, StyledExt, h_flex,
-    highlighter::{HighlightTheme, SyntaxHighlighter},
+    highlighter::HighlightTheme,
 
     tooltip::Tooltip,
     v_flex,
@@ -24,6 +23,7 @@ use gpui_component::{
 use super::{
     CodeBlockActionsFn,
     document::NodeRenderOptions,
+    highlighter_cache::highlight_code,
     inline::{Inline, InlineState},
     TextViewStyle,
     utils::list_item_prefix,
@@ -546,11 +546,10 @@ impl CodeBlock {
         highlight_theme: &HighlightTheme,
         span: Option<impl Into<Span>>,
     ) -> Self {
-        let mut styles = vec![];
-        if let Some(lang) = &lang {
-            let mut highlighter = SyntaxHighlighter::new(&lang);
-            highlighter.update(None, &Rope::from_str(code.as_str()));
-            styles = highlighter.styles(&(0..code.len()), highlight_theme);
+        let styles = if let Some(lang) = &lang {
+            highlight_code(code.as_ref(), lang, highlight_theme)
+        } else {
+            vec![]
         };
 
         let state = Arc::new(Mutex::new(InlineState::default()));

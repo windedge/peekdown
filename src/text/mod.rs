@@ -2,6 +2,7 @@ mod document;
 mod element_ext;
 mod global_state;
 mod format;
+mod highlighter_cache;
 mod inline;
 mod node;
 mod state;
