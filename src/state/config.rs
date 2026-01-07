@@ -13,6 +13,17 @@ pub enum AppThemeMode {
     Auto,
 }
 
+/// Layout mode for markdown content display
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LayoutMode {
+    /// Centered content with max-width (default)
+    #[default]
+    Centered,
+    /// Full width content
+    FullWidth,
+}
+
 impl AppThemeMode {
     pub fn apply(&self, window: Option<&mut Window>, cx: &mut App) {
         match self {
@@ -23,10 +34,29 @@ impl AppThemeMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceConfig {
     #[serde(default)]
     pub theme: AppThemeMode,
+    #[serde(default)]
+    pub layout: LayoutMode,
+    /// Scroll speed multiplier (1.0 = normal, 2.0 = double speed, etc.)
+    #[serde(default = "default_scroll_speed")]
+    pub scroll_speed: f32,
+}
+
+fn default_scroll_speed() -> f32 {
+    1.0
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            theme: AppThemeMode::default(),
+            layout: LayoutMode::default(),
+            scroll_speed: default_scroll_speed(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

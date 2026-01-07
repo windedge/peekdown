@@ -4,15 +4,15 @@ use gpui::*;
 use std::path::PathBuf;
 use crate::state::document::Document;
 use gpui_component::ActiveTheme;
-use gpui_component::{Icon, IconName, Sizable};
-use crate::state::config::{AppConfig, AppThemeMode};
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::{Icon, IconName, Sizable, Root};
+use crate::state::config::AppConfig;
 use gpui_component::button::{Button, ButtonVariants};
 
 mod welcome;
 use welcome::WelcomeView;
 mod markdown_view;
 use markdown_view::MarkdownView;
+mod settings_dialog;
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
@@ -30,37 +30,42 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
             ))),
             ..Default::default()
         },
-        move |_, cx| {
-            // Apply theme (F6)
+        move |window, cx| {
+            // Apply theme
             let theme = config.read(cx).appearance.theme;
             theme.apply(None, cx);
 
-            cx.new(|cx| {
+            // Create WorkspaceView first
+            let workspace_view = cx.new(|cx| {
                 let mut view = WorkspaceView::new(cx, config.clone());
                 for path in initial_files.clone() {
                     view.open_file(path, cx);
                 }
+                view
+            });
 
-                if let Some(rx) = ipc_rx {
-                    cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
-                        let mut cx = cx.clone();
-                        async move {
+            // Setup IPC handler
+            if let Some(rx) = ipc_rx {
+                let workspace_weak = workspace_view.downgrade();
+                cx.spawn(|cx: &mut AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
                         while let Ok(msg) = rx.recv().await {
                             let mut cx_clone = cx.clone();
-                            workspace.update(&mut cx_clone, |workspace, cx| {
+                            workspace_weak.update(&mut cx_clone, |workspace, cx| {
                                 match msg {
                                     IpcMessage::OpenFiles(paths) => workspace.open_files(paths, cx),
-                                    IpcMessage::FocusWindow => {}, // Just activate below
+                                    IpcMessage::FocusWindow => {},
                                 }
                                 cx.activate(true);
                             }).ok();
                         }
-                        }
-                    }).detach();
-                }
+                    }
+                }).detach();
+            }
 
-                view
-            })
+            // Wrap in Root for dialog support
+            cx.new(|cx| Root::new(workspace_view, window, cx))
         },
     )
     .unwrap();
@@ -96,6 +101,7 @@ impl WorkspaceView {
     }
 
     pub fn open_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let config = self.config.clone();
         cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
@@ -119,7 +125,7 @@ impl WorkspaceView {
                                 .unwrap_or_else(|| "Untitled".to_string());
 
                              let doc = cx.new(|_cx| Document::new(content, path.clone()));
-                             let view = cx.new(|_cx| MarkdownView::new(doc));
+                             let view = cx.new(|cx| MarkdownView::new(doc, config.clone(), cx));
 
                              workspace.tabs.push(WorkspaceTab {
                                  path,
@@ -133,14 +139,6 @@ impl WorkspaceView {
                 }
             }
         }).detach();
-    }
-
-    fn update_theme(&mut self, mode: AppThemeMode, window: &mut Window, cx: &mut Context<Self>) {
-        self.config.update(cx, |config, _| {
-            config.appearance.theme = mode;
-            config.save();
-        });
-        mode.apply(Some(window), cx);
     }
 
     fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -171,7 +169,7 @@ impl WorkspaceView {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
         let body_content = if self.tabs.is_empty() {
@@ -180,6 +178,9 @@ impl Render for WorkspaceView {
             let tab = &self.tabs[self.active_tab_index];
             div().size_full().child(tab.view.clone())
         };
+
+        // Get dialog layer to render on top
+        let dialog_layer = Root::render_dialog_layer(window, cx);
 
         div()
             .flex()
@@ -274,41 +275,12 @@ impl Render for WorkspaceView {
                             .child(
                                 {
                                     let config = self.config.clone();
-                                    let view = cx.entity();
-                                    let current_theme = config.read(cx).appearance.theme;
                                     Button::new("settings-btn")
                                         .icon(Icon::new(IconName::Settings))
                                         .ghost()
                                         .small()
-                                        .dropdown_menu(move |menu, window, _cx| {
-                                            let view = view.clone();
-                                            let current_theme = current_theme;
-
-                                            menu
-                                                .item(
-                                                    PopupMenuItem::new("Light")
-                                                        .checked(current_theme == AppThemeMode::Light)
-                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
-                                                            workspace.update_theme(AppThemeMode::Light, window, cx);
-                                                            cx.notify();
-                                                        }))
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new("Dark")
-                                                        .checked(current_theme == AppThemeMode::Dark)
-                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
-                                                            workspace.update_theme(AppThemeMode::Dark, window, cx);
-                                                            cx.notify();
-                                                        }))
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new("Auto")
-                                                        .checked(current_theme == AppThemeMode::Auto)
-                                                        .on_click(window.listener_for(&view, move |workspace, _, window, cx| {
-                                                            workspace.update_theme(AppThemeMode::Auto, window, cx);
-                                                            cx.notify();
-                                                        }))
-                                                )
+                                        .on_click(move |_, window, cx| {
+                                            settings_dialog::open_settings_dialog(config.clone(), window, cx);
                                         })
                                 }
                             )
@@ -335,5 +307,7 @@ impl Render for WorkspaceView {
                     .text_xs()
                     .child(if self.tabs.is_empty() { "No file" } else { "Ready" }),
             )
+            // Render dialogs on top
+            .children(dialog_layer)
     }
 }
