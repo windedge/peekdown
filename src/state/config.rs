@@ -43,10 +43,24 @@ pub struct AppearanceConfig {
     /// Scroll speed multiplier (1.0 = normal, 2.0 = double speed, etc.)
     #[serde(default = "default_scroll_speed")]
     pub scroll_speed: f32,
+    /// Window width in pixels
+    #[serde(default = "default_window_width")]
+    pub window_width: f32,
+    /// Window height in pixels
+    #[serde(default = "default_window_height")]
+    pub window_height: f32,
 }
 
 fn default_scroll_speed() -> f32 {
     1.0
+}
+
+fn default_window_width() -> f32 {
+    1024.0
+}
+
+fn default_window_height() -> f32 {
+    768.0
 }
 
 impl Default for AppearanceConfig {
@@ -55,6 +69,8 @@ impl Default for AppearanceConfig {
             theme: AppThemeMode::default(),
             layout: LayoutMode::default(),
             scroll_speed: default_scroll_speed(),
+            window_width: default_window_width(),
+            window_height: default_window_height(),
         }
     }
 }

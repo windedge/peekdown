@@ -16,6 +16,15 @@ use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
 pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>, config: Entity<AppConfig>) {
+    // Read window size from config
+    let window_size = {
+        let cfg = config.read(cx);
+        size(
+            px(cfg.appearance.window_width),
+            px(cfg.appearance.window_height),
+        )
+    };
+
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
@@ -24,7 +33,7 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
             }),
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(1024.0.into(), 768.0.into()),
+                window_size,
                 cx,
             ))),
             ..Default::default()
@@ -63,8 +72,21 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
                 }).detach();
             }
 
-            // Wrap in Root for dialog support
-            cx.new(|cx| Root::new(workspace_view, window, cx))
+            // Wrap in Root for dialog support and observe window bounds
+            let config_for_bounds = config.clone();
+            cx.new(|cx| {
+                // Observe window bounds changes to save window size
+                cx.observe_window_bounds(window, move |_root, window, cx| {
+                    let bounds = window.bounds();
+                    config_for_bounds.update(cx, |config, _| {
+                        config.appearance.window_width = bounds.size.width.into();
+                        config.appearance.window_height = bounds.size.height.into();
+                        config.save();
+                    });
+                }).detach();
+
+                Root::new(workspace_view, window, cx)
+            })
         },
     )
     .unwrap();

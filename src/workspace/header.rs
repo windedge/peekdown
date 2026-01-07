@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 use super::{WorkspaceView, settings_dialog};
 use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable};
 
@@ -6,65 +7,79 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
     let theme = cx.theme().clone();
     let config = workspace.config.clone();
 
+    // Tab bar design:
+    // - No bottom border line on the header
+    // - Active tab has same background as content area (seamless)
+    // - Inactive tabs have distinct background for separation
     div()
         .flex()
-        .items_center()
+        .items_end()
         .h_10()
         .bg(theme.title_bar)
-        .border_b_1()
-        .border_color(theme.border)
         .child(
             div()
                 .id("tab-bar-container")
                 .flex()
                 .flex_row()
                 .flex_grow()
+                .items_end()
                 .overflow_x_scroll()
+                .pl_2()
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;
+                    let is_last = ix == workspace.tabs.len() - 1;
 
                     div()
                         .id(("tab", ix))
                         .flex()
                         .items_center()
-                        .h_full()
+                        .h(px(34.))
                         .px_3()
                         .gap_2()
                         .text_sm()
                         .cursor_pointer()
-                        .bg(if is_active {
-                            theme.background
-                        } else {
-                            gpui::transparent_black()
+                        .when(is_active, |this| {
+                            this
+                                .bg(theme.background)
+                                .text_color(theme.foreground)
                         })
-                        .text_color(if is_active {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground
+                        .when(!is_active, |this| {
+                            this
+                                .bg(theme.secondary)
+                                .text_color(theme.muted_foreground)
+                                .hover(|s| s.bg(theme.accent).text_color(theme.foreground))
                         })
-                        .border_t_2()
-                        .border_color(if is_active {
-                            theme.foreground
-                        } else {
-                            gpui::transparent_black()
-                        })
-                        .hover(|s| {
-                            if !is_active {
-                                s.bg(theme.secondary)
-                            } else {
-                                s
-                            }
+                        .when(!is_last, |this| {
+                            this
+                                .border_r_1()
+                                .border_color(theme.border)
                         })
                         .on_click(cx.listener(move |workspace, _, _window, cx| {
                             workspace.activate_tab(ix, cx);
                         }))
                         .child(
+                            // Use relative positioning with two layers to prevent width jumping
+                            // when font weight changes between active/inactive states
                             div()
+                                .relative()
                                 .max_w(px(150.))
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                                .child(tab.title.clone())
+                                // Invisible bold text layer for width calculation
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .invisible()
+                                        .child(tab.title.clone())
+                                )
+                                // Visible text layer with actual style
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .when(is_active, |this| this.font_weight(FontWeight::MEDIUM))
+                                        .child(tab.title.clone())
+                                )
                         )
                         .child(
                             div()
@@ -72,10 +87,10 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .w_4()
-                                .h_4()
+                                .w_5()
+                                .h_5()
                                 .rounded_sm()
-                                .text_color(theme.muted_foreground)
+                                .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
                                 .hover(|style| {
                                     style
                                         .bg(theme.danger)
@@ -92,6 +107,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
         .child(
             div()
                 .px_2()
+                .mb(px(4.))
                 .child(
                     Button::new("settings-btn")
                         .icon(Icon::new(IconName::Settings))
