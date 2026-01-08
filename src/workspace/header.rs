@@ -7,6 +7,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
     let theme = cx.theme().clone();
     let config = workspace.config.clone();
     let has_tabs = !workspace.tabs.is_empty();
+    let tab_scroll_handle = workspace.tab_scroll_handle.clone();
 
     // Tab bar design:
     // - No bottom border line on the header
@@ -27,6 +28,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .flex_grow()
                 .items_end()
                 .overflow_x_scroll()
+                .track_scroll(&tab_scroll_handle)
                 .pl_2()
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;

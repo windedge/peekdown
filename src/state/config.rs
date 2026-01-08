@@ -1,4 +1,4 @@
-use gpui::{App, Window};
+use gpui::{App, Window, px};
 use gpui_component::theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -55,6 +55,18 @@ pub struct AppearanceConfig {
     /// Width of the outline sidebar in pixels
     #[serde(default = "default_outline_width")]
     pub outline_width: f32,
+    /// Font family for content text (empty string means system default)
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
+    /// Font size for content text in pixels
+    #[serde(default = "default_font_size")]
+    pub font_size: f32,
+    /// Monospace font family for code blocks (empty string means platform default)
+    #[serde(default = "default_mono_font_family")]
+    pub mono_font_family: String,
+    /// Monospace font size for code blocks in pixels
+    #[serde(default = "default_mono_font_size")]
+    pub mono_font_size: f32,
 }
 
 fn default_scroll_speed() -> f32 {
@@ -77,6 +89,22 @@ fn default_outline_width() -> f32 {
     200.0
 }
 
+fn default_font_family() -> String {
+    String::new()
+}
+
+fn default_font_size() -> f32 {
+    16.0
+}
+
+fn default_mono_font_family() -> String {
+    String::new()
+}
+
+fn default_mono_font_size() -> f32 {
+    13.0
+}
+
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
@@ -87,7 +115,28 @@ impl Default for AppearanceConfig {
             window_height: default_window_height(),
             outline_visible: default_outline_visible(),
             outline_width: default_outline_width(),
+            font_family: default_font_family(),
+            font_size: default_font_size(),
+            mono_font_family: default_mono_font_family(),
+            mono_font_size: default_mono_font_size(),
         }
+    }
+}
+
+impl AppearanceConfig {
+    /// Apply font settings to the global theme
+    pub fn apply_font_settings(&self, cx: &mut App) {
+        let theme = Theme::global_mut(cx);
+
+        if !self.font_family.is_empty() {
+            theme.font_family = self.font_family.clone().into();
+        }
+        theme.font_size = px(self.font_size);
+
+        if !self.mono_font_family.is_empty() {
+            theme.mono_font_family = self.mono_font_family.clone().into();
+        }
+        theme.mono_font_size = px(self.mono_font_size);
     }
 }
 

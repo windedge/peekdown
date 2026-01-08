@@ -59,8 +59,14 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
         },
         move |window, cx| {
             // Apply theme
-            let theme = config.read(cx).appearance.theme;
-            theme.apply(None, cx);
+            {
+                let theme = config.read(cx).appearance.theme;
+                theme.apply(None, cx);
+            }
+
+            // Apply font settings - clone the config first to avoid borrow conflict
+            let appearance = config.read(cx).appearance.clone();
+            appearance.apply_font_settings(cx);
 
             // Create WorkspaceView first
             let workspace_view = cx.new(|cx| {
@@ -153,6 +159,7 @@ struct WorkspaceView {
     search_bar: Option<Entity<SearchBar>>,
     outline_width: f32,
     focus_handle: FocusHandle,
+    tab_scroll_handle: ScrollHandle,
 }
 
 impl WorkspaceView {
@@ -175,6 +182,7 @@ impl WorkspaceView {
             search_bar: None,
             outline_width,
             focus_handle: cx.focus_handle(),
+            tab_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -209,6 +217,7 @@ impl WorkspaceView {
                          for (path, content) in loaded {
                              if let Some(index) = workspace.tabs.iter().position(|t| t.path == path) {
                                  workspace.active_tab_index = index;
+                                 workspace.tab_scroll_handle.scroll_to_item(index);
                                  continue;
                              }
 
@@ -232,6 +241,7 @@ impl WorkspaceView {
                                  title,
                              });
                              workspace.active_tab_index = workspace.tabs.len() - 1;
+                             workspace.tab_scroll_handle.scroll_to_item(workspace.active_tab_index);
                          }
                          workspace.update_outline(cx);
                          cx.notify();
@@ -275,6 +285,7 @@ impl WorkspaceView {
                 self.clear_search_highlight_for_tab(previous_tab_index, cx);
             }
             self.active_tab_index = index;
+            self.tab_scroll_handle.scroll_to_item(index);
             self.update_outline(cx);
             cx.notify();
         }
