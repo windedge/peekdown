@@ -14,6 +14,8 @@ use gpui::{
 use gpui_component::{input::Selection, ActiveTheme};
 use super::global_state::GlobalState;
 use super::node::LinkMark;
+use super::state::SelectionMode;
+use super::selection::{word_boundaries, line_boundaries};
 
 /// A inline element used to render a inline text and support selectable.
 ///
@@ -109,13 +111,22 @@ impl Inline {
 
         let line_height = window.line_height();
         let selection_bounds = text_view_state.selection_bounds();
+        let selection_mode = text_view_state.selection_mode();
 
         // Use for debug selection bounds
         // self.paint_selected_bounds(selection_bounds, window, cx);
 
         let mut selection: Option<Selection> = None;
+        let mut clicked_char_index: Option<usize> = None;
         let mut offset = 0;
         let mut chars = self.text.chars().peekable();
+
+        // For Word/Line mode with point selection (start == end),
+        // we need to find the character at the click position
+        let is_point_selection = selection_bounds.size.width == px(0.)
+            && selection_bounds.size.height == px(0.);
+        let click_point = selection_bounds.origin;
+
         while let Some(c) = chars.next() {
             let Some(pos) = text_layout.position_for_index(offset) else {
                 offset += c.len_utf8();
@@ -129,7 +140,19 @@ impl Inline {
                 }
             }
 
-            if point_in_text_selection(pos, char_width, &selection_bounds, line_height) {
+            // For point selection in Word/Line mode, find char at click position
+            if is_point_selection && selection_mode != SelectionMode::Character {
+                // Check if click point is within this character's bounds
+                let char_bounds = Bounds::new(pos, gpui::Size { width: char_width, height: line_height });
+                if char_bounds.contains(&click_point) {
+                    clicked_char_index = Some(offset);
+                }
+            } else if point_in_text_selection(pos, char_width, &selection_bounds, line_height) {
+                // For Character mode or drag selection
+                if selection_mode != SelectionMode::Character && clicked_char_index.is_none() {
+                    clicked_char_index = Some(offset);
+                }
+
                 if selection.is_none() {
                     selection = Some((offset..offset).into());
                 }
@@ -141,7 +164,27 @@ impl Inline {
             offset += c.len_utf8();
         }
 
-        (true, true, selection)
+        // Apply word/line boundary expansion
+        match selection_mode {
+            SelectionMode::Word => {
+                if let Some(click_idx) = clicked_char_index {
+                    let (word_start, word_end) = word_boundaries(&self.text, click_idx);
+                    selection = Some((word_start..word_end).into());
+                }
+            }
+            SelectionMode::Line => {
+                if let Some(click_idx) = clicked_char_index {
+                    let (line_start, line_end) = line_boundaries(&self.text, click_idx);
+                    selection = Some((line_start..line_end).into());
+                }
+            }
+            SelectionMode::Character => {
+                // Keep the selection as-is
+            }
+        }
+
+        let has_selection = selection.is_some();
+        (true, has_selection, selection)
     }
 
     /// Paint the selection background.

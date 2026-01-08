@@ -1,5 +1,3 @@
-//! Business logic services (Parser, IO).
+//! Application services.
 
-
-// pub mod parser;
-// pub mod io;
+pub mod shell;

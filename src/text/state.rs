@@ -48,6 +48,18 @@ pub(super) enum TextViewFormat {
     Html,
 }
 
+/// Selection mode for different click behaviors.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum SelectionMode {
+    /// Normal character-by-character selection (single click drag)
+    #[default]
+    Character,
+    /// Word selection (double-click)
+    Word,
+    /// Line selection (triple-click)
+    Line,
+}
+
 /// The state of a TextView.
 pub struct TextViewState {
     pub(super) focus_handle: FocusHandle,
@@ -64,6 +76,8 @@ pub struct TextViewState {
     pub(super) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
 
     pub(super) is_selecting: bool,
+    /// The selection mode (character, word, or line)
+    pub(super) selection_mode: SelectionMode,
     /// The local (in TextView) position of the selection.
     selection_positions: (Option<Point<Pixels>>, Option<Point<Pixels>>),
 
@@ -113,6 +127,7 @@ impl TextViewState {
             focus_handle,
             bounds: Bounds::default(),
             selection_positions: (None, None),
+            selection_mode: SelectionMode::default(),
             selectable: false,
             scrollable: false,
             scroll_speed: 1.0,
@@ -192,6 +207,11 @@ impl TextViewState {
         self.parsed_content.lock().unwrap().document.extract_headings()
     }
 
+    /// Get the number of blocks in the document.
+    pub fn block_count(&self) -> usize {
+        self.parsed_content.lock().unwrap().document.blocks.len()
+    }
+
     /// Get the source text content.
     pub fn source_text(&self) -> SharedString {
         self.parsed_content.lock().unwrap().document.source.clone()
@@ -259,17 +279,35 @@ impl TextViewState {
 
     pub(super) fn clear_selection(&mut self) {
         self.selection_positions = (None, None);
+        self.selection_mode = SelectionMode::Character;
         self.is_selecting = false;
     }
 
+    /// Get the current scroll offset in pixels (Y component only, as negative value).
+    fn scroll_offset_y(&self) -> Pixels {
+        // scroll_px_offset_for_scrollbar returns Point with negative Y
+        -self.list_state.scroll_px_offset_for_scrollbar().y
+    }
+
     pub(super) fn start_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
+        // Convert window coordinates to content coordinates (add scroll offset)
+        let scroll_y = self.scroll_offset_y();
+        let pos = Point {
+            x: pos.x - self.bounds.origin.x,
+            y: pos.y - self.bounds.origin.y + scroll_y,
+        };
         self.selection_positions = (Some(pos), Some(pos));
+        self.selection_mode = SelectionMode::Character;
         self.is_selecting = true;
     }
 
     pub(super) fn update_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
+        // Convert window coordinates to content coordinates (add scroll offset)
+        let scroll_y = self.scroll_offset_y();
+        let pos = Point {
+            x: pos.x - self.bounds.origin.x,
+            y: pos.y - self.bounds.origin.y + scroll_y,
+        };
         if let (Some(start), Some(_)) = self.selection_positions {
             self.selection_positions = (Some(start), Some(pos))
         }
@@ -281,19 +319,81 @@ impl TextViewState {
 
     pub(crate) fn has_selection(&self) -> bool {
         if let (Some(start), Some(end)) = self.selection_positions {
+            // For Word/Line mode, we have a selection even if start == end
+            // The actual selection range will be expanded during rendering
+            if self.selection_mode != SelectionMode::Character {
+                return true;
+            }
             start != end
         } else {
             false
         }
     }
 
+    /// Get the current selection mode.
+    pub(super) fn selection_mode(&self) -> SelectionMode {
+        self.selection_mode
+    }
+
+    /// Select all text in the document.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        // Set selection to cover the entire document bounds
+        // Use a very large value for end position to ensure full coverage
+        self.selection_positions = (
+            Some(Point { x: px(0.), y: px(0.) }),
+            Some(Point {
+                x: self.bounds.size.width,
+                y: px(f32::MAX / 2.0), // Use a large but safe value
+            }),
+        );
+        self.selection_mode = SelectionMode::Character;
+        self.is_selecting = false;
+        cx.notify();
+    }
+
+    /// Start word selection at given position (for double-click).
+    /// Sets selection mode to Word - actual word boundary detection happens during rendering.
+    pub fn start_word_selection(&mut self, pos: Point<Pixels>, _cx: &mut Context<Self>) {
+        // Convert window coordinates to content coordinates (add scroll offset)
+        let scroll_y = self.scroll_offset_y();
+        let local_pos = Point {
+            x: pos.x - self.bounds.origin.x,
+            y: pos.y - self.bounds.origin.y + scroll_y,
+        };
+        // Store the click position - word boundary will be calculated during rendering
+        self.selection_positions = (Some(local_pos), Some(local_pos));
+        self.selection_mode = SelectionMode::Word;
+        self.is_selecting = false;
+    }
+
+    /// Start line selection at given position (for triple-click).
+    /// Sets selection mode to Line - actual line boundary detection happens during rendering.
+    pub fn start_line_selection(&mut self, pos: Point<Pixels>, _cx: &mut Context<Self>) {
+        // Convert window coordinates to content coordinates (add scroll offset)
+        let scroll_y = self.scroll_offset_y();
+        let local_pos = Point {
+            x: pos.x - self.bounds.origin.x,
+            y: pos.y - self.bounds.origin.y + scroll_y,
+        };
+        // Store the click position - line boundary will be calculated during rendering
+        self.selection_positions = (Some(local_pos), Some(local_pos));
+        self.selection_mode = SelectionMode::Line;
+        self.is_selecting = false;
+    }
+
     /// Return the bounds of the selection in window coordinates.
     pub(crate) fn selection_bounds(&self) -> Bounds<Pixels> {
-        selection_bounds(
-            self.selection_positions.0,
-            self.selection_positions.1,
-            self.bounds,
-        )
+        // Convert content coordinates back to window coordinates (subtract scroll offset)
+        let scroll_y = self.scroll_offset_y();
+        let start = self.selection_positions.0.map(|p| Point {
+            x: p.x,
+            y: p.y - scroll_y,
+        });
+        let end = self.selection_positions.1.map(|p| Point {
+            x: p.x,
+            y: p.y - scroll_y,
+        });
+        selection_bounds(start, end, self.bounds)
     }
 
     pub(super) fn on_action_copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {

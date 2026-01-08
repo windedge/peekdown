@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, Entity, GlobalElementId, InspectorElementId,
-    InteractiveElement, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, SharedString, StyleRefinement, Styled, Window, div,
     px, relative,
 };
@@ -284,8 +284,27 @@ impl Element for TextView {
                         return;
                     }
 
-                    state.update(cx, |state, _| {
-                        state.start_selection(event.position);
+                    // Only handle left mouse button for selection
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    state.update(cx, |state, cx| {
+                        match event.click_count {
+                            1 => {
+                                // Single click: start drag selection
+                                state.start_selection(event.position);
+                            }
+                            2 => {
+                                // Double click: select word
+                                state.start_word_selection(event.position, cx);
+                            }
+                            3 => {
+                                // Triple click: select line
+                                state.start_line_selection(event.position, cx);
+                            }
+                            _ => {}
+                        }
                     });
                     cx.notify(parent_view_id);
                 }

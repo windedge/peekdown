@@ -20,10 +20,25 @@ use search_bar::{SearchBar, SearchState};
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
-gpui::actions!([OpenSearch, CloseSearch]);
+gpui::actions!([
+    OpenSearch,
+    CloseSearch,
+    // Navigation
+    NextTab,
+    PrevTab,
+    CloseTab,
+    // Editing
+    SelectAll,
+    ScrollToTop,
+    ScrollToBottom,
+    // View
+    RefreshDocument,
+    ToggleOutline,
+]);
 
 pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>, config: Entity<AppConfig>) {
     cx.bind_keys(vec![
+        // Search
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-f", OpenSearch, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
@@ -33,6 +48,35 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-f", OpenSearch, Some("SearchBar")),
         KeyBinding::new("escape", CloseSearch, Some("Workspace && search == open")),
+
+        // Tab navigation
+        KeyBinding::new("ctrl-tab", NextTab, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-tab", PrevTab, Some("Workspace")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-w", CloseTab, Some("Workspace")),
+
+        // Selection & Scrolling
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-a", SelectAll, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-a", SelectAll, Some("Workspace")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-home", ScrollToTop, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-home", ScrollToTop, Some("Workspace")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-end", ScrollToBottom, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-end", ScrollToBottom, Some("Workspace")),
+
+        // View
+        KeyBinding::new("f5", RefreshDocument, Some("Workspace")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-b", ToggleOutline, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-b", ToggleOutline, Some("Workspace")),
     ]);
 
     // Read window size from config
@@ -448,6 +492,89 @@ impl WorkspaceView {
             tab.view.read(cx).scroll_to_heading(block_index, cx);
         }
     }
+
+    fn next_tab(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let next = (self.active_tab_index + 1) % self.tabs.len();
+        self.activate_tab(next, cx);
+    }
+
+    fn prev_tab(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let prev = if self.active_tab_index == 0 {
+            self.tabs.len() - 1
+        } else {
+            self.active_tab_index - 1
+        };
+        self.activate_tab(prev, cx);
+    }
+
+    fn close_current_tab(&mut self, cx: &mut Context<Self>) {
+        if !self.tabs.is_empty() {
+            self.close_tab(self.active_tab_index, cx);
+        }
+    }
+
+    fn refresh_document(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab_index];
+        let path = tab.path.clone();
+        let text_view_state = tab.view.read(cx).text_view_state().clone();
+
+        cx.spawn(|_workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(content) = smol::fs::read_to_string(&path).await {
+                    _ = cx.update(|cx| {
+                        text_view_state.update(cx, |state, cx| {
+                            state.set_text(&content, cx);
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn scroll_to_top(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab_index];
+        tab.view.read(cx).text_view_state().read(cx).scroll_to_block(0);
+    }
+
+    fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab_index];
+        let block_count = tab.view.read(cx).text_view_state().read(cx).block_count();
+        if block_count > 0 {
+            tab.view
+                .read(cx)
+                .text_view_state()
+                .read(cx)
+                .scroll_to_block(block_count.saturating_sub(1));
+        }
+    }
+
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab_index];
+        let text_view_state = tab.view.read(cx).text_view_state().clone();
+        text_view_state.update(cx, |state, cx| {
+            state.select_all(cx);
+        });
+    }
 }
 
 impl Render for WorkspaceView {
@@ -534,6 +661,30 @@ impl Render for WorkspaceView {
                 if workspace.search_bar.is_some() {
                     workspace.close_search(window, cx);
                 }
+            }))
+            .on_action(cx.listener(|workspace, _: &NextTab, _window, cx| {
+                workspace.next_tab(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &PrevTab, _window, cx| {
+                workspace.prev_tab(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &CloseTab, _window, cx| {
+                workspace.close_current_tab(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &RefreshDocument, _window, cx| {
+                workspace.refresh_document(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &ToggleOutline, _window, cx| {
+                workspace.toggle_outline(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &SelectAll, _window, cx| {
+                workspace.select_all(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &ScrollToTop, _window, cx| {
+                workspace.scroll_to_top(cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &ScrollToBottom, _window, cx| {
+                workspace.scroll_to_bottom(cx);
             }))
             .on_drop(cx.listener(|workspace, event: &ExternalPaths, _, cx| {
                 workspace.open_files(event.paths().to_vec(), cx);

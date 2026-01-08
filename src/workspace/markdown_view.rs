@@ -1,13 +1,16 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::path::PathBuf;
 
 use gpui::*;
 use crate::text::{TextView, TextViewState, TextViewStyle};
 use crate::text::document::HeadingItem;
 use crate::text::ElementExt;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, menu::ContextMenuExt};
 use crate::state::document::Document;
 use crate::state::config::{AppConfig, LayoutMode};
+use crate::services::shell;
+use super::{OpenSearch, RefreshDocument, SelectAll};
 
 pub struct MarkdownView {
     #[allow(dead_code)] // Reserved for future file reload functionality
@@ -67,6 +70,11 @@ impl MarkdownView {
     pub fn block_spans(&self, cx: &App) -> Vec<(usize, std::ops::Range<usize>)> {
         self.text_view_state.read(cx).block_spans()
     }
+
+    /// Get the file path of the document.
+    pub fn file_path(&self, cx: &App) -> PathBuf {
+        self.document.read(cx).path.clone()
+    }
 }
 
 impl Render for MarkdownView {
@@ -74,6 +82,8 @@ impl Render for MarkdownView {
         let theme = cx.theme();
         let layout_mode = self.config.read(cx).appearance.layout;
         let scroll_speed = self.config.read(cx).appearance.scroll_speed;
+        let file_path = self.document.read(cx).path.clone();
+        let has_selection = self.text_view_state.read(cx).has_selection();
 
         let content_max_width = px(900.);
         let min_padding = px(32.);
@@ -91,6 +101,7 @@ impl Render for MarkdownView {
         let container_origin_x_for_scroll = container_origin_x.clone();
 
         let text_state = self.text_view_state.clone();
+        let text_state_for_menu = self.text_view_state.clone();
 
         div()
             .id("markdown-container")
@@ -147,5 +158,43 @@ impl Render for MarkdownView {
                     .px(min_padding)
                     .text_size(rems(1.0))
             )
+            .context_menu({
+                let file_path = file_path.clone();
+                move |menu, _window, cx| {
+                    let path_for_explorer = file_path.clone();
+                    let path_for_copy = file_path.clone();
+                    let text_state_for_copy = text_state_for_menu.clone();
+
+                    menu.item(
+                            gpui_component::menu::PopupMenuItem::new("Copy")
+                                .disabled(!has_selection)
+                                .on_click(move |_, _window, cx| {
+                                    let selected_text = text_state_for_copy.read(cx).selected_text();
+                                    let selected_text = selected_text.trim();
+                                    if !selected_text.is_empty() {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(selected_text.to_string()));
+                                    }
+                                }),
+                        )
+                        .menu("Select All", Box::new(SelectAll))
+                        .separator()
+                        .menu("Search", Box::new(OpenSearch))
+                        .menu("Refresh", Box::new(RefreshDocument))
+                        .separator()
+                        .item(
+                            gpui_component::menu::PopupMenuItem::new("Open in Explorer")
+                                .on_click(move |_, _window, _cx| {
+                                    shell::open_in_explorer(&path_for_explorer);
+                                }),
+                        )
+                        .item(
+                            gpui_component::menu::PopupMenuItem::new("Copy File Path")
+                                .on_click(move |_, _window, cx| {
+                                    let path_str = path_for_copy.to_string_lossy().to_string();
+                                    cx.write_to_clipboard(ClipboardItem::new_string(path_str));
+                                }),
+                        )
+                }
+            })
     }
 }
