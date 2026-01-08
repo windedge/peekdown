@@ -49,6 +49,12 @@ pub struct AppearanceConfig {
     /// Window height in pixels
     #[serde(default = "default_window_height")]
     pub window_height: f32,
+    /// Whether the outline sidebar is visible
+    #[serde(default = "default_outline_visible")]
+    pub outline_visible: bool,
+    /// Width of the outline sidebar in pixels
+    #[serde(default = "default_outline_width")]
+    pub outline_width: f32,
 }
 
 fn default_scroll_speed() -> f32 {
@@ -63,6 +69,14 @@ fn default_window_height() -> f32 {
     768.0
 }
 
+fn default_outline_visible() -> bool {
+    false
+}
+
+fn default_outline_width() -> f32 {
+    200.0
+}
+
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
@@ -71,6 +85,8 @@ impl Default for AppearanceConfig {
             scroll_speed: default_scroll_speed(),
             window_width: default_window_width(),
             window_height: default_window_height(),
+            outline_visible: default_outline_visible(),
+            outline_width: default_outline_width(),
         }
     }
 }

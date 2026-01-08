@@ -1,4 +1,3 @@
-mod document;
 mod element_ext;
 mod global_state;
 mod format;
@@ -10,7 +9,10 @@ mod style;
 mod text_view;
 mod utils;
 
+pub mod document;
+
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+pub use element_ext::ElementExt;
 pub use state::*;
 pub use style::*;
 pub use text_view::*;

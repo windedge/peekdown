@@ -1,13 +1,24 @@
 use gpui::{
-    App, InteractiveElement as _, IntoElement, ListState, ParentElement as _, SharedString,
+    App, InteractiveElement as _, IntoElement, ListState, ParentElement as _, Pixels, SharedString,
     Styled as _, Window, div, px, relative,
 };
 
-use super::node::{BlockNode, NodeContext};
+use super::node::{BlockNode, NodeContext, Paragraph};
+
+/// A heading item extracted from the document for outline display.
+#[derive(Debug, Clone)]
+pub struct HeadingItem {
+    /// The heading level (1-6)
+    pub level: u8,
+    /// The text content of the heading
+    pub text: String,
+    /// The block index in the document (for scrolling)
+    pub block_index: usize,
+}
 
 /// The parsed document AST.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct ParsedDocument {
+pub struct ParsedDocument {
     pub(crate) source: SharedString,
     pub(crate) blocks: Vec<BlockNode>,
 }
@@ -38,6 +49,51 @@ impl ParsedDocument {
         text
     }
 
+    /// Extract all headings from the document for outline display.
+    pub fn extract_headings(&self) -> Vec<HeadingItem> {
+        let mut headings = Vec::new();
+        for (index, block) in self.blocks.iter().enumerate() {
+            Self::collect_headings_from_block(block, index, &mut headings);
+        }
+        headings
+    }
+
+    fn collect_headings_from_block(block: &BlockNode, block_index: usize, headings: &mut Vec<HeadingItem>) {
+        match block {
+            BlockNode::Heading { level, children, .. } => {
+                let text = Self::extract_text_from_paragraph(children);
+                headings.push(HeadingItem {
+                    level: *level,
+                    text,
+                    block_index,
+                });
+            }
+            BlockNode::Root { children, .. }
+            | BlockNode::Blockquote { children, .. }
+            | BlockNode::List { children, .. }
+            | BlockNode::ListItem { children, .. } => {
+                for child in children {
+                    Self::collect_headings_from_block(child, block_index, headings);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn extract_text_from_paragraph(paragraph: &Paragraph) -> String {
+        paragraph.children.iter()
+            .map(|node| node.text.to_string())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Get block spans (index, byte range) for search matching.
+    pub fn block_spans(&self) -> Vec<(usize, std::ops::Range<usize>)> {
+        self.blocks.iter().enumerate().filter_map(|(ix, block)| {
+            block.span().map(|span| (ix, span.start..span.end))
+        }).collect()
+    }
+
     /// Converts the node to markdown format.
     ///
     /// This is used to generate markdown for test.
@@ -54,6 +110,7 @@ impl ParsedDocument {
         &self,
         list_state: Option<ListState>,
         node_cx: &NodeContext,
+        content_max_width: Option<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
@@ -63,14 +120,19 @@ impl ParsedDocument {
         };
 
         let Some(list_state) = list_state else {
-            return div()
+            let document = div()
                 .id("document")
                 .w_full()
-                .min_w(px(0.))
-                .max_w(relative(1.))
-                .children(self.blocks.iter().enumerate().map(move |(ix, node)| {
-                    node.render_block(NodeRenderOptions { ix, ..options }, node_cx, window, cx)
-                }));
+                .min_w(px(0.));
+
+            let document = match content_max_width {
+                Some(max_width) => document.max_w(max_width).mx_auto(),
+                None => document.max_w(relative(1.)),
+            };
+
+            return document.children(self.blocks.iter().enumerate().map(move |(ix, node)| {
+                node.render_block(NodeRenderOptions { ix, ..options }, node_cx, window, cx)
+            }));
         };
 
         let blocks = &self.blocks;
@@ -79,35 +141,40 @@ impl ParsedDocument {
             list_state.reset(blocks.len());
         }
 
-        div()
+        let document = div()
             .id("document")
             .size_full()
-            .min_w(px(0.))
-            .max_w(relative(1.))
-            .child(
-                gpui::list(list_state, {
-                    let node_cx = node_cx.clone();
-                    let blocks = blocks.clone();
-                    move |ix, window, cx| {
-                        let is_last = ix + 1 == blocks.len();
-                        div()
-                            .w_full()
-                            .min_w(px(0.))
-                            .max_w(relative(1.))
-                            .child(blocks[ix].render_block(
-                                NodeRenderOptions {
-                                    ix,
-                                    is_last,
-                                    ..options
-                                },
-                                &node_cx,
-                                window,
-                                cx,
-                            ))
-                            .into_any_element()
-                    }
-                })
-                .size_full(),
-            )
+            .min_w(px(0.));
+
+        let document = match content_max_width {
+            Some(max_width) => document.max_w(max_width).mx_auto(),
+            None => document.max_w(relative(1.)),
+        };
+
+        document.child(
+            gpui::list(list_state, {
+                let node_cx = node_cx.clone();
+                let blocks = blocks.clone();
+                move |ix, window, cx| {
+                    let is_last = ix + 1 == blocks.len();
+                    div()
+                        .w_full()
+                        .min_w(px(0.))
+                        .max_w(relative(1.))
+                        .child(blocks[ix].render_block(
+                            NodeRenderOptions {
+                                ix,
+                                is_last,
+                                ..options
+                            },
+                            &node_cx,
+                            window,
+                            cx,
+                        ))
+                        .into_any_element()
+                }
+            })
+            .size_full(),
+        )
     }
 }

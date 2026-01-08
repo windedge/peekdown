@@ -6,15 +6,18 @@ use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::Button
 pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let config = workspace.config.clone();
+    let has_tabs = !workspace.tabs.is_empty();
 
     // Tab bar design:
     // - No bottom border line on the header
     // - Active tab has same background as content area (seamless)
     // - Inactive tabs have distinct background for separation
+    // - Fixed height prevents layout shifts when outline toggles
     div()
         .flex()
         .items_end()
         .h_10()
+        .flex_shrink_0()
         .bg(theme.title_bar)
         .child(
             div()
@@ -108,6 +111,21 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
             div()
                 .px_2()
                 .mb(px(4.))
+                .flex()
+                .flex_row()
+                .gap_1()
+                // Only show search button when there are open documents
+                .when(has_tabs, |this| {
+                    this.child(
+                        Button::new("search-btn")
+                            .icon(Icon::new(IconName::Search))
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|workspace, _, window, cx| {
+                                workspace.open_search(window, cx);
+                            }))
+                    )
+                })
                 .child(
                     Button::new("settings-btn")
                         .icon(Icon::new(IconName::Settings))

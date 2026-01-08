@@ -581,6 +581,24 @@ impl CodeBlock {
         cx: &mut App,
     ) -> AnyElement {
         let style = &node_cx.style;
+        let mut code_highlights = self.styles.clone();
+        if let Some(query) = node_cx.search_query.as_ref() {
+            if !query.is_empty() {
+                let ranges = search_ranges(self.code().as_ref(), query);
+                if !ranges.is_empty() {
+                    let search_style = HighlightStyle {
+                        background_color: Some(cx.theme().selection.alpha(0.35)),
+                        ..Default::default()
+                    };
+                    let search_highlights = ranges
+                        .into_iter()
+                        .map(|range| (range, search_style))
+                        .collect::<Vec<_>>();
+                    code_highlights =
+                        gpui::combine_highlights(code_highlights, search_highlights).collect();
+                }
+            }
+        }
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -598,7 +616,7 @@ impl CodeBlock {
                         "code",
                         self.state.clone(),
                         vec![],
-                        self.styles.clone(),
+                        code_highlights,
                     ))
                     .when_some(node_cx.code_block_actions.clone(), |this, actions| {
                         this.child(
@@ -624,6 +642,7 @@ pub(crate) struct NodeContext {
     /// Used for incremental updates.
     pub(crate) offset: usize,
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
+    pub(crate) search_query: Option<SharedString>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
 }
@@ -636,9 +655,66 @@ impl NodeContext {
 
 impl PartialEq for NodeContext {
     fn eq(&self, other: &Self) -> bool {
-        self.link_refs == other.link_refs && self.style == other.style
+        self.link_refs == other.link_refs
+            && self.search_query == other.search_query
+            && self.style == other.style
         // Note: code_block_buttons is intentionally not compared (closures can't be compared)
     }
+}
+
+fn search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return vec![];
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut ranges = Vec::new();
+
+    // Build a mapping from lowercase byte positions to original byte positions
+    let mut char_starts: Vec<(usize, usize)> = Vec::new(); // (original_pos, lowercase_pos)
+    let mut orig_pos = 0;
+    let mut lower_pos = 0;
+
+    for c in text.chars() {
+        char_starts.push((orig_pos, lower_pos));
+        orig_pos += c.len_utf8();
+        for lc in c.to_lowercase() {
+            lower_pos += lc.len_utf8();
+        }
+    }
+    char_starts.push((orig_pos, lower_pos)); // End sentinel
+
+    let text_lower = text.to_lowercase();
+    let mut start = 0;
+    while start < text_lower.len() {
+        let Some(pos) = text_lower[start..].find(&query_lower) else {
+            break;
+        };
+        let lower_start = start + pos;
+        let lower_end = lower_start + query_lower.len();
+
+        // Map lowercase positions back to original positions
+        let orig_start = char_starts
+            .iter()
+            .find(|(_, lp)| *lp == lower_start)
+            .map(|(op, _)| *op)
+            .unwrap_or(lower_start);
+        let orig_end = char_starts
+            .iter()
+            .find(|(_, lp)| *lp >= lower_end)
+            .map(|(op, _)| *op)
+            .unwrap_or(lower_end);
+
+        ranges.push(orig_start..orig_end);
+
+        // Move past the current match
+        start = lower_end;
+        // Ensure we're at a valid char boundary
+        while start < text_lower.len() && !text_lower.is_char_boundary(start) {
+            start += 1;
+        }
+    }
+    ranges
 }
 
 impl Paragraph {
@@ -650,6 +726,11 @@ impl Paragraph {
     ) -> impl IntoElement {
         let span = self.span;
         let children = &self.children;
+        let search_query = node_cx.search_query.as_ref().map(|query| query.as_ref());
+        let search_style = HighlightStyle {
+            background_color: Some(cx.theme().selection.alpha(0.35)),
+            ..Default::default()
+        };
 
         let mut child_nodes: Vec<AnyElement> = vec![];
 
@@ -670,12 +751,26 @@ impl Paragraph {
                         .lock()
                         .unwrap()
                         .set_text(text.clone().into());
+                    let inline_highlights = if let Some(query) = search_query {
+                        let ranges = search_ranges(&text, query);
+                        if ranges.is_empty() {
+                            highlights.clone()
+                        } else {
+                            let search_highlights = ranges
+                                .into_iter()
+                                .map(|range| (range, search_style))
+                                .collect::<Vec<_>>();
+                            gpui::combine_highlights(highlights.clone(), search_highlights).collect()
+                        }
+                    } else {
+                        highlights.clone()
+                    };
                     child_nodes.push(
                         Inline::new(
                             ix,
                             inline_node.state.clone(),
                             links.clone(),
-                            highlights.clone(),
+                            inline_highlights,
                         )
                         .into_any_element(),
                     );
@@ -754,9 +849,23 @@ impl Paragraph {
 
         // Add the last text node
         if text.len() > 0 {
+            let inline_highlights = if let Some(query) = search_query {
+                let ranges = search_ranges(&text, query);
+                if ranges.is_empty() {
+                    highlights.clone()
+                } else {
+                    let search_highlights = ranges
+                        .into_iter()
+                        .map(|range| (range, search_style))
+                        .collect::<Vec<_>>();
+                    gpui::combine_highlights(highlights.clone(), search_highlights).collect()
+                }
+            } else {
+                highlights.clone()
+            };
             self.state.lock().unwrap().set_text(text.into());
             child_nodes
-                .push(Inline::new(ix, self.state.clone(), links, highlights).into_any_element());
+                .push(Inline::new(ix, self.state.clone(), links, inline_highlights).into_any_element());
         }
 
         div()

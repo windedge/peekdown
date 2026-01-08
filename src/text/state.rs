@@ -7,7 +7,7 @@ use std::{
 
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, InteractiveElement,
-    IntoElement, KeyBinding, ListState, ParentElement as _, Pixels, Point, Render, SharedString,
+    IntoElement, KeyBinding, ListOffset, ListState, ParentElement as _, Pixels, Point, Render, SharedString,
     Size, Styled as _, Task, Window, prelude::FluentBuilder as _, px,
 };
 use smol::{Timer, stream::StreamExt as _};
@@ -21,7 +21,7 @@ use gpui_component::{
 
 use super::{
     CodeBlockActionsFn, TextViewStyle,
-    document::ParsedDocument,
+    document::{HeadingItem, ParsedDocument},
     element_ext::ElementExt,
     format,
     node::{self, NodeContext},
@@ -69,6 +69,7 @@ pub struct TextViewState {
 
     pub(super) parsed_content: Arc<Mutex<ParsedContent>>,
     text: SharedString,
+    search_query: Option<SharedString>,
     parsed_error: Option<SharedString>,
     tx: smol::channel::Sender<UpdateOptions>,
     _parse_task: Task<()>,
@@ -122,6 +123,7 @@ impl TextViewState {
             parsed_content: Default::default(),
             parsed_error: None,
             text: text.to_string().into(),
+            search_query: None,
             tx,
             _parse_task,
             _receive_task,
@@ -175,6 +177,38 @@ impl TextViewState {
     /// Positive values scroll down, negative values scroll up.
     pub fn scroll_by(&self, distance: Pixels) {
         self.list_state.scroll_by(distance);
+    }
+
+    /// Scroll to a specific block by index.
+    pub fn scroll_to_block(&self, index: usize) {
+        self.list_state.scroll_to(ListOffset {
+            item_ix: index,
+            offset_in_item: px(0.),
+        });
+    }
+
+    /// Get the headings from the parsed document for outline display.
+    pub fn headings(&self) -> Vec<HeadingItem> {
+        self.parsed_content.lock().unwrap().document.extract_headings()
+    }
+
+    /// Get the source text content.
+    pub fn source_text(&self) -> SharedString {
+        self.parsed_content.lock().unwrap().document.source.clone()
+    }
+
+    /// Get block spans (index, byte range) for search matching.
+    pub fn block_spans(&self) -> Vec<(usize, std::ops::Range<usize>)> {
+        self.parsed_content.lock().unwrap().document.block_spans()
+    }
+
+    pub fn set_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        if query.is_empty() {
+            self.search_query = None;
+        } else {
+            self.search_query = Some(query.to_string().into());
+        }
+        cx.notify();
     }
 
     /// Set the text content.
@@ -283,6 +317,9 @@ impl Render for TextViewState {
             let content = self.parsed_content.lock().unwrap();
             (content.document.clone(), content.node_cx.clone())
         };
+        let mut node_cx = node_cx;
+        node_cx.search_query = self.search_query.clone();
+        let content_max_width = self.text_view_style.content_max_width;
 
         // Capture settings for scroll handler
         let scroll_speed = self.scroll_speed;
@@ -298,6 +335,7 @@ impl Render for TextViewState {
                         None
                     },
                     &node_cx,
+                    content_max_width,
                     window,
                     cx,
                 )),
@@ -567,6 +605,4 @@ mod tests {
         );
     }
 }
-
-
 
