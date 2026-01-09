@@ -581,11 +581,14 @@ impl CodeBlock {
         cx: &mut App,
     ) -> AnyElement {
         let style = &node_cx.style;
-        let mut code_highlights = self.styles.clone();
-        if let Some(query) = node_cx.search_query.as_ref() {
-            if !query.is_empty() {
+
+        // Only clone and merge highlights if there's an active search query
+        let code_highlights = match node_cx.search_query.as_ref() {
+            Some(query) if !query.is_empty() => {
                 let ranges = search_ranges(self.code().as_ref(), query);
-                if !ranges.is_empty() {
+                if ranges.is_empty() {
+                    self.styles.clone()
+                } else {
                     let search_style = HighlightStyle {
                         background_color: Some(cx.theme().selection.alpha(0.35)),
                         ..Default::default()
@@ -594,11 +597,11 @@ impl CodeBlock {
                         .into_iter()
                         .map(|range| (range, search_style))
                         .collect::<Vec<_>>();
-                    code_highlights =
-                        gpui::combine_highlights(code_highlights, search_highlights).collect();
+                    gpui::combine_highlights(self.styles.clone(), search_highlights).collect()
                 }
             }
-        }
+            _ => self.styles.clone(),
+        };
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -663,28 +666,37 @@ impl PartialEq for NodeContext {
 }
 
 fn search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
-    if query.is_empty() {
+    if query.is_empty() || text.is_empty() {
         return vec![];
     }
 
+    // Fast path: ASCII-only case-insensitive search
+    // This avoids expensive Unicode lowercase conversions for common cases
+    let is_ascii_only = text.is_ascii() && query.is_ascii();
+
+    if is_ascii_only {
+        return search_ranges_ascii(text, query);
+    }
+
+    // Slow path: Unicode-aware search
     let query_lower = query.to_lowercase();
+    let text_lower = text.to_lowercase();
     let mut ranges = Vec::new();
 
     // Build a mapping from lowercase byte positions to original byte positions
-    let mut char_starts: Vec<(usize, usize)> = Vec::new(); // (original_pos, lowercase_pos)
+    let mut char_mapping: Vec<(usize, usize)> = Vec::with_capacity(text.chars().count() + 1);
     let mut orig_pos = 0;
     let mut lower_pos = 0;
 
     for c in text.chars() {
-        char_starts.push((orig_pos, lower_pos));
+        char_mapping.push((orig_pos, lower_pos));
         orig_pos += c.len_utf8();
         for lc in c.to_lowercase() {
             lower_pos += lc.len_utf8();
         }
     }
-    char_starts.push((orig_pos, lower_pos)); // End sentinel
+    char_mapping.push((orig_pos, lower_pos)); // End sentinel
 
-    let text_lower = text.to_lowercase();
     let mut start = 0;
     while start < text_lower.len() {
         let Some(pos) = text_lower[start..].find(&query_lower) else {
@@ -693,13 +705,12 @@ fn search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
         let lower_start = start + pos;
         let lower_end = lower_start + query_lower.len();
 
-        // Map lowercase positions back to original positions
-        let orig_start = char_starts
-            .iter()
-            .find(|(_, lp)| *lp == lower_start)
-            .map(|(op, _)| *op)
-            .unwrap_or(lower_start);
-        let orig_end = char_starts
+        // Map lowercase positions back to original positions using binary search
+        let orig_start = char_mapping
+            .binary_search_by_key(&lower_start, |(_, lp)| *lp)
+            .map(|i| char_mapping[i].0)
+            .unwrap_or_else(|i| if i > 0 { char_mapping[i - 1].0 } else { lower_start });
+        let orig_end = char_mapping
             .iter()
             .find(|(_, lp)| *lp >= lower_end)
             .map(|(op, _)| *op)
@@ -712,6 +723,36 @@ fn search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
         // Ensure we're at a valid char boundary
         while start < text_lower.len() && !text_lower.is_char_boundary(start) {
             start += 1;
+        }
+    }
+    ranges
+}
+
+/// Fast ASCII-only case-insensitive search (no allocations for lowercase conversion)
+fn search_ranges_ascii(text: &str, query: &str) -> Vec<Range<usize>> {
+    let text_bytes = text.as_bytes();
+    let query_bytes = query.as_bytes();
+    let query_len = query_bytes.len();
+    let mut ranges = Vec::new();
+
+    if query_len > text_bytes.len() {
+        return ranges;
+    }
+
+    let mut i = 0;
+    while i <= text_bytes.len() - query_len {
+        let mut matched = true;
+        for j in 0..query_len {
+            if text_bytes[i + j].to_ascii_lowercase() != query_bytes[j].to_ascii_lowercase() {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            ranges.push(i..i + query_len);
+            i += query_len; // Move past the match
+        } else {
+            i += 1;
         }
     }
     ranges
@@ -849,19 +890,20 @@ impl Paragraph {
 
         // Add the last text node
         if text.len() > 0 {
+            // For the last node, we can move highlights instead of cloning
             let inline_highlights = if let Some(query) = search_query {
                 let ranges = search_ranges(&text, query);
                 if ranges.is_empty() {
-                    highlights.clone()
+                    highlights  // Move instead of clone for last node
                 } else {
                     let search_highlights = ranges
                         .into_iter()
                         .map(|range| (range, search_style))
                         .collect::<Vec<_>>();
-                    gpui::combine_highlights(highlights.clone(), search_highlights).collect()
+                    gpui::combine_highlights(highlights, search_highlights).collect()
                 }
             } else {
-                highlights.clone()
+                highlights  // Move instead of clone for last node
             };
             self.state.lock().unwrap().set_text(text.into());
             child_nodes

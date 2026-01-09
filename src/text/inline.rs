@@ -356,55 +356,64 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::IBeam, &hitbox);
         }
 
-        // link cursor pointer
-        let mouse_position = window.mouse_position();
-        if let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position) {
-            window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+        // Only check for link hover if there are links (performance optimization)
+        let has_links = !self.links.is_empty();
+        if has_links {
+            let mouse_position = window.mouse_position();
+            if let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position) {
+                window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+            }
         }
 
         if let Some(selection) = &state.selection {
             Self::paint_selection(selection, &text_layout, &bounds, window, cx);
         }
 
-        // mouse move, update hovered link
-        window.on_mouse_event({
-            let hitbox = hitbox.clone();
-            let text_layout = text_layout.clone();
-            let mut hovered_index = state.hovered_index;
-            move |event: &MouseMoveEvent, phase, window, cx| {
-                if !phase.bubble() || !hitbox.is_hovered(window) {
-                    return;
-                }
+        // Only register mouse event handlers if there are links
+        // This is a performance optimization: without links, we skip registering
+        // potentially hundreds of event handlers per frame in tables
 
-                let current = hovered_index;
-                let updated = text_layout.index_for_position(event.position).ok();
-                //  notify update when hovering over different links
-                if current != updated {
-                    hovered_index = updated;
-                    cx.notify(current_view);
-                }
-            }
-        });
-
-        if !is_selection {
-            // click to open link
+        if has_links {
+            // mouse move, update hovered link
             window.on_mouse_event({
-                let links = self.links.clone();
+                let hitbox = hitbox.clone();
                 let text_layout = text_layout.clone();
-
-                move |event: &MouseUpEvent, phase, _, cx| {
-                    if !bounds.contains(&event.position) || !phase.bubble() {
+                let mut hovered_index = state.hovered_index;
+                move |event: &MouseMoveEvent, phase, window, cx| {
+                    if !phase.bubble() || !hitbox.is_hovered(window) {
                         return;
                     }
 
-                    if let Some(link) =
-                        Self::link_for_position(&text_layout, &links, event.position)
-                    {
-                        cx.stop_propagation();
-                        cx.open_url(&link.url);
+                    let current = hovered_index;
+                    let updated = text_layout.index_for_position(event.position).ok();
+                    //  notify update when hovering over different links
+                    if current != updated {
+                        hovered_index = updated;
+                        cx.notify(current_view);
                     }
                 }
             });
+
+            if !is_selection {
+                // click to open link
+                window.on_mouse_event({
+                    let links = self.links.clone();
+                    let text_layout = text_layout.clone();
+
+                    move |event: &MouseUpEvent, phase, _, cx| {
+                        if !bounds.contains(&event.position) || !phase.bubble() {
+                            return;
+                        }
+
+                        if let Some(link) =
+                            Self::link_for_position(&text_layout, &links, event.position)
+                        {
+                            cx.stop_propagation();
+                            cx.open_url(&link.url);
+                        }
+                    }
+                });
+            }
         }
     }
 }

@@ -3,6 +3,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::path::PathBuf;
+use std::time::Instant;
 use crate::state::document::Document;
 use gpui_component::{ActiveTheme, Root, button::Button, button::ButtonVariants, Icon, IconName, Sizable};
 use crate::state::config::AppConfig;
@@ -212,6 +213,43 @@ struct WorkspaceView {
     outline_width: f32,
     focus_handle: FocusHandle,
     tab_scroll_handle: ScrollHandle,
+    // FPS counter
+    fps_counter: FpsCounter,
+}
+
+/// Simple FPS counter
+struct FpsCounter {
+    last_frame_time: Instant,
+    frame_count: u32,
+    current_fps: f32,
+}
+
+impl FpsCounter {
+    fn new() -> Self {
+        Self {
+            last_frame_time: Instant::now(),
+            frame_count: 0,
+            current_fps: 0.0,
+        }
+    }
+
+    /// Call this every frame, returns true if FPS was updated
+    fn tick(&mut self) -> bool {
+        self.frame_count += 1;
+        let elapsed = self.last_frame_time.elapsed();
+        if elapsed.as_secs_f32() >= 0.5 {
+            self.current_fps = self.frame_count as f32 / elapsed.as_secs_f32();
+            self.frame_count = 0;
+            self.last_frame_time = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn fps(&self) -> f32 {
+        self.current_fps
+    }
 }
 
 impl WorkspaceView {
@@ -235,6 +273,7 @@ impl WorkspaceView {
             outline_width,
             focus_handle: cx.focus_handle(),
             tab_scroll_handle: ScrollHandle::new(),
+            fps_counter: FpsCounter::new(),
         }
     }
 
@@ -365,7 +404,9 @@ impl WorkspaceView {
                 view.set_headings(headings);
                 view.set_width(outline_width, cx);
                 view.set_on_click(move |block_index, _window, cx| {
-                    markdown_view.read(cx).scroll_to_heading(block_index, cx);
+                    markdown_view.update(cx, |view, cx| {
+                        view.scroll_to_heading(block_index, cx);
+                    });
                 }, cx);
             });
             return;
@@ -389,7 +430,9 @@ impl WorkspaceView {
                     });
                 })
                 .on_click(move |block_index, _window, cx| {
-                    markdown_view.read(cx).scroll_to_heading(block_index, cx);
+                    markdown_view.update(cx, |view, cx| {
+                        view.scroll_to_heading(block_index, cx);
+                    });
                 })
                 .on_close(move |_window, cx| {
                     if let Some(ws) = workspace_for_close.upgrade() {
@@ -426,7 +469,9 @@ impl WorkspaceView {
         let search_bar = cx.new(|cx| {
             SearchBar::new(window, cx)
                 .on_navigate(move |block_index, _window, cx| {
-                    markdown_view.read(cx).scroll_to_heading(block_index, cx);
+                    markdown_view.update(cx, |view, cx| {
+                        view.scroll_to_heading(block_index, cx);
+                    });
                 })
                 .on_close({
                     let workspace = workspace.clone();
@@ -497,7 +542,9 @@ impl WorkspaceView {
 
         // Scroll to first match
         if let Some(block_index) = first_block {
-            tab.view.read(cx).scroll_to_heading(block_index, cx);
+            tab.view.update(cx, |view, cx| {
+                view.scroll_to_heading(block_index, cx);
+            });
         }
     }
 
@@ -554,22 +601,22 @@ impl WorkspaceView {
         if self.tabs.is_empty() {
             return;
         }
-        let tab = &self.tabs[self.active_tab_index];
-        tab.view.read(cx).text_view_state().read(cx).scroll_to_block(0);
+        let text_view_state = self.tabs[self.active_tab_index].view.read(cx).text_view_state().clone();
+        text_view_state.update(cx, |state, _| {
+            state.scroll_to_block(0);
+        });
     }
 
     fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
         if self.tabs.is_empty() {
             return;
         }
-        let tab = &self.tabs[self.active_tab_index];
-        let block_count = tab.view.read(cx).text_view_state().read(cx).block_count();
+        let text_view_state = self.tabs[self.active_tab_index].view.read(cx).text_view_state().clone();
+        let block_count = text_view_state.read(cx).block_count();
         if block_count > 0 {
-            tab.view
-                .read(cx)
-                .text_view_state()
-                .read(cx)
-                .scroll_to_block(block_count.saturating_sub(1));
+            text_view_state.update(cx, |state, _| {
+                state.scroll_to_block(block_count.saturating_sub(1));
+            });
         }
     }
 
@@ -624,6 +671,15 @@ impl WorkspaceView {
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let show_fps = self.config.read(cx).appearance.show_fps;
+
+        // Update FPS counter only if showing
+        let fps_text = if show_fps {
+            self.fps_counter.tick();
+            Some(format!("{:.0} FPS", self.fps_counter.fps()))
+        } else {
+            None
+        };
 
         // Check if outline is resizing (read from outline_view if exists)
         let is_resizing = if let Some(outline_view) = &self.outline_view {
@@ -653,26 +709,6 @@ impl Render for WorkspaceView {
                 .size_full()
                 .flex_grow()
                 .child(tab.view.clone())
-                .when(!self.outline_visible, |this| {
-                    this.child(
-                        deferred(
-                            div()
-                                .absolute()
-                                .top_2()
-                                .left_2()
-                                .child(
-                                    Button::new("outline-toggle-btn")
-                                        .icon(Icon::new(IconName::Menu))
-                                        .ghost()
-                                        .small()
-                                        .on_click(cx.listener(|workspace, _, _window, cx| {
-                                            workspace.toggle_outline(cx);
-                                        })),
-                                ),
-                        )
-                        .priority(10),
-                    )
-                })
         };
 
         // Get dialog layer to render on top
@@ -767,6 +803,27 @@ impl Render for WorkspaceView {
                     .overflow_hidden()
                     .children(outline_sidebar)
                     .child(body_content)
+                    // Outline toggle button at top-left (only when outline is hidden and has tabs)
+                    .when(!self.outline_visible && !self.tabs.is_empty(), |this| {
+                        this.child(
+                            deferred(
+                                div()
+                                    .absolute()
+                                    .top_2()
+                                    .left_2()
+                                    .child(
+                                        Button::new("outline-toggle-btn")
+                                            .icon(Icon::new(IconName::Menu))
+                                            .ghost()
+                                            .small()
+                                            .on_click(cx.listener(|workspace, _, _window, cx| {
+                                                workspace.toggle_outline(cx);
+                                            })),
+                                    ),
+                            )
+                            .priority(10),
+                        )
+                    })
                     // Search bar overlay at top-right
                     .when_some(search_bar, |this, search_bar| {
                         this.child(
@@ -783,13 +840,15 @@ impl Render for WorkspaceView {
                 div()
                     .flex()
                     .items_center()
+                    .justify_between()
                     .h_8()
                     .px_4()
                     .bg(theme.tab_bar)
                     .border_t_1()
                     .border_color(theme.border)
                     .text_xs()
-                    .child(if self.tabs.is_empty() { "No file" } else { "Ready" }),
+                    .child(if self.tabs.is_empty() { "No file" } else { "Ready" })
+                    .when_some(fps_text, |this, fps| this.child(fps)),
             )
             // Render dialogs on top
             .children(dialog_layer)

@@ -67,6 +67,9 @@ pub struct AppearanceConfig {
     /// Monospace font size for code blocks in pixels
     #[serde(default = "default_mono_font_size")]
     pub mono_font_size: f32,
+    /// Whether to show FPS counter in the status bar
+    #[serde(default)]
+    pub show_fps: bool,
 }
 
 fn default_scroll_speed() -> f32 {
@@ -119,6 +122,7 @@ impl Default for AppearanceConfig {
             font_size: default_font_size(),
             mono_font_family: default_mono_font_family(),
             mono_font_size: default_mono_font_size(),
+            show_fps: false,
         }
     }
 }

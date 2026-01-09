@@ -52,8 +52,10 @@ impl MarkdownView {
     }
 
     /// Scroll to a specific heading by block index.
-    pub fn scroll_to_heading(&self, block_index: usize, cx: &App) {
-        self.text_view_state.read(cx).scroll_to_block(block_index);
+    pub fn scroll_to_heading(&self, block_index: usize, cx: &mut App) {
+        self.text_view_state.update(cx, |state, _| {
+            state.scroll_to_block(block_index);
+        });
     }
 
     /// Get a reference to the text view state entity.
@@ -142,10 +144,13 @@ impl Render for MarkdownView {
                     return;
                 }
 
-                // Match scroll speed with TextView
+                // Use inertia scroll for padding area too
                 let delta = event.delta.pixel_delta(px(20.)).y;
-                let distance = -delta * scroll_speed;
-                text_state.read(cx).scroll_by(distance);
+                text_state.update(cx, |state, cx| {
+                    state.add_scroll_impulse(f32::from(delta));
+                    // Notify to trigger repaint
+                    cx.notify();
+                });
                 cx.stop_propagation();
             })
             .child(

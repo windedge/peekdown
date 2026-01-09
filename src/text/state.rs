@@ -2,7 +2,7 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::Poll,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui::{
@@ -72,6 +72,8 @@ pub struct TextViewState {
     pub(super) scrollable: bool,
     /// Scroll speed multiplier (1.0 = normal, 2.0 = double speed)
     pub(super) scroll_speed: f32,
+    /// Inertia scroll animation state
+    pub(super) inertia_scroll: InertiaScrollState,
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
 
@@ -131,6 +133,7 @@ impl TextViewState {
             selectable: false,
             scrollable: false,
             scroll_speed: 1.0,
+            inertia_scroll: InertiaScrollState::default(),
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
@@ -188,14 +191,26 @@ impl TextViewState {
         cx.notify();
     }
 
+    /// Add impulse to inertia scroll and start animation if not running.
+    pub fn add_scroll_impulse(&mut self, delta_px: f32) {
+        self.inertia_scroll.add_impulse(delta_px, self.scroll_speed);
+        if !self.inertia_scroll.is_animating() {
+            self.inertia_scroll.start();
+        }
+    }
+
     /// Scroll the list by the given distance in pixels.
     /// Positive values scroll down, negative values scroll up.
-    pub fn scroll_by(&self, distance: Pixels) {
+    /// This stops any ongoing inertia animation.
+    pub fn scroll_by(&mut self, distance: Pixels) {
+        self.inertia_scroll.stop();
         self.list_state.scroll_by(distance);
     }
 
     /// Scroll to a specific block by index.
-    pub fn scroll_to_block(&self, index: usize) {
+    /// This stops any ongoing inertia animation.
+    pub fn scroll_to_block(&mut self, index: usize) {
+        self.inertia_scroll.stop();
         self.list_state.scroll_to(ListOffset {
             item_ix: index,
             offset_in_item: px(0.),
@@ -422,8 +437,8 @@ impl Render for TextViewState {
         let content_max_width = self.text_view_style.content_max_width;
 
         // Capture settings for scroll handler
-        let scroll_speed = self.scroll_speed;
         let list_state = self.list_state.clone();
+        let scrollable = self.scrollable;
 
         v_flex()
             .size_full()
@@ -446,22 +461,43 @@ impl Render for TextViewState {
                         .child(err.to_string()),
                 ),
             })
-            // Handle scroll with speed adjustment
-            .when(self.scrollable && scroll_speed != 1.0, |this| {
-                this.on_scroll_wheel(move |event, _, _cx| {
+            // Handle scroll wheel with inertia
+            .when(scrollable, |this| {
+                let state = state.clone();
+                this.on_scroll_wheel(move |event, _window, cx| {
                     let delta = event.delta.pixel_delta(px(20.)).y;
 
-                    // Apply scroll speed adjustment
-                    // GPUI list already scrolled with delta * 1.0
-                    // We add (speed - 1.0) * delta to achieve total speed
-                    let extra_scroll = delta * (scroll_speed - 1.0);
-                    list_state.scroll_by(-extra_scroll);
+                    state.update(cx, |state, cx| {
+                        // Add impulse to inertia state using public method
+                        state.add_scroll_impulse(f32::from(delta));
+                        // Notify to trigger repaint, which will call request_animation_frame
+                        cx.notify();
+                    });
+
+                    // Stop propagation to prevent GPUI list's default scroll
+                    cx.stop_propagation();
                 })
             })
-            .on_prepaint(move |bounds, _, cx| {
-                state.update(cx, |state, _| {
-                    state.update_bounds(bounds);
-                })
+            .on_prepaint({
+                let list_state = list_state.clone();
+                move |bounds, window, cx| {
+                    state.update(cx, |state, _| {
+                        state.update_bounds(bounds);
+
+                        // Process inertia scroll animation
+                        if state.inertia_scroll.is_animating() {
+                            if let Some(distance) = state.inertia_scroll.update(Instant::now()) {
+                                // Apply scroll distance (negative because positive delta = scroll up)
+                                list_state.scroll_by(px(-distance));
+
+                                // Request next frame if still animating
+                                if state.inertia_scroll.is_animating() {
+                                    window.request_animation_frame();
+                                }
+                            }
+                        }
+                    });
+                }
             })
     }
 }
@@ -703,6 +739,96 @@ mod tests {
                 size: size(px(40.), px(40.))
             }
         );
+    }
+}
+
+/// Inertia scroll animation state for smooth scrolling.
+#[derive(Default, Clone)]
+pub(super) struct InertiaScrollState {
+    /// Current scroll velocity in pixels per second (positive = scroll down)
+    velocity: f32,
+    /// Whether animation is currently running
+    is_animating: bool,
+    /// Last frame timestamp for delta time calculation
+    last_frame_time: Option<Instant>,
+}
+
+impl InertiaScrollState {
+    /// Minimum velocity threshold below which animation stops (px/s)
+    const MIN_VELOCITY: f32 = 10.0;
+    /// Friction coefficient: velocity decays by this factor per frame at 60fps
+    const FRICTION: f32 = 0.06;
+    /// Maximum velocity cap to prevent excessive scrolling (px/s)
+    const MAX_VELOCITY: f32 = 8000.0;
+    /// Velocity boost per scroll wheel delta
+    const VELOCITY_MULTIPLIER: f32 = 15.0;
+
+    /// Add impulse from scroll wheel event
+    pub fn add_impulse(&mut self, delta_px: f32, scroll_speed: f32) {
+        let impulse = delta_px * Self::VELOCITY_MULTIPLIER * scroll_speed;
+
+        // If scrolling in same direction, accumulate velocity
+        // If opposite direction, blend with some momentum preservation
+        if self.velocity.signum() == impulse.signum() || self.velocity.abs() < Self::MIN_VELOCITY {
+            self.velocity += impulse;
+        } else {
+            // Opposite direction: blend 30% old + 100% new for smoother reversal
+            self.velocity = self.velocity * 0.3 + impulse;
+        }
+
+        // Clamp to max velocity
+        self.velocity = self.velocity.clamp(-Self::MAX_VELOCITY, Self::MAX_VELOCITY);
+    }
+
+    /// Update animation state, returns distance to scroll this frame.
+    /// Returns None if animation should stop.
+    pub fn update(&mut self, now: Instant) -> Option<f32> {
+        if !self.is_animating {
+            return None;
+        }
+
+        // Calculate delta time, capped to prevent huge jumps
+        let dt = self
+            .last_frame_time
+            .map(|t| now.duration_since(t).as_secs_f32())
+            .unwrap_or(1.0 / 60.0)
+            .min(0.1);
+
+        self.last_frame_time = Some(now);
+
+        // Calculate distance to scroll this frame
+        let distance = self.velocity * dt;
+
+        // Apply friction (exponential decay normalized to 60fps)
+        self.velocity *= (1.0 - Self::FRICTION).powf(dt * 60.0);
+
+        // Check if should stop
+        if self.velocity.abs() < Self::MIN_VELOCITY {
+            self.stop();
+            return None;
+        }
+
+        Some(distance)
+    }
+
+    /// Start animation if velocity is above threshold
+    pub fn start(&mut self) {
+        if self.velocity.abs() >= Self::MIN_VELOCITY {
+            self.is_animating = true;
+            self.last_frame_time = None;
+        }
+    }
+
+    /// Stop animation and reset state
+    pub fn stop(&mut self) {
+        self.is_animating = false;
+        self.velocity = 0.0;
+        self.last_frame_time = None;
+    }
+
+    /// Check if currently animating
+    pub fn is_animating(&self) -> bool {
+        self.is_animating
     }
 }
 
