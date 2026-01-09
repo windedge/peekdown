@@ -8,7 +8,7 @@ use gpui_component::{ActiveTheme, Root, button::Button, button::ButtonVariants, 
 use crate::state::config::AppConfig;
 
 mod welcome;
-use welcome::WelcomeView;
+use welcome::render_welcome;
 mod markdown_view;
 use markdown_view::MarkdownView;
 mod settings_dialog;
@@ -21,6 +21,7 @@ use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 
 gpui::actions!([
+    OpenFileDialog,
     OpenSearch,
     CloseSearch,
     // Navigation
@@ -38,6 +39,12 @@ gpui::actions!([
 
 pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>, config: Entity<AppConfig>) {
     cx.bind_keys(vec![
+        // Open file dialog
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-o", OpenFileDialog, Some("Workspace")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-o", OpenFileDialog, Some("Workspace")),
+
         // Search
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-f", OpenSearch, Some("Workspace")),
@@ -56,6 +63,7 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
         KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-w", CloseTab, Some("Workspace")),
+        KeyBinding::new("ctrl-f4", CloseTab, Some("Workspace")),
 
         // Selection & Scrolling
         #[cfg(target_os = "macos")]
@@ -575,6 +583,42 @@ impl WorkspaceView {
             state.select_all(cx);
         });
     }
+
+    fn open_file_dialog(&mut self, cx: &mut Context<Self>) {
+        let paths_rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Select Markdown files".into()),
+        });
+
+        cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                if let Ok(Ok(Some(paths))) = paths_rx.await {
+                    // Filter markdown files only
+                    let md_paths: Vec<_> = paths
+                        .into_iter()
+                        .filter(|p| {
+                            p.extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+                                .unwrap_or(false)
+                        })
+                        .collect();
+
+                    if !md_paths.is_empty() {
+                        workspace
+                            .update(&mut cx, |ws, cx| {
+                                ws.open_files(md_paths, cx);
+                            })
+                            .ok();
+                    }
+                }
+            }
+        })
+        .detach();
+    }
 }
 
 impl Render for WorkspaceView {
@@ -600,7 +644,7 @@ impl Render for WorkspaceView {
                 .relative()
                 .size_full()
                 .flex_grow()
-                .child(cx.new(|_cx| WelcomeView::new()))
+                .child(render_welcome(cx))
                 // No outline toggle button when no documents are open
         } else {
             let tab = &self.tabs[self.active_tab_index];
@@ -654,6 +698,9 @@ impl Render for WorkspaceView {
             })
             .bg(theme.background)
             .text_color(theme.foreground)
+            .on_action(cx.listener(|workspace, _: &OpenFileDialog, _window, cx| {
+                workspace.open_file_dialog(cx);
+            }))
             .on_action(cx.listener(|workspace, _: &OpenSearch, window, cx| {
                 workspace.open_search(window, cx);
             }))
