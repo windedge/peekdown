@@ -4133,6 +4133,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+ "tree-sitter-kotlin",
  "windows-sys 0.61.2",
  "winreg 0.52.0",
  "winres",
@@ -6452,6 +6453,15 @@ checksum = "4d727acca406c0020cffc6cf35516764f36c8e3dc4408e5ebe2cb35a947ec471"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-kotlin"
+version = "0.3.9"
+source = "git+https://github.com/fwcd/tree-sitter-kotlin?branch=main#57fb4560ba8641865bc0baa6b3f413b236112c4c"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]

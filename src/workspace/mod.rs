@@ -384,6 +384,14 @@ impl WorkspaceView {
 
     fn toggle_outline(&mut self, cx: &mut Context<Self>) {
         self.outline_visible = !self.outline_visible;
+
+        // Save to config
+        let visible = self.outline_visible;
+        self.config.update(cx, |config, _| {
+            config.appearance.outline_visible = visible;
+            config.save();
+        });
+
         cx.notify();
     }
 

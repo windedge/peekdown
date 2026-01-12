@@ -3,6 +3,7 @@ mod global_state;
 mod format;
 mod highlighter_cache;
 mod inline;
+mod languages;
 mod node;
 pub(crate) mod selection;
 mod state;
@@ -19,6 +20,7 @@ pub use style::*;
 pub use text_view::*;
 
 pub(crate) fn init(cx: &mut App) {
+    languages::register_languages();
     global_state::init(cx);
     state::init(cx);
 }

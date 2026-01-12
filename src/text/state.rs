@@ -72,6 +72,8 @@ pub struct TextViewState {
     pub(super) scrollable: bool,
     /// Scroll speed multiplier (1.0 = normal, 2.0 = double speed)
     pub(super) scroll_speed: f32,
+    /// Whether inertia (smooth) scrolling is enabled
+    pub(super) inertia_enabled: bool,
     /// Inertia scroll animation state
     pub(super) inertia_scroll: InertiaScrollState,
     pub(super) text_view_style: TextViewStyle,
@@ -82,6 +84,8 @@ pub struct TextViewState {
     pub(super) selection_mode: SelectionMode,
     /// The local (in TextView) position of the selection.
     selection_positions: (Option<Point<Pixels>>, Option<Point<Pixels>>),
+    /// Indicates if the entire document is selected via Select All.
+    is_select_all: bool,
 
     pub(super) parsed_content: Arc<Mutex<ParsedContent>>,
     text: SharedString,
@@ -133,11 +137,13 @@ impl TextViewState {
             selectable: false,
             scrollable: false,
             scroll_speed: 1.0,
+            inertia_enabled: true,
             inertia_scroll: InertiaScrollState::default(),
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
             is_selecting: false,
+            is_select_all: false,
             parsed_content: Default::default(),
             parsed_error: None,
             text: text.to_string().into(),
@@ -191,6 +197,31 @@ impl TextViewState {
         cx.notify();
     }
 
+    /// Get the current scroll speed multiplier.
+    pub fn get_scroll_speed(&self) -> f32 {
+        self.scroll_speed
+    }
+
+    /// Set whether inertia (smooth) scrolling is enabled.
+    pub fn inertia_enabled(mut self, enabled: bool) -> Self {
+        self.inertia_enabled = enabled;
+        self
+    }
+
+    /// Set whether inertia (smooth) scrolling is enabled.
+    pub fn set_inertia_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.inertia_enabled = enabled;
+        if !enabled {
+            self.inertia_scroll.stop();
+        }
+        cx.notify();
+    }
+
+    /// Check if inertia scrolling is enabled.
+    pub fn is_inertia_enabled(&self) -> bool {
+        self.inertia_enabled
+    }
+
     /// Add impulse to inertia scroll and start animation if not running.
     pub fn add_scroll_impulse(&mut self, delta_px: f32) {
         self.inertia_scroll.add_impulse(delta_px, self.scroll_speed);
@@ -204,6 +235,12 @@ impl TextViewState {
     /// This stops any ongoing inertia animation.
     pub fn scroll_by(&mut self, distance: Pixels) {
         self.inertia_scroll.stop();
+        self.list_state.scroll_by(distance);
+    }
+
+    /// Scroll by the given distance without stopping inertia animation.
+    /// Used internally for non-inertia scrolling mode.
+    pub fn scroll_by_direct(&mut self, distance: Pixels) {
         self.list_state.scroll_by(distance);
     }
 
@@ -267,6 +304,10 @@ impl TextViewState {
 
     /// Return the selected text.
     pub fn selected_text(&self) -> String {
+        if self.is_select_all {
+            // Return entire document source when Select All is active
+            return self.parsed_content.lock().unwrap().document.source.to_string();
+        }
         self.parsed_content.lock().unwrap().document.selected_text()
     }
 
@@ -296,6 +337,7 @@ impl TextViewState {
         self.selection_positions = (None, None);
         self.selection_mode = SelectionMode::Character;
         self.is_selecting = false;
+        self.is_select_all = false;
     }
 
     /// Get the current scroll offset in pixels (Y component only, as negative value).
@@ -314,6 +356,7 @@ impl TextViewState {
         self.selection_positions = (Some(pos), Some(pos));
         self.selection_mode = SelectionMode::Character;
         self.is_selecting = true;
+        self.is_select_all = false;
     }
 
     pub(super) fn update_selection(&mut self, pos: Point<Pixels>) {
@@ -363,6 +406,7 @@ impl TextViewState {
         );
         self.selection_mode = SelectionMode::Character;
         self.is_selecting = false;
+        self.is_select_all = true;
         cx.notify();
     }
 
@@ -379,6 +423,7 @@ impl TextViewState {
         self.selection_positions = (Some(local_pos), Some(local_pos));
         self.selection_mode = SelectionMode::Word;
         self.is_selecting = false;
+        self.is_select_all = false;
     }
 
     /// Start line selection at given position (for triple-click).
@@ -394,6 +439,7 @@ impl TextViewState {
         self.selection_positions = (Some(local_pos), Some(local_pos));
         self.selection_mode = SelectionMode::Line;
         self.is_selecting = false;
+        self.is_select_all = false;
     }
 
     /// Return the bounds of the selection in window coordinates.
@@ -461,16 +507,22 @@ impl Render for TextViewState {
                         .child(err.to_string()),
                 ),
             })
-            // Handle scroll wheel with inertia
+            // Handle scroll wheel with optional inertia
             .when(scrollable, |this| {
                 let state = state.clone();
+                let list_state = list_state.clone();
                 this.on_scroll_wheel(move |event, _window, cx| {
                     let delta = event.delta.pixel_delta(px(20.)).y;
 
                     state.update(cx, |state, cx| {
-                        // Add impulse to inertia state using public method
-                        state.add_scroll_impulse(f32::from(delta));
-                        // Notify to trigger repaint, which will call request_animation_frame
+                        if state.inertia_enabled {
+                            // Use inertia scroll
+                            state.add_scroll_impulse(f32::from(delta));
+                        } else {
+                            // Direct scroll without inertia
+                            let scroll_distance = delta * state.scroll_speed;
+                            list_state.scroll_by(-scroll_distance);
+                        }
                         cx.notify();
                     });
 

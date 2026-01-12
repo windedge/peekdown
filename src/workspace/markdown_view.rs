@@ -23,10 +23,11 @@ impl MarkdownView {
     pub fn new(document: Entity<Document>, config: Entity<AppConfig>, cx: &mut Context<Self>) -> Self {
         // Observe config changes to re-render when layout mode changes
         cx.observe(&config, |this, _, cx| {
-            // Update scroll speed in TextViewState when config changes
-            let speed = this.config.read(cx).appearance.scroll_speed;
+            // Update scroll settings in TextViewState when config changes
+            let appearance = this.config.read(cx).appearance.clone();
             this.text_view_state.update(cx, |state, cx| {
-                state.set_scroll_speed(speed, cx);
+                state.set_scroll_speed(appearance.scroll_speed, cx);
+                state.set_inertia_enabled(appearance.inertia_scroll, cx);
             });
             cx.notify();
         }).detach();
@@ -34,9 +35,11 @@ impl MarkdownView {
         // Create TextViewState once - content is parsed only at initialization
         let content = document.read(cx).content.clone();
         let scroll_speed = config.read(cx).appearance.scroll_speed;
+        let inertia_enabled = config.read(cx).appearance.inertia_scroll;
         let text_view_state = cx.new(|cx| {
             TextViewState::markdown(content.as_ref(), cx)
                 .scroll_speed(scroll_speed)
+                .inertia_enabled(inertia_enabled)
         });
 
         Self {
@@ -144,11 +147,15 @@ impl Render for MarkdownView {
                     return;
                 }
 
-                // Use inertia scroll for padding area too
+                // Scroll padding area with same logic as content area
                 let delta = event.delta.pixel_delta(px(20.)).y;
                 text_state.update(cx, |state, cx| {
-                    state.add_scroll_impulse(f32::from(delta));
-                    // Notify to trigger repaint
+                    if state.is_inertia_enabled() {
+                        state.add_scroll_impulse(f32::from(delta));
+                    } else {
+                        let scroll_distance = delta * state.get_scroll_speed();
+                        state.scroll_by_direct(-scroll_distance);
+                    }
                     cx.notify();
                 });
                 cx.stop_propagation();

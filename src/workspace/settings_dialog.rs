@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::{
     StyledExt,
     h_flex, v_flex,
+    checkbox::Checkbox,
     radio::Radio,
     slider::{Slider, SliderState},
     select::{Select, SelectState, SearchableVec},
@@ -93,6 +94,7 @@ struct SettingsContent {
     selected_theme: Entity<AppThemeMode>,
     selected_layout: Entity<LayoutMode>,
     slider_state: Entity<SliderState>,
+    inertia_scroll: Entity<bool>,
     // Font settings
     font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
     font_size_slider: Entity<SliderState>,
@@ -105,6 +107,7 @@ impl SettingsContent {
         selected_theme: Entity<AppThemeMode>,
         selected_layout: Entity<LayoutMode>,
         slider_state: Entity<SliderState>,
+        inertia_scroll: Entity<bool>,
         font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
         font_size_slider: Entity<SliderState>,
         mono_font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
@@ -114,11 +117,13 @@ impl SettingsContent {
         // Observe changes to re-render when values change
         cx.observe(&selected_theme, |_, _, cx| cx.notify()).detach();
         cx.observe(&selected_layout, |_, _, cx| cx.notify()).detach();
+        cx.observe(&inertia_scroll, |_, _, cx| cx.notify()).detach();
 
         Self {
             selected_theme,
             selected_layout,
             slider_state,
+            inertia_scroll,
             font_family_state,
             font_size_slider,
             mono_font_family_state,
@@ -132,6 +137,7 @@ impl Render for SettingsContent {
         // Read current values dynamically
         let current_theme = *self.selected_theme.read(cx);
         let current_layout = *self.selected_layout.read(cx);
+        let current_inertia = *self.inertia_scroll.read(cx);
 
         v_flex()
             .gap_4()
@@ -142,7 +148,7 @@ impl Render for SettingsContent {
             // Scroll speed section
             .child(settings_section(
                 "Scroll Speed",
-                scroll_speed_control(self.slider_state.clone()),
+                scroll_speed_control(self.slider_state.clone(), self.inertia_scroll.clone(), current_inertia),
             ))
             // Content font section
             .child(settings_section(
@@ -166,6 +172,7 @@ pub fn open_settings_dialog(
     let current_theme = config.read(cx).appearance.theme;
     let current_layout = config.read(cx).appearance.layout;
     let current_scroll_speed = config.read(cx).appearance.scroll_speed;
+    let current_inertia_scroll = config.read(cx).appearance.inertia_scroll;
     let current_font_family = config.read(cx).appearance.font_family.clone();
     let current_font_size = config.read(cx).appearance.font_size;
     let current_mono_font_family = config.read(cx).appearance.mono_font_family.clone();
@@ -237,12 +244,14 @@ pub fn open_settings_dialog(
     // Track selected values
     let selected_theme = cx.new(|_| current_theme);
     let selected_layout = cx.new(|_| current_layout);
+    let inertia_scroll = cx.new(|_| current_inertia_scroll);
 
     // Create content view for reactive updates
     let content = cx.new(|cx| SettingsContent::new(
         selected_theme.clone(),
         selected_layout.clone(),
         slider_state.clone(),
+        inertia_scroll.clone(),
         font_family_state.clone(),
         font_size_slider.clone(),
         mono_font_family_state.clone(),
@@ -255,6 +264,7 @@ pub fn open_settings_dialog(
         let slider_for_save = slider_state.clone();
         let theme_for_save = selected_theme.clone();
         let layout_for_save = selected_layout.clone();
+        let inertia_for_save = inertia_scroll.clone();
         let font_family_for_save = font_family_state.clone();
         let font_size_for_save = font_size_slider.clone();
         let mono_font_family_for_save = mono_font_family_state.clone();
@@ -270,6 +280,7 @@ pub fn open_settings_dialog(
                 let new_speed = slider_for_save.read(cx).value().start();
                 let new_theme = *theme_for_save.read(cx);
                 let new_layout = *layout_for_save.read(cx);
+                let new_inertia = *inertia_for_save.read(cx);
 
                 // Get font settings
                 let new_font_family = font_family_for_save.read(cx)
@@ -287,6 +298,7 @@ pub fn open_settings_dialog(
                     config.appearance.scroll_speed = new_speed;
                     config.appearance.theme = new_theme;
                     config.appearance.layout = new_layout;
+                    config.appearance.inertia_scroll = new_inertia;
                     config.appearance.font_family = new_font_family;
                     config.appearance.font_size = new_font_size;
                     config.appearance.mono_font_family = new_mono_font_family;
@@ -294,6 +306,9 @@ pub fn open_settings_dialog(
 
                     // Apply font settings immediately
                     config.appearance.apply_font_settings(cx);
+
+                    // Notify observers of config changes
+                    cx.notify();
 
                     // Refresh window to apply changes
                     window.refresh();
@@ -387,24 +402,38 @@ fn layout_options(
 
 fn scroll_speed_control(
     slider_state: Entity<SliderState>,
+    inertia_scroll: Entity<bool>,
+    current_inertia: bool,
 ) -> impl IntoElement {
-    h_flex()
-        .gap_3()
-        .items_center()
+    v_flex()
+        .gap_2()
         .child(
-            div()
-                .text_sm()
-                .child("0.5x")
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .child("0.5x")
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .child(Slider::new(&slider_state))
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .child("3.0x")
+                )
         )
         .child(
-            div()
-                .flex_1()
-                .child(Slider::new(&slider_state))
-        )
-        .child(
-            div()
-                .text_sm()
-                .child("3.0x")
+            Checkbox::new("inertia-scroll")
+                .label("Smooth Scrolling")
+                .checked(current_inertia)
+                .on_click(move |checked, _window, cx| {
+                    inertia_scroll.update(cx, |s, _| *s = *checked);
+                })
         )
 }
 

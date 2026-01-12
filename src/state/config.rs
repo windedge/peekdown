@@ -70,6 +70,13 @@ pub struct AppearanceConfig {
     /// Whether to show FPS counter in the status bar
     #[serde(default)]
     pub show_fps: bool,
+    /// Whether to enable inertia (smooth) scrolling
+    #[serde(default = "default_inertia_scroll")]
+    pub inertia_scroll: bool,
+}
+
+fn default_inertia_scroll() -> bool {
+    true
 }
 
 fn default_scroll_speed() -> f32 {
@@ -123,6 +130,7 @@ impl Default for AppearanceConfig {
             mono_font_family: default_mono_font_family(),
             mono_font_size: default_mono_font_size(),
             show_fps: false,
+            inertia_scroll: default_inertia_scroll(),
         }
     }
 }
