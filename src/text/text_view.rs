@@ -199,7 +199,7 @@ impl Element for TextView {
                 cx,
                 move |_, cx| {
                     if default_format == TextViewFormat::Markdown {
-                        TextViewState::markdown(default_text.as_str(), cx)
+                        TextViewState::markdown(default_text.as_str(), None, cx)
                     } else {
                         TextViewState::html(default_text.as_str(), cx)
                     }

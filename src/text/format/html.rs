@@ -3,6 +3,7 @@ extern crate markup5ever_rcdom as rcdom;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::{DefiniteLength, SharedString, px, relative};
@@ -15,6 +16,33 @@ use super::super::node::{
     self, BlockNode, ImageNode, InlineNode, LinkMark, NodeContext, Paragraph, Table, TableRow,
     TextMark,
 };
+
+/// Resolve an image URL to a local file path if it's a relative path.
+///
+/// Returns (original_url, resolved_local_path).
+fn resolve_image_url(url: &str, doc_path: Option<&Path>) -> (String, Option<PathBuf>) {
+    // HTTP(S) URLs - keep as-is
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return (url.to_string(), None);
+    }
+
+    // Data URIs - keep as-is
+    if url.starts_with("data:") {
+        return (url.to_string(), None);
+    }
+
+    // Try to resolve relative path
+    if let Some(doc_path) = doc_path {
+        if let Some(doc_dir) = doc_path.parent() {
+            let abs_path = doc_dir.join(url);
+            if abs_path.exists() {
+                return (url.to_string(), Some(abs_path));
+            }
+        }
+    }
+
+    (url.to_string(), None)
+}
 
 const BLOCK_ELEMENTS: [&str; 35] = [
     "html",
@@ -172,7 +200,7 @@ fn attr_width_height(
     (width, height)
 }
 
-fn parse_table_row(table: &mut Table, node: &Rc<Node>) {
+fn parse_table_row(table: &mut Table, node: &Rc<Node>, doc_path: Option<&Path>) {
     let mut row = TableRow::default();
     let mut count = 0;
     for child in node.children.borrow().iter() {
@@ -187,7 +215,7 @@ fn parse_table_row(table: &mut Table, node: &Rc<Node>) {
                 }
 
                 count += 1;
-                parse_table_cell(&mut row, child, attrs);
+                parse_table_cell(&mut row, child, attrs, doc_path);
             }
             _ => {}
         }
@@ -202,10 +230,11 @@ fn parse_table_cell(
     row: &mut node::TableRow,
     node: &Rc<Node>,
     attrs: &RefCell<Vec<html5ever::Attribute>>,
+    doc_path: Option<&Path>,
 ) {
     let mut paragraph = Paragraph::default();
     for child in node.children.borrow().iter() {
-        parse_paragraph(&mut paragraph, child);
+        parse_paragraph(&mut paragraph, child, doc_path);
     }
     let width = attr_width_height(attrs).0;
     let table_cell = node::TableCell {
@@ -238,6 +267,7 @@ fn trim_text(text: &str) -> String {
 fn parse_paragraph(
     paragraph: &mut Paragraph,
     node: &Rc<Node>,
+    doc_path: Option<&Path>,
 ) -> (String, Vec<(Range<usize>, TextMark)>) {
     let mut text = String::new();
     let mut marks = vec![];
@@ -266,7 +296,7 @@ fn parse_paragraph(
             local_name!("em") | local_name!("i") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().italic()));
@@ -275,7 +305,7 @@ fn parse_paragraph(
             local_name!("strong") | local_name!("b") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().bold()));
@@ -284,7 +314,7 @@ fn parse_paragraph(
             local_name!("del") | local_name!("s") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().strikethrough()));
@@ -293,7 +323,7 @@ fn parse_paragraph(
             local_name!("code") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().code()));
@@ -302,7 +332,7 @@ fn parse_paragraph(
             local_name!("a") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
 
@@ -330,8 +360,10 @@ fn parse_paragraph(
                 let title = attr_value(attrs, local_name!("title"));
                 let (width, height) = attr_width_height(attrs);
 
+                let (url, local_path) = resolve_image_url(&src, doc_path);
                 paragraph.push_image(ImageNode {
-                    url: src.into(),
+                    url: url.into(),
+                    local_path,
                     link: None,
                     alt: alt.map(Into::into),
                     width,
@@ -343,7 +375,7 @@ fn parse_paragraph(
                 // All unknown tags to as text
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 paragraph.push(InlineNode::new(&text).marks(marks.clone()));
@@ -352,7 +384,7 @@ fn parse_paragraph(
         _ => {
             let mut child_paragraph = Paragraph::default();
             for child in node.children.borrow().iter() {
-                let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child);
+                let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
                 merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
             }
             paragraph.push(InlineNode::new(&text).marks(marks.clone()));
@@ -404,7 +436,7 @@ fn parse_node(
 
                 let mut paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    parse_paragraph(&mut paragraph, child);
+                    parse_paragraph(&mut paragraph, child, cx.document_path.as_deref());
                 }
 
                 let heading = BlockNode::Heading {
@@ -438,9 +470,11 @@ fn parse_node(
                 let title = attr_value(&attrs, local_name!("title"));
                 let (width, height) = attr_width_height(&attrs);
 
+                let (url, local_path) = resolve_image_url(&src, cx.document_path.as_deref());
                 let mut paragraph = Paragraph::default();
                 paragraph.push_image(ImageNode {
-                    url: src.into(),
+                    url: url.into(),
+                    local_path,
                     link: None,
                     title: title.map(Into::into),
                     alt: alt.map(Into::into),
@@ -503,6 +537,7 @@ fn parse_node(
                 consume_paragraph(&mut children, paragraph);
 
                 let mut table = Table::default();
+                let doc_path = cx.document_path.as_deref();
                 for child in node.children.borrow().iter() {
                     match child.data {
                         NodeData::Element { ref name, .. }
@@ -510,11 +545,11 @@ fn parse_node(
                                 || name.local == local_name!("thead") =>
                         {
                             for sub_child in child.children.borrow().iter() {
-                                parse_table_row(&mut table, &sub_child);
+                                parse_table_row(&mut table, &sub_child, doc_path);
                             }
                         }
                         _ => {
-                            parse_table_row(&mut table, &child);
+                            parse_table_row(&mut table, &child, doc_path);
                         }
                     }
                 }
@@ -568,7 +603,7 @@ fn parse_node(
                     }
                 } else {
                     // Others to as Inline
-                    parse_paragraph(paragraph, node);
+                    parse_paragraph(paragraph, node, cx.document_path.as_deref());
 
                     if paragraph.is_image() {
                         Some(BlockNode::Paragraph(paragraph.take()))

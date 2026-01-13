@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ops::Range,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -261,6 +262,8 @@ impl From<Span> for ElementId {
 #[derive(Debug, Default, Clone)]
 pub struct ImageNode {
     pub url: SharedUri,
+    /// Resolved local file path for relative image URLs
+    pub local_path: Option<PathBuf>,
     pub link: Option<LinkMark>,
     pub title: Option<SharedString>,
     pub alt: Option<SharedString>,
@@ -280,6 +283,7 @@ impl ImageNode {
 impl PartialEq for ImageNode {
     fn eq(&self, other: &Self) -> bool {
         self.url == other.url
+            && self.local_path == other.local_path
             && self.link == other.link
             && self.title == other.title
             && self.alt == other.alt
@@ -648,6 +652,8 @@ pub(crate) struct NodeContext {
     pub(crate) search_query: Option<SharedString>,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    /// The path of the source document, used for resolving relative image paths.
+    pub(crate) document_path: Option<PathBuf>,
 }
 
 impl NodeContext {
@@ -816,8 +822,14 @@ impl Paragraph {
                         .into_any_element(),
                     );
                 }
-                child_nodes.push(
+                // Use local path for file system images, otherwise use URL
+                let image_element = if let Some(path) = &image.local_path {
+                    img(path.clone())
+                } else {
                     img(image.url.clone())
+                };
+                child_nodes.push(
+                    image_element
                         .id(ix)
                         .object_fit(ObjectFit::Contain)
                         .max_w(relative(1.))

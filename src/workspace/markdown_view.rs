@@ -34,10 +34,11 @@ impl MarkdownView {
 
         // Create TextViewState once - content is parsed only at initialization
         let content = document.read(cx).content.clone();
+        let doc_path = document.read(cx).path.clone();
         let scroll_speed = config.read(cx).appearance.scroll_speed;
         let inertia_enabled = config.read(cx).appearance.inertia_scroll;
         let text_view_state = cx.new(|cx| {
-            TextViewState::markdown(content.as_ref(), cx)
+            TextViewState::markdown(content.as_ref(), Some(&doc_path), cx)
                 .scroll_speed(scroll_speed)
                 .inertia_enabled(inertia_enabled)
         });

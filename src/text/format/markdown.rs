@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use gpui::SharedString;
 use markdown::{
     ParseOptions,
@@ -13,6 +15,33 @@ use super::super::{
         Span, Table, TableRow, TextMark,
     },
 };
+
+/// Resolve an image URL to a local file path if it's a relative path.
+///
+/// Returns (original_url, resolved_local_path).
+fn resolve_image_url(url: &str, doc_path: Option<&Path>) -> (String, Option<PathBuf>) {
+    // HTTP(S) URLs - keep as-is
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return (url.to_string(), None);
+    }
+
+    // Data URIs - keep as-is
+    if url.starts_with("data:") {
+        return (url.to_string(), None);
+    }
+
+    // Try to resolve relative path
+    if let Some(doc_path) = doc_path {
+        if let Some(doc_dir) = doc_path.parent() {
+            let abs_path = doc_dir.join(url);
+            if abs_path.exists() {
+                return (url.to_string(), Some(abs_path));
+            }
+        }
+    }
+
+    (url.to_string(), None)
+}
 
 /// Parse Markdown into a tree of nodes.
 ///
@@ -138,8 +167,10 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
             paragraph.merge(child_paragraph);
         }
         Node::Image(raw) => {
+            let (url, local_path) = resolve_image_url(&raw.url, cx.document_path.as_deref());
             paragraph.push_image(ImageNode {
-                url: raw.url.clone().into(),
+                url: url.into(),
+                local_path,
                 title: raw.title.clone().map(|t| t.into()),
                 alt: Some(raw.alt.clone().into()),
                 ..Default::default()

@@ -91,6 +91,8 @@ pub struct TextViewState {
     text: SharedString,
     search_query: Option<SharedString>,
     parsed_error: Option<SharedString>,
+    /// Path to the source document, used for resolving relative image paths.
+    document_path: Option<std::path::PathBuf>,
     tx: smol::channel::Sender<UpdateOptions>,
     _parse_task: Task<()>,
     _receive_task: Task<()>,
@@ -98,17 +100,19 @@ pub struct TextViewState {
 
 impl TextViewState {
     /// Create a Markdown TextViewState.
-    pub fn markdown(text: &str, cx: &mut Context<Self>) -> Self {
-        Self::new(TextViewFormat::Markdown, text, cx)
+    ///
+    /// The `doc_path` parameter is used for resolving relative image paths.
+    pub fn markdown(text: &str, doc_path: Option<&std::path::Path>, cx: &mut Context<Self>) -> Self {
+        Self::new(TextViewFormat::Markdown, text, doc_path, cx)
     }
 
     /// Create a HTML TextViewState.
     pub fn html(text: &str, cx: &mut Context<Self>) -> Self {
-        Self::new(TextViewFormat::Html, text, cx)
+        Self::new(TextViewFormat::Html, text, None, cx)
     }
 
     /// Create a new TextViewState.
-    fn new(format: TextViewFormat, text: &str, cx: &mut Context<Self>) -> Self {
+    fn new(format: TextViewFormat, text: &str, doc_path: Option<&std::path::Path>, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
         let (tx, rx) = smol::channel::unbounded::<UpdateOptions>();
@@ -148,6 +152,7 @@ impl TextViewState {
             parsed_error: None,
             text: text.to_string().into(),
             search_query: None,
+            document_path: doc_path.map(|p| p.to_path_buf()),
             tx,
             _parse_task,
             _receive_task,
@@ -319,6 +324,7 @@ impl TextViewState {
             pending_text: text.to_string(),
             highlight_theme: cx.theme().highlight_theme.clone(),
             code_block_actions: code_block_actions.clone(),
+            document_path: self.document_path.clone(),
         };
 
         // Parse at first time by blocking.
@@ -586,6 +592,7 @@ impl UpdateFuture {
                 content: Default::default(),
                 highlight_theme: cx.theme().highlight_theme.clone(),
                 code_block_actions: None,
+                document_path: None,
             },
             timer: Timer::never(),
             rx: Box::pin(rx),
@@ -643,11 +650,13 @@ struct UpdateOptions {
     append: bool,
     highlight_theme: Arc<HighlightTheme>,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    document_path: Option<std::path::PathBuf>,
 }
 
 fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), SharedString> {
     let mut node_cx = NodeContext {
         code_block_actions: options.code_block_actions.clone(),
+        document_path: options.document_path.clone(),
         ..NodeContext::default()
     };
 
