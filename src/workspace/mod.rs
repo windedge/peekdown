@@ -4,6 +4,7 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::path::PathBuf;
 use std::time::Instant;
+use std::collections::{HashMap, HashSet};
 use crate::state::document::Document;
 use gpui_component::{ActiveTheme, Root, button::Button, button::ButtonVariants, Icon, IconName, Sizable};
 use crate::state::config::{AppConfig, ExplorerRootMode};
@@ -45,6 +46,17 @@ gpui::actions!([
 #[derive(Action, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[action(namespace = workspace, no_json)]
 pub struct SetExplorerRootMode(pub ExplorerRootMode);
+
+#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
+#[action(namespace = workspace, no_json)]
+pub struct RevealInExplorer {
+    pub path: PathBuf,
+    pub tab_index: usize,
+}
+
+#[derive(Action, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[action(namespace = workspace, no_json)]
+pub struct CloseTabAt(pub usize);
 
 pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<IpcMessage>>, config: Entity<AppConfig>) {
     cx.bind_keys(vec![
@@ -228,7 +240,10 @@ struct WorkspaceView {
     search_bar: Option<Entity<SearchBar>>,
     outline_width: f32,
     explorer_visible: bool,
-    explorer_view: Option<Entity<FileExplorerView>>,
+    /// Explorer instances per project root (preserves state when switching tabs)
+    explorer_views: HashMap<PathBuf, Entity<FileExplorerView>>,
+    /// Current active explorer root
+    current_explorer_root: Option<PathBuf>,
     explorer_width: f32,
     focus_handle: FocusHandle,
     tab_scroll_handle: ScrollHandle,
@@ -296,7 +311,8 @@ impl WorkspaceView {
             search_bar: None,
             outline_width,
             explorer_visible,
-            explorer_view: None,
+            explorer_views: HashMap::new(),
+            current_explorer_root: None,
             explorer_width,
             focus_handle: cx.focus_handle(),
             tab_scroll_handle: ScrollHandle::new(),
@@ -332,6 +348,7 @@ impl WorkspaceView {
 
                 if !loaded.is_empty() {
                      workspace.update(&mut cx, |workspace, cx| {
+                         let workspace_weak = cx.entity().downgrade();  // Get weak reference here
                          for (path, content) in loaded {
                              if let Some(index) = workspace.tabs.iter().position(|t| t.path == path) {
                                  workspace.active_tab_index = index;
@@ -344,7 +361,7 @@ impl WorkspaceView {
                                 .unwrap_or_else(|| "Untitled".to_string());
 
                              let doc = cx.new(|_cx| Document::new(content, path.clone()));
-                             let view = cx.new(|cx| MarkdownView::new(doc, config.clone(), cx));
+                             let view = cx.new(|cx| MarkdownView::new(doc, config.clone(), workspace_weak.clone(), cx));
 
                              // Observe the MarkdownView's text_view_state for changes
                              let text_view_state = view.read(cx).text_view_state().clone();
@@ -379,7 +396,8 @@ impl WorkspaceView {
         if self.tabs.is_empty() {
             self.active_tab_index = 0;
             self.outline_view = None;
-            self.explorer_view = None;
+            self.explorer_views.clear();
+            self.current_explorer_root = None;
         } else {
             if self.active_tab_index >= index && self.active_tab_index > 0 {
                 self.active_tab_index -= 1;
@@ -389,6 +407,7 @@ impl WorkspaceView {
             }
             self.update_outline(cx);
             self.update_explorer(cx);
+            self.cleanup_unused_explorers(cx);
         }
         if self.search_bar.is_some() {
             // Clear search bar without restoring focus (tab is being closed)
@@ -505,14 +524,171 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Reveal a file in the explorer sidebar
+    fn reveal_in_explorer(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Ensure explorer is visible
+        if !self.explorer_visible {
+            self.explorer_visible = true;
+            self.config.update(cx, |config, _| {
+                config.appearance.explorer_visible = true;
+                config.save();
+            });
+        }
+
+        // Calculate root based on the file path (NOT the current active tab)
+        let current_dir = match path.parent() {
+            Some(dir) => dir.to_path_buf(),
+            None => return,
+        };
+
+        let (root_mode, markers) = {
+            let cfg = self.config.read(cx);
+            (
+                cfg.appearance.explorer_root_mode,
+                cfg.appearance.project_root_markers.clone(),
+            )
+        };
+
+        let root = match root_mode {
+            ExplorerRootMode::CurrentDir => current_dir.clone(),
+            ExplorerRootMode::ProjectRoot => {
+                Self::find_project_root(&current_dir, &markers)
+                    .unwrap_or_else(|| current_dir.clone())
+            }
+        };
+
+        // Ensure we have an explorer for this root (create if needed)
+        if !self.explorer_views.contains_key(&root) {
+            // Need to create a new explorer for this root
+            let explorer_width = self.explorer_width;
+            let config = self.config.clone();
+            let workspace = cx.entity().downgrade();
+            let workspace_for_width = workspace.clone();
+            let workspace_for_click = workspace.clone();
+            let workspace_for_close = workspace.clone();
+            let workspace_for_root_mode = workspace.clone();
+            let root_for_expanded = root.clone();
+            let config_for_markers = config.clone();
+            let config_for_width = config.clone();
+            let config_for_expanded = config.clone();
+
+            let explorer_view = cx.new(|_| {
+                FileExplorerView::new()
+                    .on_width_change(move |width, cx| {
+                        if let Some(ws) = workspace_for_width.upgrade() {
+                            ws.update(cx, |ws, _| ws.explorer_width = width);
+                        }
+                        config_for_width.update(cx, |config, _| {
+                            config.appearance.explorer_width = width;
+                            config.save();
+                        });
+                    })
+                    .on_click(move |path, _window, cx| {
+                        if let Some(ws) = workspace_for_click.upgrade() {
+                            ws.update(cx, |ws, cx| {
+                                ws.open_file(path, cx);
+                            });
+                        }
+                    })
+                    .on_close(move |_window, cx| {
+                        if let Some(ws) = workspace_for_close.upgrade() {
+                            ws.update(cx, |ws, cx| {
+                                ws.toggle_explorer(cx);
+                            });
+                        }
+                    })
+                    .on_expanded_change(move |expanded, cx| {
+                        let relative: Vec<String> = expanded.iter()
+                            .filter_map(|p| p.strip_prefix(&root_for_expanded).ok())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect();
+                        config_for_expanded.update(cx, |config, _| {
+                            config.appearance.expanded_dirs = relative;
+                            config.save();
+                        });
+                    })
+                    .on_root_mode_change(move |mode, cx| {
+                        if let Some(ws) = workspace_for_root_mode.upgrade() {
+                            ws.update(cx, |ws, cx| {
+                                ws.set_explorer_root_mode(mode, cx);
+                            });
+                        }
+                    })
+                    .on_edit_markers(move |window, cx| {
+                        settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
+                    })
+            });
+
+            // Initialize with restored expanded_dirs from config
+            let restored_expanded = {
+                let cfg = self.config.read(cx);
+                let expanded_dirs: HashSet<PathBuf> = cfg.appearance.expanded_dirs.iter()
+                    .map(|rel| root.join(rel))
+                    .collect();
+                expanded_dirs
+            };
+
+            explorer_view.update(cx, |view, cx| {
+                // Set expanded dirs BEFORE setting root to avoid double refresh
+                *view.expanded_dirs_mut() = restored_expanded;
+                view.set_root(Some(root.clone()), cx);
+                view.set_width(explorer_width, cx);
+                view.set_root_mode(root_mode, cx);
+            });
+
+            self.explorer_views.insert(root.clone(), explorer_view);
+        }
+
+        // Switch to this explorer root
+        self.current_explorer_root = Some(root.clone());
+
+        // Expand all parent directories of the file
+        if let Some(explorer_view) = self.explorer_views.get(&root) {
+            explorer_view.update(cx, |view, cx| {
+                // Find all parent directories between root and file
+                let mut current = path.parent();
+                let mut dirs_to_expand = Vec::new();
+
+                while let Some(dir) = current {
+                    if dir.starts_with(&root) && dir != root {
+                        dirs_to_expand.push(dir.to_path_buf());
+                    }
+                    if dir == root || !dir.starts_with(&root) {
+                        break;
+                    }
+                    current = dir.parent();
+                }
+
+                // Batch expand: add all directories to expanded_dirs at once
+                let mut needs_refresh = false;
+                for dir in &dirs_to_expand {
+                    if view.expanded_dirs_mut().insert(dir.clone()) {
+                        needs_refresh = true;
+                    }
+                }
+
+                // Only refresh once after expanding all directories
+                if needs_refresh {
+                    view.refresh_entries(cx);
+                }
+
+                // Set the selected path
+                view.set_selected_path(Some(path.clone()), cx);
+            });
+        }
+
+        cx.notify();
+    }
+
     fn update_explorer(&mut self, cx: &mut Context<Self>) {
         if self.tabs.is_empty() {
-            self.explorer_view = None;
+            self.current_explorer_root = None;
             return;
         }
 
-        // Get current file's parent directory
+        // Get current file path and parent directory
         let tab = &self.tabs[self.active_tab_index];
+        let current_file = tab.path.clone();
         let current_dir = tab.path.parent().map(|p| p.to_path_buf());
         let Some(current_dir) = current_dir else { return };
 
@@ -533,15 +709,21 @@ impl WorkspaceView {
             }
         };
 
-        // Read expanded state from config
-        let expanded_dirs: std::collections::HashSet<std::path::PathBuf> = {
-            let cfg = self.config.read(cx);
-            cfg.appearance.expanded_dirs.iter()
-                .map(|s| root.join(s))
-                .collect()
-        };
-
         let explorer_width = self.explorer_width;
+
+        // Check if we already have an explorer for this root
+        if let Some(explorer_view) = self.explorer_views.get(&root) {
+            // Same root - just update selection and width
+            explorer_view.update(cx, |view, cx| {
+                view.set_selected_path(Some(current_file), cx);
+                view.set_width(explorer_width, cx);
+                view.set_root_mode(root_mode, cx);
+            });
+            self.current_explorer_root = Some(root);
+            return;
+        }
+
+        // Create new explorer view for this root
         let config = self.config.clone();
         let workspace = cx.entity().downgrade();
         let workspace_for_width = workspace.clone();
@@ -550,28 +732,10 @@ impl WorkspaceView {
         let workspace_for_root_mode = workspace.clone();
         let root_for_expanded = root.clone();
         let config_for_markers = config.clone();
-
-        if let Some(explorer_view) = &self.explorer_view {
-            explorer_view.update(cx, |view, cx| {
-                // Only refresh when root actually changes
-                if view.root_path() != Some(&root) {
-                    view.set_root(Some(root.clone()), cx);
-                }
-                // Only refresh when expanded_dirs actually changes
-                if view.expanded_dirs() != &expanded_dirs {
-                    view.set_expanded_dirs(expanded_dirs, cx);
-                }
-                view.set_width(explorer_width, cx);
-                view.set_root_mode(root_mode, cx);
-            });
-            return;
-        }
-
-        // Create new explorer view
         let config_for_width = config.clone();
         let config_for_expanded = config.clone();
 
-        self.explorer_view = Some(cx.new(|_| {
+        let explorer_view = cx.new(|_| {
             FileExplorerView::new()
                 .on_width_change(move |width, cx| {
                     if let Some(ws) = workspace_for_width.upgrade() {
@@ -616,16 +780,59 @@ impl WorkspaceView {
                 .on_edit_markers(move |window, cx| {
                     settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
                 })
-        }));
+        });
 
-        // Set root and expanded state
-        if let Some(explorer_view) = &self.explorer_view {
-            explorer_view.update(cx, |view, cx| {
-                view.set_root(Some(root), cx);
-                view.set_expanded_dirs(expanded_dirs, cx);
-                view.set_width(explorer_width, cx);
-                view.set_root_mode(root_mode, cx);
-            });
+        // Initialize the explorer
+        explorer_view.update(cx, |view, cx| {
+            view.set_root(Some(root.clone()), cx);
+            view.set_selected_path(Some(current_file), cx);
+            view.set_width(explorer_width, cx);
+            view.set_root_mode(root_mode, cx);
+        });
+
+        self.explorer_views.insert(root.clone(), explorer_view);
+        self.current_explorer_root = Some(root);
+    }
+
+    /// Get the current active explorer view (if any)
+    fn current_explorer_view(&self) -> Option<&Entity<FileExplorerView>> {
+        self.current_explorer_root.as_ref()
+            .and_then(|root| self.explorer_views.get(root))
+    }
+
+    /// Clean up explorer instances for roots that no longer have any tabs
+    fn cleanup_unused_explorers(&mut self, cx: &mut Context<Self>) {
+        // Read config to determine root mode
+        let (root_mode, markers) = {
+            let cfg = self.config.read(cx);
+            (
+                cfg.appearance.explorer_root_mode,
+                cfg.appearance.project_root_markers.clone(),
+            )
+        };
+
+        // Collect all roots that have at least one tab
+        let active_roots: std::collections::HashSet<PathBuf> = self.tabs.iter()
+            .filter_map(|tab| {
+                let current_dir = tab.path.parent()?;
+                match root_mode {
+                    ExplorerRootMode::CurrentDir => Some(current_dir.to_path_buf()),
+                    ExplorerRootMode::ProjectRoot => {
+                        Self::find_project_root(current_dir, &markers)
+                            .or_else(|| Some(current_dir.to_path_buf()))
+                    }
+                }
+            })
+            .collect();
+
+        // Remove explorers for roots that have no tabs
+        self.explorer_views.retain(|root, _| active_roots.contains(root));
+
+        // Clear current_explorer_root if it was removed
+        if let Some(ref current) = self.current_explorer_root {
+            if !self.explorer_views.contains_key(current) {
+                self.current_explorer_root = None;
+            }
         }
     }
 
@@ -936,7 +1143,7 @@ impl Render for WorkspaceView {
         };
 
         // Check if explorer is resizing
-        let is_explorer_resizing = if let Some(explorer_view) = &self.explorer_view {
+        let is_explorer_resizing = if let Some(explorer_view) = self.current_explorer_view() {
             explorer_view.read(cx).is_resizing()
         } else {
             false
@@ -953,7 +1160,7 @@ impl Render for WorkspaceView {
 
         // Use cached sidebars if visible
         let explorer_sidebar = if self.explorer_visible {
-            self.explorer_view.clone()
+            self.current_explorer_view().cloned()
         } else {
             None
         };
@@ -987,8 +1194,8 @@ impl Render for WorkspaceView {
         let search_bar = self.search_bar.clone();
 
         // Clone views for event handlers
-        let explorer_for_move = self.explorer_view.clone();
-        let explorer_for_up = self.explorer_view.clone();
+        let explorer_for_move = self.current_explorer_view().cloned();
+        let explorer_for_up = self.current_explorer_view().cloned();
         let outline_for_move = self.outline_view.clone();
         let outline_for_up = self.outline_view.clone();
 
@@ -1045,6 +1252,12 @@ impl Render for WorkspaceView {
             }))
             .on_action(cx.listener(|workspace, action: &SetExplorerRootMode, _window, cx| {
                 workspace.set_explorer_root_mode(action.0, cx);
+            }))
+            .on_action(cx.listener(|workspace, action: &RevealInExplorer, _window, cx| {
+                workspace.reveal_in_explorer(action.path.clone(), cx);
+            }))
+            .on_action(cx.listener(|workspace, action: &CloseTabAt, _window, cx| {
+                workspace.close_tab(action.0, cx);
             }))
             .on_drop(cx.listener(|workspace, event: &ExternalPaths, _, cx| {
                 workspace.open_files(event.paths().to_vec(), cx);

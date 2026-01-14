@@ -103,6 +103,8 @@ pub struct FileExplorerView {
     is_resizing: bool,
     resize_start_x: f32,
     resize_start_width: f32,
+    /// Currently selected file path (highlighted in the tree)
+    selected_path: Option<PathBuf>,
     on_click: Option<OnFileClick>,
     on_width_change: Option<OnWidthChange>,
     on_close: Option<OnExplorerClose>,
@@ -124,6 +126,7 @@ impl FileExplorerView {
             is_resizing: false,
             resize_start_x: 0.0,
             resize_start_width: DEFAULT_WIDTH,
+            selected_path: None,
             on_click: None,
             on_width_change: None,
             on_close: None,
@@ -194,6 +197,17 @@ impl FileExplorerView {
         &self.expanded_dirs
     }
 
+    /// Get mutable reference to expanded directories (for batch operations).
+    pub fn expanded_dirs_mut(&mut self) -> &mut HashSet<PathBuf> {
+        &mut self.expanded_dirs
+    }
+
+    /// Set selected file path (for highlighting).
+    pub fn set_selected_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.selected_path = path;
+        cx.notify();
+    }
+
     /// Set root directory and scan for files.
     pub fn set_root(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
         self.root_path = path;
@@ -257,6 +271,19 @@ impl FileExplorerView {
         }
 
         self.refresh_entries(cx);
+    }
+
+    /// Expand a directory (without toggling).
+    pub fn expand_directory(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !self.expanded_dirs.contains(&path) {
+            self.expanded_dirs.insert(path);
+
+            if let Some(on_expanded_change) = &self.on_expanded_change {
+                on_expanded_change(self.expanded_dirs.clone(), cx);
+            }
+
+            self.refresh_entries(cx);
+        }
     }
 
     /// Check if currently resizing.
@@ -444,6 +471,7 @@ impl Render for FileExplorerView {
                                             EntryKind::Directory { expanded, has_children } => (*expanded, *has_children),
                                             EntryKind::File => (false, false),
                                         };
+                                        let is_selected = self.selected_path.as_ref() == Some(&entry.path);
 
                                         div()
                                             .id(SharedString::from(entry.path.to_string_lossy().to_string()))
@@ -457,7 +485,8 @@ impl Render for FileExplorerView {
                                             .text_ellipsis()
                                             .whitespace_nowrap()
                                             .text_color(theme.foreground)
-                                            .hover(|s| s.bg(theme.accent))
+                                            .when(is_selected, |this| this.bg(theme.list_active))
+                                            .when(!is_selected, |this| this.hover(|s| s.bg(theme.accent)))
                                             .flex()
                                             .flex_row()
                                             .items_center()
@@ -472,7 +501,9 @@ impl Render for FileExplorerView {
                                                 }
                                             }))
                                             .child(
-                                                div()
+                                                h_flex()
+                                                    .gap_1()
+                                                    .items_center()
                                                     .when(is_dir && has_children, |this| {
                                                         this.child(
                                                             Icon::new(if is_expanded {
@@ -483,16 +514,27 @@ impl Render for FileExplorerView {
                                                             .text_color(theme.muted_foreground)
                                                             .xsmall()
                                                         )
+                                                        .child(
+                                                            Icon::new(if is_expanded {
+                                                                IconName::FolderOpen
+                                                            } else {
+                                                                IconName::FolderClosed
+                                                            })
+                                                            .text_color(theme.muted_foreground)
+                                                            .small()
+                                                        )
                                                     })
                                                     .when(is_dir && !has_children, |this| {
-                                                        this.child(
-                                                            Icon::new(IconName::ChevronRight)
+                                                        this.child(div().w(px(16.0)))
+                                                        .child(
+                                                            Icon::new(IconName::FolderClosed)
                                                                 .text_color(theme.muted_foreground)
-                                                                .xsmall()
+                                                                .small()
                                                         )
                                                     })
                                                     .when(!is_dir, |this| {
-                                                        this.child(
+                                                        this.child(div().w(px(16.0)))
+                                                        .child(
                                                             Icon::new(IconName::File)
                                                                 .text_color(theme.muted_foreground)
                                                                 .xsmall()

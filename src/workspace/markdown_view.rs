@@ -10,17 +10,23 @@ use gpui_component::{ActiveTheme, menu::ContextMenuExt};
 use crate::state::document::Document;
 use crate::state::config::{AppConfig, LayoutMode};
 use crate::services::shell;
-use super::{OpenSearch, RefreshDocument, SelectAll};
+use super::{OpenSearch, RefreshDocument, SelectAll, WorkspaceView};
 
 pub struct MarkdownView {
     #[allow(dead_code)] // Reserved for future file reload functionality
     document: Entity<Document>,
     config: Entity<AppConfig>,
     text_view_state: Entity<TextViewState>,
+    workspace: WeakEntity<WorkspaceView>,  // Add workspace reference
 }
 
 impl MarkdownView {
-    pub fn new(document: Entity<Document>, config: Entity<AppConfig>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        document: Entity<Document>,
+        config: Entity<AppConfig>,
+        workspace: WeakEntity<WorkspaceView>,  // Add workspace parameter
+        cx: &mut Context<Self>,
+    ) -> Self {
         // Observe config changes to re-render when layout mode changes
         cx.observe(&config, |this, _, cx| {
             // Update scroll settings in TextViewState when config changes
@@ -47,6 +53,7 @@ impl MarkdownView {
             document,
             config,
             text_view_state,
+            workspace,  // Store workspace reference
         }
     }
 
@@ -173,10 +180,13 @@ impl Render for MarkdownView {
             )
             .context_menu({
                 let file_path = file_path.clone();
-                move |menu, _window, cx| {
+                let workspace_for_reveal = self.workspace.clone();
+                move |menu, _window, _cx| {
+                    let path_for_reveal = file_path.clone();
                     let path_for_explorer = file_path.clone();
                     let path_for_copy = file_path.clone();
                     let text_state_for_copy = text_state_for_menu.clone();
+                    let ws = workspace_for_reveal.clone();
 
                     menu.item(
                             gpui_component::menu::PopupMenuItem::new("Copy")
@@ -195,7 +205,17 @@ impl Render for MarkdownView {
                         .menu("Refresh", Box::new(RefreshDocument))
                         .separator()
                         .item(
-                            gpui_component::menu::PopupMenuItem::new("Open in Explorer")
+                            gpui_component::menu::PopupMenuItem::new("Reveal in Sidebar")
+                                .on_click(move |_, _window, cx| {
+                                    if let Some(workspace) = ws.upgrade() {
+                                        workspace.update(cx, |ws, cx| {
+                                            ws.reveal_in_explorer(path_for_reveal.clone(), cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .item(
+                            gpui_component::menu::PopupMenuItem::new("Open in File Manager")
                                 .on_click(move |_, _window, _cx| {
                                     shell::open_in_explorer(&path_for_explorer);
                                 }),

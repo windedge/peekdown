@@ -1,16 +1,17 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use super::{WorkspaceView, settings_dialog};
-use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable, tooltip::Tooltip};
+use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable, tooltip::Tooltip, menu::{ContextMenuExt, PopupMenuItem}};
 
 pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let config = workspace.config.clone();
     let has_tabs = !workspace.tabs.is_empty();
     let tab_scroll_handle = workspace.tab_scroll_handle.clone();
+    let workspace_entity = cx.entity().downgrade();  // Get weak reference to workspace
 
     // Tab bar design:
-    // - No bottom border line on the header
+    // - No bottom border line on header
     // - Active tab has same background as content area (seamless)
     // - Inactive tabs have distinct background for separation
     // - Fixed height prevents layout shifts when outline toggles
@@ -34,6 +35,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                     let is_active = ix == workspace.active_tab_index;
                     let is_last = ix == workspace.tabs.len() - 1;
                     let tab_path = tab.path.display().to_string();
+                    let tab_path_for_reveal = tab.path.clone();
 
                     div()
                         .id(("tab", ix))
@@ -64,6 +66,38 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .on_click(cx.listener(move |workspace, _, _window, cx| {
                             workspace.activate_tab(ix, cx);
                         }))
+                        .context_menu({
+                            let tab_path = tab_path_for_reveal.clone();
+                            let tab_index = ix;
+                            let ws_for_reveal = workspace_entity.clone();
+                            let ws_for_close = workspace_entity.clone();
+                            move |menu, _window, _cx| {
+                                let path_for_reveal = tab_path.clone();
+                                let ws_reveal = ws_for_reveal.clone();
+                                let ws_close = ws_for_close.clone();
+                                menu.item(
+                                    PopupMenuItem::new("Reveal in Sidebar")
+                                        .on_click(move |_, _window, cx| {
+                                            if let Some(ws) = ws_reveal.upgrade() {
+                                                ws.update(cx, |workspace, cx| {
+                                                    workspace.reveal_in_explorer(path_for_reveal.clone(), cx);
+                                                });
+                                            }
+                                        })
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Close Tab")
+                                        .on_click(move |_, _window, cx| {
+                                            if let Some(ws) = ws_close.upgrade() {
+                                                ws.update(cx, |workspace, cx| {
+                                                    workspace.close_tab(tab_index, cx);
+                                                });
+                                            }
+                                        })
+                                )
+                            }
+                        })
                         .child(
                             // Use relative positioning with two layers to prevent width jumping
                             // when font weight changes between active/inactive states
