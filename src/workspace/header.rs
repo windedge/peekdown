@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use super::{WorkspaceView, settings_dialog};
-use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable};
+use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable, tooltip::Tooltip};
 
 pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
@@ -33,6 +33,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;
                     let is_last = ix == workspace.tabs.len() - 1;
+                    let tab_path = tab.path.display().to_string();
 
                     div()
                         .id(("tab", ix))
@@ -43,6 +44,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .gap_2()
                         .text_sm()
                         .cursor_pointer()
+                        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tab_path.clone())).into())
                         .when(is_active, |this| {
                             this
                                 .bg(theme.background)

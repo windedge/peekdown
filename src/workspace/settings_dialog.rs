@@ -2,15 +2,16 @@
 
 use gpui::*;
 use gpui_component::{
-    StyledExt,
+    StyledExt, Sizable,
     h_flex, v_flex,
     checkbox::Checkbox,
     radio::Radio,
     slider::{Slider, SliderState},
     select::{Select, SelectState, SearchableVec},
+    input::{Input, InputState, InputEvent},
     WindowExt,
 };
-use crate::state::config::{AppConfig, AppThemeMode, LayoutMode};
+use crate::state::config::{AppConfig, AppThemeMode, LayoutMode, ExplorerRootMode};
 
 /// Pinned common content fonts (displayed at top of list)
 const PINNED_CONTENT_FONTS: &[&str] = &[
@@ -95,6 +96,8 @@ struct SettingsContent {
     selected_layout: Entity<LayoutMode>,
     slider_state: Entity<SliderState>,
     inertia_scroll: Entity<bool>,
+    explorer_root_mode: Entity<ExplorerRootMode>,
+    project_root_markers: Entity<InputState>,
     // Font settings
     font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
     font_size_slider: Entity<SliderState>,
@@ -108,6 +111,8 @@ impl SettingsContent {
         selected_layout: Entity<LayoutMode>,
         slider_state: Entity<SliderState>,
         inertia_scroll: Entity<bool>,
+        explorer_root_mode: Entity<ExplorerRootMode>,
+        project_root_markers: Entity<InputState>,
         font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
         font_size_slider: Entity<SliderState>,
         mono_font_family_state: Entity<SelectState<SearchableVec<FontItem>>>,
@@ -118,12 +123,18 @@ impl SettingsContent {
         cx.observe(&selected_theme, |_, _, cx| cx.notify()).detach();
         cx.observe(&selected_layout, |_, _, cx| cx.notify()).detach();
         cx.observe(&inertia_scroll, |_, _, cx| cx.notify()).detach();
+        cx.observe(&explorer_root_mode, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&project_root_markers, |_, _, _: &InputEvent, cx| {
+            cx.notify();
+        }).detach();
 
         Self {
             selected_theme,
             selected_layout,
             slider_state,
             inertia_scroll,
+            explorer_root_mode,
+            project_root_markers,
             font_family_state,
             font_size_slider,
             mono_font_family_state,
@@ -138,6 +149,7 @@ impl Render for SettingsContent {
         let current_theme = *self.selected_theme.read(cx);
         let current_layout = *self.selected_layout.read(cx);
         let current_inertia = *self.inertia_scroll.read(cx);
+        let current_root_mode = *self.explorer_root_mode.read(cx);
 
         v_flex()
             .gap_4()
@@ -145,6 +157,15 @@ impl Render for SettingsContent {
             .child(settings_section("Theme", theme_options(self.selected_theme.clone(), current_theme)))
             // Layout section
             .child(settings_section("Layout", layout_options(self.selected_layout.clone(), current_layout)))
+            // Explorer root section
+            .child(settings_section(
+                "Explorer Root",
+                explorer_root_options(self.explorer_root_mode.clone(), current_root_mode),
+            ))
+            .child(settings_section(
+                "Project Root Markers",
+                project_root_markers_input(self.project_root_markers.clone()),
+            ))
             // Scroll speed section
             .child(settings_section(
                 "Scroll Speed",
@@ -177,6 +198,8 @@ pub fn open_settings_dialog(
     let current_font_size = config.read(cx).appearance.font_size;
     let current_mono_font_family = config.read(cx).appearance.mono_font_family.clone();
     let current_mono_font_size = config.read(cx).appearance.mono_font_size;
+    let current_root_mode = config.read(cx).appearance.explorer_root_mode;
+    let current_markers = config.read(cx).appearance.project_root_markers.join(", ");
 
     // Get system font list
     let all_fonts = cx.text_system().all_font_names();
@@ -241,10 +264,17 @@ pub fn open_settings_dialog(
             .default_value(current_mono_font_size)
     });
 
+    let project_root_markers = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(".git, Cargo.toml, package.json, pyproject.toml")
+            .default_value(current_markers)
+    });
+
     // Track selected values
     let selected_theme = cx.new(|_| current_theme);
     let selected_layout = cx.new(|_| current_layout);
     let inertia_scroll = cx.new(|_| current_inertia_scroll);
+    let explorer_root_mode = cx.new(|_| current_root_mode);
 
     // Create content view for reactive updates
     let content = cx.new(|cx| SettingsContent::new(
@@ -252,6 +282,8 @@ pub fn open_settings_dialog(
         selected_layout.clone(),
         slider_state.clone(),
         inertia_scroll.clone(),
+        explorer_root_mode.clone(),
+        project_root_markers.clone(),
         font_family_state.clone(),
         font_size_slider.clone(),
         mono_font_family_state.clone(),
@@ -269,6 +301,8 @@ pub fn open_settings_dialog(
         let font_size_for_save = font_size_slider.clone();
         let mono_font_family_for_save = mono_font_family_state.clone();
         let mono_font_size_for_save = mono_font_size_slider.clone();
+        let root_mode_for_save = explorer_root_mode.clone();
+        let markers_for_save = project_root_markers.clone();
 
         dialog
             .title("Settings")
@@ -293,6 +327,14 @@ pub fn open_settings_dialog(
                     .cloned()
                     .unwrap_or_default();
                 let new_mono_font_size = mono_font_size_for_save.read(cx).value().start();
+                let new_root_mode = *root_mode_for_save.read(cx);
+                let new_markers_raw = markers_for_save.read(cx).value().to_string();
+                let new_markers: Vec<String> = new_markers_raw
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
 
                 config_for_save.update(cx, |config, cx| {
                     config.appearance.scroll_speed = new_speed;
@@ -303,6 +345,8 @@ pub fn open_settings_dialog(
                     config.appearance.font_size = new_font_size;
                     config.appearance.mono_font_family = new_mono_font_family;
                     config.appearance.mono_font_size = new_mono_font_size;
+                    config.appearance.explorer_root_mode = new_root_mode;
+                    config.appearance.project_root_markers = new_markers;
 
                     // Apply font settings immediately
                     config.appearance.apply_font_settings(cx);
@@ -397,6 +441,46 @@ fn layout_options(
                 .on_click(move |_, _window, cx| {
                     selected2.update(cx, |s, _| *s = LayoutMode::FullWidth);
                 })
+        )
+}
+
+fn explorer_root_options(
+    selected: Entity<ExplorerRootMode>,
+    current: ExplorerRootMode,
+) -> impl IntoElement {
+    let selected1 = selected.clone();
+    let selected2 = selected.clone();
+
+    h_flex()
+        .gap_4()
+        .child(
+            Radio::new("explorer-root-current")
+                .label("Current Directory")
+                .checked(current == ExplorerRootMode::CurrentDir)
+                .on_click(move |_, _window, cx| {
+                    selected1.update(cx, |s, _| *s = ExplorerRootMode::CurrentDir);
+                })
+        )
+        .child(
+            Radio::new("explorer-root-project")
+                .label("Project Directory")
+                .checked(current == ExplorerRootMode::ProjectRoot)
+                .on_click(move |_, _window, cx| {
+                    selected2.update(cx, |s, _| *s = ExplorerRootMode::ProjectRoot);
+                })
+        )
+}
+
+fn project_root_markers_input(
+    input_state: Entity<InputState>,
+) -> impl IntoElement {
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            Input::new(&input_state)
+                .small()
+                .w(px(360.))
         )
 }
 

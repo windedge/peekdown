@@ -24,6 +24,15 @@ pub enum LayoutMode {
     FullWidth,
 }
 
+/// Explorer root mode for file explorer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerRootMode {
+    #[default]
+    CurrentDir,
+    ProjectRoot,
+}
+
 impl AppThemeMode {
     pub fn apply(&self, window: Option<&mut Window>, cx: &mut App) {
         match self {
@@ -73,6 +82,21 @@ pub struct AppearanceConfig {
     /// Whether to enable inertia (smooth) scrolling
     #[serde(default = "default_inertia_scroll")]
     pub inertia_scroll: bool,
+    /// Whether the explorer sidebar is visible
+    #[serde(default = "default_explorer_visible")]
+    pub explorer_visible: bool,
+    /// Width of the explorer sidebar in pixels
+    #[serde(default = "default_explorer_width")]
+    pub explorer_width: f32,
+    /// Explorer root mode (current dir or project root)
+    #[serde(default)]
+    pub explorer_root_mode: ExplorerRootMode,
+    /// Project root markers used when explorer_root_mode is project_root
+    #[serde(default = "default_project_root_markers")]
+    pub project_root_markers: Vec<String>,
+    /// List of expanded directory paths
+    #[serde(default)]
+    pub expanded_dirs: Vec<String>,
 }
 
 fn default_inertia_scroll() -> bool {
@@ -115,6 +139,29 @@ fn default_mono_font_size() -> f32 {
     13.0
 }
 
+fn default_explorer_visible() -> bool {
+    false
+}
+
+fn default_explorer_width() -> f32 {
+    200.0
+}
+
+fn default_project_root_markers() -> Vec<String> {
+    // Top-down build/project markers (find outermost)
+    // VCS markers are hardcoded in find_project_root()
+    vec![
+        "Cargo.toml".to_string(),
+        "package.json".to_string(),
+        "pyproject.toml".to_string(),
+        "go.mod".to_string(),
+        "pom.xml".to_string(),
+        "build.gradle".to_string(),
+        "build.gradle.kts".to_string(),
+        "CMakeLists.txt".to_string(),
+    ]
+}
+
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
@@ -131,6 +178,11 @@ impl Default for AppearanceConfig {
             mono_font_size: default_mono_font_size(),
             show_fps: false,
             inertia_scroll: default_inertia_scroll(),
+            explorer_visible: default_explorer_visible(),
+            explorer_width: default_explorer_width(),
+            explorer_root_mode: ExplorerRootMode::default(),
+            project_root_markers: default_project_root_markers(),
+            expanded_dirs: Vec::new(),
         }
     }
 }

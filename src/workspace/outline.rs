@@ -97,7 +97,7 @@ impl OutlineView {
     /// Handle mouse move during resize (called from workspace)
     pub fn handle_resize_move(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
         if self.is_resizing {
-            let delta = mouse_x - self.resize_start_x;
+            let delta = self.resize_start_x - mouse_x;
             let new_width = (self.resize_start_width + delta).clamp(MIN_WIDTH, MAX_WIDTH);
             self.width = new_width;
             if let Some(on_width_change) = &self.on_width_change {
@@ -126,6 +126,23 @@ impl Render for OutlineView {
             .flex_row()
             .flex_shrink_0()
             .h_full()
+            .child(
+                // Resize handle
+                div()
+                    .id("outline-resize-handle")
+                    .w(px(RESIZE_HANDLE_WIDTH))
+                    .h_full()
+                    .cursor_col_resize()
+                    .bg(theme.border)
+                    .hover(|s| s.bg(theme.primary))
+                    .when(is_resizing, |this| this.bg(theme.primary))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        this.is_resizing = true;
+                        this.resize_start_x = f32::from(event.position.x);
+                        this.resize_start_width = this.width;
+                        cx.notify();
+                    }))
+            )
             .child(
                 // Main outline content
                 v_flex()
@@ -213,23 +230,6 @@ impl Render for OutlineView {
                                     .overflow_y_scrollbar()
                             )
                     )
-            )
-            .child(
-                // Resize handle
-                div()
-                    .id("outline-resize-handle")
-                    .w(px(RESIZE_HANDLE_WIDTH))
-                    .h_full()
-                    .cursor_col_resize()
-                    .bg(theme.border)
-                    .hover(|s| s.bg(theme.primary))
-                    .when(is_resizing, |this| this.bg(theme.primary))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.is_resizing = true;
-                        this.resize_start_x = f32::from(event.position.x);
-                        this.resize_start_width = this.width;
-                        cx.notify();
-                    }))
             )
     }
 }
