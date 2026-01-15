@@ -25,6 +25,20 @@ use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 use serde::Deserialize;
 
+#[cfg(windows)]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowTextW, GetWindowTextLengthW, GetForegroundWindow,
+    GetWindowThreadProcessId, SetForegroundWindow, ShowWindow, IsIconic, SW_RESTORE,
+};
+#[cfg(windows)]
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_MENU,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::HWND;
+
 gpui::actions!([
     OpenFileDialog,
     OpenSearch,
@@ -164,11 +178,18 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
                     let mut cx = cx.clone();
                     async move {
                         while let Ok(msg) = rx.recv().await {
+                            tracing::info!("Received IPC message: {:?}", msg);
                             let mut cx_clone = cx.clone();
                             workspace_weak.update(&mut cx_clone, |workspace, cx| {
                                 match msg {
                                     IpcMessage::OpenFiles(paths) => workspace.open_files(paths, cx),
                                     IpcMessage::FocusWindow => {},
+                                }
+                                // Bring window to foreground on Windows
+                                #[cfg(windows)]
+                                {
+                                    tracing::info!("Attempting to bring window to foreground");
+                                    bring_window_to_foreground();
                                 }
                                 cx.activate(true);
                             }).ok();
@@ -1388,5 +1409,89 @@ impl Render for WorkspaceView {
             )
             // Render dialogs on top
             .children(dialog_layer)
+    }
+}
+
+/// Bring the Peekdown window to foreground on Windows.
+/// This must be called from the target process (the one that owns the window).
+#[cfg(windows)]
+fn bring_window_to_foreground() {
+    unsafe {
+        // Find window by enumerating all windows and checking title suffix
+        let hwnd = find_peekdown_window();
+
+        if hwnd.is_null() {
+            tracing::warn!("Could not find Peekdown window");
+            return;
+        }
+
+        tracing::info!("Found Peekdown window: {:?}", hwnd);
+
+        // Restore if minimized
+        if IsIconic(hwnd) != 0 {
+            tracing::info!("Window is minimized, restoring");
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+
+        // Get thread IDs
+        let foreground_hwnd = GetForegroundWindow();
+        let foreground_thread = GetWindowThreadProcessId(foreground_hwnd, std::ptr::null_mut());
+        let current_thread = GetCurrentThreadId();
+
+        tracing::info!("Foreground thread: {}, Current thread: {}", foreground_thread, current_thread);
+
+        // Attach to foreground thread to gain foreground permission
+        if foreground_thread != current_thread {
+            AttachThreadInput(current_thread, foreground_thread, 1);
+        }
+
+        // Simulate Alt key press to bypass Windows foreground restrictions
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+
+        // Now set foreground window
+        let result = SetForegroundWindow(hwnd);
+        tracing::info!("SetForegroundWindow result: {}", result);
+
+        // Detach from foreground thread
+        if foreground_thread != current_thread {
+            AttachThreadInput(current_thread, foreground_thread, 0);
+        }
+    }
+}
+
+/// Find the Peekdown window by enumerating windows and checking title.
+/// Window title can be "Peekdown" or "{filename} - Peekdown".
+#[cfg(windows)]
+fn find_peekdown_window() -> HWND {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    static FOUND_HWND: AtomicIsize = AtomicIsize::new(0);
+    FOUND_HWND.store(0, Ordering::SeqCst);
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, _: isize) -> i32 {
+        unsafe {
+            let len = GetWindowTextLengthW(hwnd);
+            if len == 0 {
+                return 1; // Continue enumeration
+            }
+
+            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
+            GetWindowTextW(hwnd, buffer.as_mut_ptr(), len + 1);
+
+            // Convert to string and check if it ends with "Peekdown" or equals "Peekdown"
+            let title = String::from_utf16_lossy(&buffer[..len as usize]);
+            if title == "Peekdown" || title.ends_with(" - Peekdown") {
+                FOUND_HWND.store(hwnd as isize, Ordering::SeqCst);
+                return 0; // Stop enumeration
+            }
+
+            1 // Continue enumeration
+        }
+    }
+
+    unsafe {
+        EnumWindows(Some(enum_callback), 0);
+        FOUND_HWND.load(Ordering::SeqCst) as HWND
     }
 }

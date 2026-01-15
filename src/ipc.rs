@@ -12,15 +12,11 @@ use std::thread;
 
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, ASFW_ANY, FindWindowW, SetForegroundWindow, ShowWindow, IsIconic, SW_RESTORE,
-    GetWindowThreadProcessId
+    AllowSetForegroundWindow, EnumWindows, GetWindowTextW, GetWindowTextLengthW,
+    GetWindowThreadProcessId,
 };
 #[cfg(windows)]
-use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-#[cfg(windows)]
-use std::ffi::OsStr;
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::Foundation::HWND;
 
 const PIPE_NAME: &str = "peekdown.pipe";
 
@@ -31,36 +27,17 @@ pub enum IpcMessage {
 }
 
 pub fn send_message(message: IpcMessage) -> anyhow::Result<()> {
+    // Authorize the target process to set foreground window
+    // The actual SetForegroundWindow call must happen in the target process
     #[cfg(windows)]
     unsafe {
-        let title: Vec<u16> = OsStr::new("Peekdown").encode_wide().chain(Some(0)).collect();
-        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-        
-        if hwnd != std::ptr::null_mut() {
-            let target_thread_id = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
-            let current_thread_id = GetCurrentThreadId();
+        let hwnd = find_peekdown_window();
 
-            // 1. Allow any process to take foreground
-            AllowSetForegroundWindow(ASFW_ANY);
-
-            // 2. Attach input processing mechanism
-            let attached = if target_thread_id != current_thread_id {
-                AttachThreadInput(current_thread_id, target_thread_id, 1) != 0
-            } else {
-                false
-            };
-
-            // 3. Restore if iconic
-            if IsIconic(hwnd) != 0 {
-                ShowWindow(hwnd, SW_RESTORE);
-            }
-
-            // 4. Force foreground
-            SetForegroundWindow(hwnd);
-
-            // 5. Detach
-            if attached {
-                AttachThreadInput(current_thread_id, target_thread_id, 0);
+        if !hwnd.is_null() {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != 0 {
+                AllowSetForegroundWindow(pid);
             }
         }
     }
@@ -113,7 +90,7 @@ pub fn spawn_ipc_server(tx: Sender<IpcMessage>) -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             eprintln!("IPC deserialize error: {}", e);
-                            break; 
+                            break;
                         }
                     }
                 }
@@ -122,4 +99,40 @@ pub fn spawn_ipc_server(tx: Sender<IpcMessage>) -> anyhow::Result<()> {
     });
 
     Ok(())
+}
+
+/// Find the Peekdown window by enumerating windows and checking title.
+/// Window title can be "Peekdown" or "{filename} - Peekdown".
+#[cfg(windows)]
+fn find_peekdown_window() -> HWND {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    static FOUND_HWND: AtomicIsize = AtomicIsize::new(0);
+    FOUND_HWND.store(0, Ordering::SeqCst);
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, _: isize) -> i32 {
+        unsafe {
+            let len = GetWindowTextLengthW(hwnd);
+            if len == 0 {
+                return 1; // Continue enumeration
+            }
+
+            let mut buffer: Vec<u16> = vec![0; (len + 1) as usize];
+            GetWindowTextW(hwnd, buffer.as_mut_ptr(), len + 1);
+
+            // Convert to string and check if it ends with "Peekdown" or equals "Peekdown"
+            let title = String::from_utf16_lossy(&buffer[..len as usize]);
+            if title == "Peekdown" || title.ends_with(" - Peekdown") {
+                FOUND_HWND.store(hwnd as isize, Ordering::SeqCst);
+                return 0; // Stop enumeration
+            }
+
+            1 // Continue enumeration
+        }
+    }
+
+    unsafe {
+        EnumWindows(Some(enum_callback), 0);
+        FOUND_HWND.load(Ordering::SeqCst) as HWND
+    }
 }
