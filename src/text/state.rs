@@ -544,7 +544,9 @@ impl Render for TextViewState {
 
                         // Process inertia scroll animation
                         if state.inertia_scroll.is_animating() {
-                            if let Some(distance) = state.inertia_scroll.update(Instant::now()) {
+                            if let Some(distance) =
+                                state.inertia_scroll.update(Instant::now(), state.scroll_speed)
+                            {
                                 // Apply scroll distance (negative because positive delta = scroll up)
                                 list_state.scroll_by(px(-distance));
 
@@ -822,7 +824,12 @@ impl InertiaScrollState {
     /// Maximum velocity cap to prevent excessive scrolling (px/s)
     const MAX_VELOCITY: f32 = 8000.0;
     /// Velocity boost per scroll wheel delta
-    const VELOCITY_MULTIPLIER: f32 = 15.0;
+    const VELOCITY_MULTIPLIER: f32 = 8.0;
+    /// Velocity threshold above which exponential (smooth) decay is used (px/s)
+    /// Only very fast scrolling triggers smooth deceleration
+    const SMOOTH_THRESHOLD: f32 = 8000.0;
+    /// Linear deceleration rate (px/s²) for crisp stopping
+    const LINEAR_DECEL: f32 = 8000.0;
 
     /// Add impulse from scroll wheel event
     pub fn add_impulse(&mut self, delta_px: f32, scroll_speed: f32) {
@@ -843,7 +850,7 @@ impl InertiaScrollState {
 
     /// Update animation state, returns distance to scroll this frame.
     /// Returns None if animation should stop.
-    pub fn update(&mut self, now: Instant) -> Option<f32> {
+    pub fn update(&mut self, now: Instant, scroll_speed: f32) -> Option<f32> {
         if !self.is_animating {
             return None;
         }
@@ -860,8 +867,21 @@ impl InertiaScrollState {
         // Calculate distance to scroll this frame
         let distance = self.velocity * dt;
 
-        // Apply friction (exponential decay normalized to 60fps)
-        self.velocity *= (1.0 - Self::FRICTION).powf(dt * 60.0);
+        // Apply decay based on velocity magnitude
+        // Threshold scales with scroll_speed for consistent feel
+        let threshold = Self::SMOOTH_THRESHOLD * scroll_speed;
+        if self.velocity.abs() > threshold {
+            // High speed: exponential decay for smooth deceleration
+            self.velocity *= (1.0 - Self::FRICTION).powf(dt * 60.0);
+        } else {
+            // Normal/low speed: linear decay for crisp stopping
+            let decel = Self::LINEAR_DECEL * dt;
+            if self.velocity.abs() <= decel {
+                self.velocity = 0.0;
+            } else {
+                self.velocity -= decel * self.velocity.signum();
+            }
+        }
 
         // Check if should stop
         if self.velocity.abs() < Self::MIN_VELOCITY {
