@@ -10,6 +10,7 @@ mod text;
 mod workspace;
 mod registry;
 mod ipc;
+mod file_watcher;
 
 fn main() {
     tracing_subscriber::fmt::init();

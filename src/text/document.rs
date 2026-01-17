@@ -49,6 +49,13 @@ impl ParsedDocument {
         text
     }
 
+    /// Clear all InlineState selections in the document.
+    pub(super) fn clear_all_selections(&self) {
+        for block in self.blocks.iter() {
+            block.clear_selection();
+        }
+    }
+
     /// Extract all headings from the document for outline display.
     pub fn extract_headings(&self) -> Vec<HeadingItem> {
         let mut headings = Vec::new();

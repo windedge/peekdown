@@ -353,6 +353,9 @@ impl TextViewState {
     }
 
     pub(super) fn start_selection(&mut self, pos: Point<Pixels>) {
+        // Clear all previous InlineState selections before starting new selection
+        self.parsed_content.lock().unwrap().document.clear_all_selections();
+
         // Convert window coordinates to content coordinates (add scroll offset)
         let scroll_y = self.scroll_offset_y();
         let pos = Point {

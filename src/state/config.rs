@@ -97,6 +97,13 @@ pub struct AppearanceConfig {
     /// List of expanded directory paths
     #[serde(default)]
     pub expanded_dirs: Vec<String>,
+    /// Whether to automatically refresh documents when files change
+    #[serde(default = "default_auto_refresh")]
+    pub auto_refresh: bool,
+}
+
+fn default_auto_refresh() -> bool {
+    true
 }
 
 fn default_inertia_scroll() -> bool {
@@ -183,6 +190,7 @@ impl Default for AppearanceConfig {
             explorer_root_mode: ExplorerRootMode::default(),
             project_root_markers: default_project_root_markers(),
             expanded_dirs: Vec::new(),
+            auto_refresh: default_auto_refresh(),
         }
     }
 }

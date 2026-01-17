@@ -23,6 +23,7 @@ mod search_bar;
 use search_bar::{SearchBar, SearchState};
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
+use crate::file_watcher::FileWatchManager;
 use serde::Deserialize;
 
 #[cfg(windows)]
@@ -270,6 +271,8 @@ struct WorkspaceView {
     tab_scroll_handle: ScrollHandle,
     // FPS counter
     fps_counter: FpsCounter,
+    // File watcher for auto-refresh
+    file_watcher: FileWatchManager,
 }
 
 /// Simple FPS counter
@@ -309,24 +312,53 @@ impl FpsCounter {
 
 impl WorkspaceView {
     pub fn new(cx: &mut Context<Self>, config: Entity<AppConfig>) -> Self {
-        let (outline_visible, outline_width, explorer_visible, explorer_width) = {
+        let (outline_visible, outline_width, explorer_visible, explorer_width, auto_refresh) = {
             let cfg = config.read(cx);
             (
                 cfg.appearance.outline_visible,
                 cfg.appearance.outline_width,
                 cfg.appearance.explorer_visible,
                 cfg.appearance.explorer_width,
+                cfg.appearance.auto_refresh,
             )
         };
 
-        cx.observe(&config, |_, _, cx| {
+        // Initialize file watcher
+        let mut file_watcher = FileWatchManager::new();
+        file_watcher.set_enabled(auto_refresh);
+
+        // Setup event listener for file changes
+        let event_rx = file_watcher.event_receiver();
+        cx.spawn(|workspace_weak: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                while let Ok(path) = event_rx.recv().await {
+                    let mut cx_clone = cx.clone();
+                    workspace_weak.update(&mut cx_clone, |ws, cx| {
+                        ws.handle_file_change(path, cx);
+                    }).ok();
+                }
+            }
+        }).detach();
+
+        // Observe config changes for auto_refresh
+        let config_clone = config.clone();
+        cx.observe(&config, move |this, config, cx| {
+            let auto_refresh = config.read(cx).appearance.auto_refresh;
+            this.file_watcher.set_enabled(auto_refresh);
+            if auto_refresh {
+                // Re-register all current tabs
+                for tab in &this.tabs {
+                    let _ = this.file_watcher.watch(tab.path.clone());
+                }
+            }
             cx.notify();
         }).detach();
 
         Self {
             tabs: Vec::new(),
             active_tab_index: 0,
-            config,
+            config: config_clone,
             outline_visible,
             outline_view: None,
             search_bar: None,
@@ -338,6 +370,7 @@ impl WorkspaceView {
             focus_handle: cx.focus_handle(),
             tab_scroll_handle: ScrollHandle::new(),
             fps_counter: FpsCounter::new(),
+            file_watcher,
         }
     }
 
@@ -392,10 +425,16 @@ impl WorkspaceView {
                              }).detach();
 
                              workspace.tabs.push(WorkspaceTab {
-                                 path,
+                                 path: path.clone(),
                                  view,
                                  title,
                              });
+
+                             // Register file watcher for auto-refresh
+                             if let Err(e) = workspace.file_watcher.watch(path) {
+                                 tracing::warn!("Failed to watch file: {}", e);
+                             }
+
                              workspace.active_tab_index = workspace.tabs.len() - 1;
                              workspace.tab_scroll_handle.scroll_to_item(workspace.active_tab_index);
                          }
@@ -412,6 +451,13 @@ impl WorkspaceView {
         if index >= self.tabs.len() {
             return;
         }
+
+        // Unregister file watcher before removing tab
+        let path = self.tabs[index].path.clone();
+        if let Err(e) = self.file_watcher.unwatch(&path) {
+            tracing::warn!("Failed to unwatch file {:?}: {}", path, e);
+        }
+
         self.tabs.remove(index);
 
         if self.tabs.is_empty() {
@@ -1053,6 +1099,47 @@ impl WorkspaceView {
             return;
         }
         let tab = &self.tabs[self.active_tab_index];
+        let path = tab.path.clone();
+        let text_view_state = tab.view.read(cx).text_view_state().clone();
+
+        cx.spawn(|_workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                if let Ok(content) = smol::fs::read_to_string(&path).await {
+                    _ = cx.update(|cx| {
+                        text_view_state.update(cx, |state, cx| {
+                            state.set_text(&content, cx);
+                        });
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Handle file change event from file watcher.
+    fn handle_file_change(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Find all tabs with this path and refresh them
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        for index in 0..self.tabs.len() {
+            let tab_path = self.tabs[index].path.canonicalize()
+                .unwrap_or_else(|_| self.tabs[index].path.clone());
+
+            if tab_path == canonical_path {
+                tracing::info!("Auto-refreshing tab {}: {:?}", index, path);
+                self.refresh_tab_at(index, cx);
+            }
+        }
+    }
+
+    /// Refresh a specific tab by index.
+    fn refresh_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        let tab = &self.tabs[index];
         let path = tab.path.clone();
         let text_view_state = tab.view.read(cx).text_view_state().clone();
 

@@ -115,6 +115,40 @@ impl BlockNode {
         }
     }
 
+    /// Clear all InlineState selections in this block and its children.
+    pub(super) fn clear_selection(&self) {
+        match self {
+            BlockNode::Root { children, .. }
+            | BlockNode::List { children, .. }
+            | BlockNode::ListItem { children, .. }
+            | BlockNode::Blockquote { children, .. } => {
+                for c in children.iter() {
+                    c.clear_selection();
+                }
+            }
+            BlockNode::Paragraph(paragraph) => {
+                paragraph.clear_selection();
+            }
+            BlockNode::Heading { children, .. } => {
+                children.clear_selection();
+            }
+            BlockNode::Table(table) => {
+                for row in table.children.iter() {
+                    for cell in row.children.iter() {
+                        cell.children.clear_selection();
+                    }
+                }
+            }
+            BlockNode::CodeBlock(code_block) => {
+                code_block.clear_selection();
+            }
+            BlockNode::Definition { .. }
+            | BlockNode::Break { .. }
+            | BlockNode::Divider { .. }
+            | BlockNode::Unknown { .. } => {}
+        }
+    }
+
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
         match self {
@@ -384,6 +418,14 @@ impl Paragraph {
 
         text
     }
+
+    /// Clear all InlineState selections.
+    pub(super) fn clear_selection(&self) {
+        for c in self.children.iter() {
+            c.state.lock().unwrap().selection = None;
+        }
+        self.state.lock().unwrap().selection = None;
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -575,6 +617,11 @@ impl CodeBlock {
             text.push_str(&part_text[selection.start..selection.end]);
         }
         text
+    }
+
+    /// Clear InlineState selection.
+    pub(super) fn clear_selection(&self) {
+        self.state.lock().unwrap().selection = None;
     }
 
     fn render(
