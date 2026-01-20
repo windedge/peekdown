@@ -33,6 +33,21 @@ pub enum ExplorerRootMode {
     ProjectRoot,
 }
 
+/// File sorting mode for explorer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerSortMode {
+    #[default]
+    /// Name ascending (A-Z)
+    NameAsc,
+    /// Name descending (Z-A)
+    NameDesc,
+    /// Modified time descending (newest first)
+    TimeDesc,
+    /// Modified time ascending (oldest first)
+    TimeAsc,
+}
+
 impl AppThemeMode {
     pub fn apply(&self, window: Option<&mut Window>, cx: &mut App) {
         match self {
@@ -91,6 +106,9 @@ pub struct AppearanceConfig {
     /// Explorer root mode (current dir or project root)
     #[serde(default)]
     pub explorer_root_mode: ExplorerRootMode,
+    /// File sorting mode in explorer
+    #[serde(default)]
+    pub explorer_sort_mode: ExplorerSortMode,
     /// Project root markers used when explorer_root_mode is project_root
     #[serde(default = "default_project_root_markers")]
     pub project_root_markers: Vec<String>,
@@ -188,6 +206,7 @@ impl Default for AppearanceConfig {
             explorer_visible: default_explorer_visible(),
             explorer_width: default_explorer_width(),
             explorer_root_mode: ExplorerRootMode::default(),
+            explorer_sort_mode: ExplorerSortMode::default(),
             project_root_markers: default_project_root_markers(),
             expanded_dirs: Vec::new(),
             auto_refresh: default_auto_refresh(),

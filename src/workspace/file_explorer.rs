@@ -6,7 +6,7 @@ use gpui_component::{ActiveTheme, scroll::ScrollableElement, v_flex, h_flex, but
 use std::path::PathBuf;
 use std::collections::HashSet;
 use std::rc::Rc;
-use crate::state::config::ExplorerRootMode;
+use crate::state::config::{ExplorerRootMode, ExplorerSortMode};
 
 /// Default and minimum width for the file explorer sidebar.
 const DEFAULT_WIDTH: f32 = 200.0;
@@ -73,6 +73,9 @@ pub type OnExpandedChange = Box<dyn Fn(HashSet<PathBuf>, &mut App) + 'static>;
 /// Callback type for when root mode changes.
 pub type OnRootModeChange = Rc<dyn Fn(ExplorerRootMode, &mut App) + 'static>;
 
+/// Callback type for when sort mode changes.
+pub type OnSortModeChange = Rc<dyn Fn(ExplorerSortMode, &mut App) + 'static>;
+
 /// Callback type for editing markers.
 pub type OnEditMarkers = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -90,6 +93,7 @@ pub struct FileEntry {
     pub name: String,
     pub depth: usize,
     pub kind: EntryKind,
+    pub modified_time: Option<std::time::SystemTime>,
 }
 
 /// File explorer sidebar view showing directory tree.
@@ -99,6 +103,7 @@ pub struct FileExplorerView {
     expanded_dirs: HashSet<PathBuf>,
     is_loading: bool,
     root_mode: ExplorerRootMode,
+    sort_mode: ExplorerSortMode,
     width: f32,
     is_resizing: bool,
     resize_start_x: f32,
@@ -110,6 +115,7 @@ pub struct FileExplorerView {
     on_close: Option<OnExplorerClose>,
     on_expanded_change: Option<OnExpandedChange>,
     on_root_mode_change: Option<OnRootModeChange>,
+    on_sort_mode_change: Option<OnSortModeChange>,
     on_edit_markers: Option<OnEditMarkers>,
 }
 
@@ -122,6 +128,7 @@ impl FileExplorerView {
             expanded_dirs: HashSet::new(),
             is_loading: false,
             root_mode: ExplorerRootMode::CurrentDir,
+            sort_mode: ExplorerSortMode::default(),
             width: DEFAULT_WIDTH,
             is_resizing: false,
             resize_start_x: 0.0,
@@ -132,6 +139,7 @@ impl FileExplorerView {
             on_close: None,
             on_expanded_change: None,
             on_root_mode_change: None,
+            on_sort_mode_change: None,
             on_edit_markers: None,
         }
     }
@@ -174,10 +182,24 @@ impl FileExplorerView {
         self
     }
 
+    /// Set sort mode change handler.
+    pub fn on_sort_mode_change(mut self, callback: impl Fn(ExplorerSortMode, &mut App) + 'static) -> Self {
+        self.on_sort_mode_change = Some(Rc::new(callback));
+        self
+    }
+
     /// Update root mode (for menu check state).
     pub fn set_root_mode(&mut self, mode: ExplorerRootMode, cx: &mut Context<Self>) {
         self.root_mode = mode;
         cx.notify();
+    }
+
+    /// Update sort mode (for menu check state).
+    pub fn set_sort_mode(&mut self, mode: ExplorerSortMode, cx: &mut Context<Self>) {
+        if self.sort_mode != mode {
+            self.sort_mode = mode;
+            self.refresh_entries(cx);
+        }
     }
 
     /// Set width.
@@ -237,13 +259,14 @@ impl FileExplorerView {
         // Start loading
         self.is_loading = true;
         let expanded_dirs = self.expanded_dirs.clone();
+        let sort_mode = self.sort_mode;
 
-        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 // Scan directory tree in background thread (lazy load)
                 let entries = smol::unblock(move || {
-                    build_tree_lazy(&root, 0, &expanded_dirs)
+                    build_tree_lazy(&root, 0, &expanded_dirs, sort_mode)
                 }).await;
 
                 // Update entries on main thread
@@ -317,7 +340,9 @@ impl Render for FileExplorerView {
         let width = self.width;
         let is_resizing = self.is_resizing;
         let current_root_mode = self.root_mode;
+        let current_sort_mode = self.sort_mode;
         let on_root_mode_change = self.on_root_mode_change.clone();
+        let on_sort_mode_change = self.on_sort_mode_change.clone();
         let on_edit_markers = self.on_edit_markers.clone();
 
         div()
@@ -378,6 +403,69 @@ impl Render for FileExplorerView {
                                 h_flex()
                                     .gap_1()
                                     .items_center()
+                                    .child(
+                                        Button::new("explorer-sort-menu")
+                                            .icon(Icon::new(match current_sort_mode {
+                                                ExplorerSortMode::NameAsc => IconName::SortAscending,
+                                                ExplorerSortMode::NameDesc => IconName::SortDescending,
+                                                ExplorerSortMode::TimeDesc => IconName::ArrowDown,
+                                                ExplorerSortMode::TimeAsc => IconName::ArrowUp,
+                                            }))
+                                            .ghost()
+                                            .xsmall()
+                                            .tooltip(match current_sort_mode {
+                                                ExplorerSortMode::NameAsc => "Sort: Name (A-Z)",
+                                                ExplorerSortMode::NameDesc => "Sort: Name (Z-A)",
+                                                ExplorerSortMode::TimeDesc => "Sort: Time (Newest)",
+                                                ExplorerSortMode::TimeAsc => "Sort: Time (Oldest)",
+                                            })
+                                            .dropdown_menu(move |menu, _window, _cx| {
+                                                let on_sort_name_asc = on_sort_mode_change.clone();
+                                                let on_sort_name_desc = on_sort_mode_change.clone();
+                                                let on_sort_time_desc = on_sort_mode_change.clone();
+                                                let on_sort_time_asc = on_sort_mode_change.clone();
+
+                                                menu
+                                                    .label("Sort By")
+                                                    .item(
+                                                        PopupMenuItem::new("Name (A-Z)")
+                                                            .checked(current_sort_mode == ExplorerSortMode::NameAsc)
+                                                            .on_click(move |_, _, cx| {
+                                                                if let Some(handler) = &on_sort_name_asc {
+                                                                    handler(ExplorerSortMode::NameAsc, cx);
+                                                                }
+                                                            })
+                                                    )
+                                                    .item(
+                                                        PopupMenuItem::new("Name (Z-A)")
+                                                            .checked(current_sort_mode == ExplorerSortMode::NameDesc)
+                                                            .on_click(move |_, _, cx| {
+                                                                if let Some(handler) = &on_sort_name_desc {
+                                                                    handler(ExplorerSortMode::NameDesc, cx);
+                                                                }
+                                                            })
+                                                    )
+                                                    .separator()
+                                                    .item(
+                                                        PopupMenuItem::new("Time (Newest First)")
+                                                            .checked(current_sort_mode == ExplorerSortMode::TimeDesc)
+                                                            .on_click(move |_, _, cx| {
+                                                                if let Some(handler) = &on_sort_time_desc {
+                                                                    handler(ExplorerSortMode::TimeDesc, cx);
+                                                                }
+                                                            })
+                                                    )
+                                                    .item(
+                                                        PopupMenuItem::new("Time (Oldest First)")
+                                                            .checked(current_sort_mode == ExplorerSortMode::TimeAsc)
+                                                            .on_click(move |_, _, cx| {
+                                                                if let Some(handler) = &on_sort_time_asc {
+                                                                    handler(ExplorerSortMode::TimeAsc, cx);
+                                                                }
+                                                            })
+                                                    )
+                                            })
+                                    )
                                     .child(
                                         Button::new("explorer-root-menu")
                                             .icon(Icon::new(IconName::EllipsisVertical))
@@ -573,32 +661,65 @@ impl Render for FileExplorerView {
 }
 
 /// Build lazy-loaded directory tree (only scan expanded directories).
-fn build_tree_lazy(dir: &PathBuf, depth: usize, expanded_dirs: &HashSet<PathBuf>) -> Vec<FileEntry> {
+fn build_tree_lazy(
+    dir: &PathBuf,
+    depth: usize,
+    expanded_dirs: &HashSet<PathBuf>,
+    sort_mode: ExplorerSortMode,
+) -> Vec<FileEntry> {
     let mut entries = Vec::new();
 
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return entries;
     };
 
-    let mut dir_entries: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
+    let mut dir_entries: Vec<_> = read_dir
+        .filter_map(|e| {
+            let entry = e.ok()?;
+            let metadata = entry.metadata().ok();
+            let modified_time = metadata.as_ref().and_then(|m| m.modified().ok());
+            Some((entry, modified_time))
+        })
+        .collect();
 
-    // Sort: directories first, then alphabetically (case-insensitive)
-    dir_entries.sort_by(|a, b| {
+    // Sort: directories first, then by selected mode within same type
+    dir_entries.sort_by(|(a, a_time), (b, b_time)| {
         let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
 
         match (a_is_dir, b_is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => {
+            (true, false) => return std::cmp::Ordering::Less,
+            (false, true) => return std::cmp::Ordering::Greater,
+            _ => {}
+        }
+
+        match sort_mode {
+            ExplorerSortMode::NameAsc => {
                 let a_name = a.file_name().to_string_lossy().to_lowercase();
                 let b_name = b.file_name().to_string_lossy().to_lowercase();
                 a_name.cmp(&b_name)
             }
+            ExplorerSortMode::NameDesc => {
+                let a_name = a.file_name().to_string_lossy().to_lowercase();
+                let b_name = b.file_name().to_string_lossy().to_lowercase();
+                b_name.cmp(&a_name)
+            }
+            ExplorerSortMode::TimeDesc => match (b_time, a_time) {
+                (Some(bt), Some(at)) => bt.cmp(&at),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
+            ExplorerSortMode::TimeAsc => match (a_time, b_time) {
+                (Some(at), Some(bt)) => at.cmp(&bt),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
         }
     });
 
-    for entry in dir_entries {
+    for (entry, modified_time) in dir_entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
@@ -618,11 +739,12 @@ fn build_tree_lazy(dir: &PathBuf, depth: usize, expanded_dirs: &HashSet<PathBuf>
                     name,
                     depth,
                     kind: EntryKind::Directory { expanded, has_children },
+                    modified_time,
                 });
 
                 // Only scan children if expanded (lazy load)
                 if expanded {
-                    let child_entries = build_tree_lazy(&path, depth + 1, expanded_dirs);
+                    let child_entries = build_tree_lazy(&path, depth + 1, expanded_dirs, sort_mode);
                     entries.extend(child_entries);
                 }
             } else if file_type.is_file() {
@@ -633,6 +755,7 @@ fn build_tree_lazy(dir: &PathBuf, depth: usize, expanded_dirs: &HashSet<PathBuf>
                         name,
                         depth,
                         kind: EntryKind::File,
+                        modified_time,
                     });
                 }
             }

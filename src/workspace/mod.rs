@@ -7,7 +7,7 @@ use std::time::Instant;
 use std::collections::{HashMap, HashSet};
 use crate::state::document::Document;
 use gpui_component::{ActiveTheme, Root, button::Button, button::ButtonVariants, Icon, IconName, Sizable};
-use crate::state::config::{AppConfig, ExplorerRootMode};
+use crate::state::config::{AppConfig, ExplorerRootMode, ExplorerSortMode};
 
 mod welcome;
 use welcome::render_welcome;
@@ -591,6 +591,21 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    fn set_explorer_sort_mode(&mut self, mode: ExplorerSortMode, cx: &mut Context<Self>) {
+        self.config.update(cx, |config, _| {
+            config.appearance.explorer_sort_mode = mode;
+            config.save();
+        });
+
+        for explorer_view in self.explorer_views.values() {
+            explorer_view.update(cx, |view, cx| {
+                view.set_sort_mode(mode, cx);
+            });
+        }
+
+        cx.notify();
+    }
+
     /// Reveal a file in the explorer sidebar
     fn reveal_in_explorer(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         // Ensure explorer is visible
@@ -608,11 +623,12 @@ impl WorkspaceView {
             None => return,
         };
 
-        let (root_mode, markers) = {
+        let (root_mode, markers, sort_mode) = {
             let cfg = self.config.read(cx);
             (
                 cfg.appearance.explorer_root_mode,
                 cfg.appearance.project_root_markers.clone(),
+                cfg.appearance.explorer_sort_mode,
             )
         };
 
@@ -634,6 +650,7 @@ impl WorkspaceView {
             let workspace_for_click = workspace.clone();
             let workspace_for_close = workspace.clone();
             let workspace_for_root_mode = workspace.clone();
+            let workspace_for_sort_mode = workspace.clone();
             let root_for_expanded = root.clone();
             let config_for_markers = config.clone();
             let config_for_width = config.clone();
@@ -681,6 +698,13 @@ impl WorkspaceView {
                             });
                         }
                     })
+                    .on_sort_mode_change(move |mode, cx| {
+                        if let Some(ws) = workspace_for_sort_mode.upgrade() {
+                            ws.update(cx, |ws, cx| {
+                                ws.set_explorer_sort_mode(mode, cx);
+                            });
+                        }
+                    })
                     .on_edit_markers(move |window, cx| {
                         settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
                     })
@@ -701,6 +725,7 @@ impl WorkspaceView {
                 view.set_root(Some(root.clone()), cx);
                 view.set_width(explorer_width, cx);
                 view.set_root_mode(root_mode, cx);
+                view.set_sort_mode(sort_mode, cx);
             });
 
             self.explorer_views.insert(root.clone(), explorer_view);
@@ -760,11 +785,12 @@ impl WorkspaceView {
         let Some(current_dir) = current_dir else { return };
 
         // Resolve explorer root based on config
-        let (root_mode, markers) = {
+        let (root_mode, markers, sort_mode) = {
             let cfg = self.config.read(cx);
             (
                 cfg.appearance.explorer_root_mode,
                 cfg.appearance.project_root_markers.clone(),
+                cfg.appearance.explorer_sort_mode,
             )
         };
 
@@ -785,6 +811,7 @@ impl WorkspaceView {
                 view.set_selected_path(Some(current_file), cx);
                 view.set_width(explorer_width, cx);
                 view.set_root_mode(root_mode, cx);
+                view.set_sort_mode(sort_mode, cx);
             });
             self.current_explorer_root = Some(root);
             return;
@@ -797,6 +824,7 @@ impl WorkspaceView {
         let workspace_for_click = workspace.clone();
         let workspace_for_close = workspace.clone();
         let workspace_for_root_mode = workspace.clone();
+        let workspace_for_sort_mode = workspace.clone();
         let root_for_expanded = root.clone();
         let config_for_markers = config.clone();
         let config_for_width = config.clone();
@@ -844,6 +872,13 @@ impl WorkspaceView {
                         });
                     }
                 })
+                .on_sort_mode_change(move |mode, cx| {
+                    if let Some(ws) = workspace_for_sort_mode.upgrade() {
+                        ws.update(cx, |ws, cx| {
+                            ws.set_explorer_sort_mode(mode, cx);
+                        });
+                    }
+                })
                 .on_edit_markers(move |window, cx| {
                     settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
                 })
@@ -855,6 +890,7 @@ impl WorkspaceView {
             view.set_selected_path(Some(current_file), cx);
             view.set_width(explorer_width, cx);
             view.set_root_mode(root_mode, cx);
+            view.set_sort_mode(sort_mode, cx);
         });
 
         self.explorer_views.insert(root.clone(), explorer_view);
@@ -870,11 +906,12 @@ impl WorkspaceView {
     /// Clean up explorer instances for roots that no longer have any tabs
     fn cleanup_unused_explorers(&mut self, cx: &mut Context<Self>) {
         // Read config to determine root mode
-        let (root_mode, markers) = {
+        let (root_mode, markers, _sort_mode) = {
             let cfg = self.config.read(cx);
             (
                 cfg.appearance.explorer_root_mode,
                 cfg.appearance.project_root_markers.clone(),
+                cfg.appearance.explorer_sort_mode,
             )
         };
 
