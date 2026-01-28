@@ -223,7 +223,7 @@ impl Render for MarkdownView {
                         .item(
                             gpui_component::menu::PopupMenuItem::new("Copy File Path")
                                 .on_click(move |_, _window, cx| {
-                                    let path_str = path_for_copy.to_string_lossy().to_string();
+                                    let path_str = super::normalize_unc_path(&path_for_copy.to_string_lossy());
                                     cx.write_to_clipboard(ClipboardItem::new_string(path_str));
                                 }),
                         )

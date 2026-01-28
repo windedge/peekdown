@@ -34,7 +34,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;
                     let is_last = ix == workspace.tabs.len() - 1;
-                    let tab_path = tab.path.display().to_string();
+                    let tab_path = super::normalize_unc_path(&tab.path.display().to_string());
                     let tab_path_for_reveal = tab.path.clone();
 
                     div()

@@ -1,5 +1,16 @@
 //! UI Views and layout.
 
+/// Normalize a Windows UNC path (\\?\ prefix) to a regular path.
+fn normalize_unc_path(path: &str) -> String {
+    if path.starts_with("\\\\?\\") {
+        path[4..].to_string()
+    } else if path.starts_with("//?/") {
+        path[4..].to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::path::PathBuf;
@@ -332,14 +343,15 @@ impl WorkspaceView {
         cx.spawn(|workspace_weak: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                while let Ok(path) = event_rx.recv().await {
+                while let Ok(event) = event_rx.recv().await {
                     let mut cx_clone = cx.clone();
                     workspace_weak.update(&mut cx_clone, |ws, cx| {
-                        ws.handle_file_change(path, cx);
+                        ws.handle_file_change(event, cx);
                     }).ok();
                 }
             }
         }).detach();
+
 
         // Observe config changes for auto_refresh
         let config_clone = config.clone();
@@ -371,6 +383,15 @@ impl WorkspaceView {
             tab_scroll_handle: ScrollHandle::new(),
             fps_counter: FpsCounter::new(),
             file_watcher,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn debug_trigger_explorer_refresh(&self, cx: &mut Context<Self>) {
+        if let Some(root) = self.current_explorer_root.clone() {
+            tracing::debug!("debug trigger explorer refresh: {:?}", root);
+            self.file_watcher.trigger_root_refresh(root);
+            cx.notify();
         }
     }
 
@@ -640,10 +661,22 @@ impl WorkspaceView {
             }
         };
 
+        // Normalize to reduce path-mismatch between watcher and explorer map keys.
+        let root = root.canonicalize().unwrap_or(root);
+
+        // Normalize to reduce path-mismatch between watcher and explorer map keys.
+        let root = root.canonicalize().unwrap_or(root);
+
         // Ensure we have an explorer for this root (create if needed)
         if !self.explorer_views.contains_key(&root) {
+            // Register root watcher
+            if let Err(e) = self.file_watcher.watch_root(root.clone()) {
+                tracing::warn!("Failed to watch explorer root {:?}: {}", root, e);
+            }
+
             // Need to create a new explorer for this root
             let explorer_width = self.explorer_width;
+
             let config = self.config.clone();
             let workspace = cx.entity().downgrade();
             let workspace_for_width = workspace.clone();
@@ -720,19 +753,28 @@ impl WorkspaceView {
             };
 
             explorer_view.update(cx, |view, cx| {
-                // Set expanded dirs BEFORE setting root to avoid double refresh
-                *view.expanded_dirs_mut() = restored_expanded;
-                view.set_root(Some(root.clone()), cx);
+                // Set metadata before triggering root scan
                 view.set_width(explorer_width, cx);
                 view.set_root_mode(root_mode, cx);
                 view.set_sort_mode(sort_mode, cx);
+                *view.expanded_dirs_mut() = restored_expanded;
+                
+                // set_root triggers async refresh_entries which uses current view state
+                view.set_root(Some(root.clone()), cx);
+                view.set_selected_path(Some(path.clone()), cx);
             });
+
 
             self.explorer_views.insert(root.clone(), explorer_view);
         }
 
         // Switch to this explorer root
         self.current_explorer_root = Some(root.clone());
+
+        // Ensure root watcher is active
+        if let Err(e) = self.file_watcher.watch_root(root.clone()) {
+            tracing::warn!("Failed to watch explorer root {:?}: {}", root, e);
+        }
 
         // Expand all parent directories of the file
         if let Some(explorer_view) = self.explorer_views.get(&root) {
@@ -802,10 +844,18 @@ impl WorkspaceView {
             }
         };
 
+        // Normalize to reduce path-mismatch between watcher and explorer map keys.
+        let root = root.canonicalize().unwrap_or(root);
+
         let explorer_width = self.explorer_width;
 
         // Check if we already have an explorer for this root
         if let Some(explorer_view) = self.explorer_views.get(&root) {
+            // Ensure root watcher is active (it may have been cleared previously)
+            if let Err(e) = self.file_watcher.watch_root(root.clone()) {
+                tracing::warn!("Failed to watch explorer root {:?}: {}", root, e);
+            }
+
             // Same root - just update selection and width
             explorer_view.update(cx, |view, cx| {
                 view.set_selected_path(Some(current_file), cx);
@@ -818,7 +868,14 @@ impl WorkspaceView {
         }
 
         // Create new explorer view for this root
+        let root = root.canonicalize().unwrap_or(root);
+        // Register root watcher
+        if let Err(e) = self.file_watcher.watch_root(root.clone()) {
+            tracing::warn!("Failed to watch explorer root {:?}: {}", root, e);
+        }
+
         let config = self.config.clone();
+
         let workspace = cx.entity().downgrade();
         let workspace_for_width = workspace.clone();
         let workspace_for_click = workspace.clone();
@@ -886,12 +943,13 @@ impl WorkspaceView {
 
         // Initialize the explorer
         explorer_view.update(cx, |view, cx| {
-            view.set_root(Some(root.clone()), cx);
-            view.set_selected_path(Some(current_file), cx);
             view.set_width(explorer_width, cx);
             view.set_root_mode(root_mode, cx);
             view.set_sort_mode(sort_mode, cx);
+            view.set_root(Some(root.clone()), cx);
+            view.set_selected_path(Some(current_file), cx);
         });
+
 
         self.explorer_views.insert(root.clone(), explorer_view);
         self.current_explorer_root = Some(root);
@@ -930,7 +988,13 @@ impl WorkspaceView {
             .collect();
 
         // Remove explorers for roots that have no tabs
+        for (root, _) in self.explorer_views.iter() {
+            if !active_roots.contains(root) {
+                let _ = self.file_watcher.unwatch(root);
+            }
+        }
         self.explorer_views.retain(|root, _| active_roots.contains(root));
+
 
         // Clear current_explorer_root if it was removed
         if let Some(ref current) = self.current_explorer_root {
@@ -1155,22 +1219,37 @@ impl WorkspaceView {
     }
 
     /// Handle file change event from file watcher.
-    fn handle_file_change(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        // Find all tabs with this path and refresh them
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    fn handle_file_change(&mut self, event: crate::file_watcher::WatchEvent, cx: &mut Context<Self>) {
+        match event {
+            crate::file_watcher::WatchEvent::FileModified(path) => {
+                // Find all tabs with this path and refresh them
+                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-        for index in 0..self.tabs.len() {
-            let tab_path = self.tabs[index].path.canonicalize()
-                .unwrap_or_else(|_| self.tabs[index].path.clone());
+                for index in 0..self.tabs.len() {
+                    let tab_path = self.tabs[index]
+                        .path
+                        .canonicalize()
+                        .unwrap_or_else(|_| self.tabs[index].path.clone());
 
-            if tab_path == canonical_path {
-                tracing::info!("Auto-refreshing tab {}: {:?}", index, path);
-                self.refresh_tab_at(index, cx);
+                    if tab_path == canonical_path {
+                        tracing::info!("Auto-refreshing tab {}: {:?}", index, path);
+                        self.refresh_tab_at(index, cx);
+                    }
+                }
+            }
+            crate::file_watcher::WatchEvent::RootChanged(root) => {
+                if let Some(view) = self.explorer_views.get(&root) {
+                    tracing::debug!("Refreshing explorer for root: {:?}", root);
+                    view.update(cx, |view, cx| {
+                        view.refresh_entries(cx);
+                    });
+                }
             }
         }
     }
 
     /// Refresh a specific tab by index.
+
     fn refresh_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
@@ -1273,7 +1352,8 @@ impl Render for WorkspaceView {
 
         // Update window title based on active tab
         if let Some(tab) = self.tabs.get(self.active_tab_index) {
-            let title = format!("{} - Peekdown", tab.path.display());
+            let path_str = normalize_unc_path(&tab.path.display().to_string());
+            let title = format!("{} - Peekdown", path_str);
             window.set_window_title(&title);
         } else {
             window.set_window_title("Peekdown");

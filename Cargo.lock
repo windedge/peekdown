@@ -4117,6 +4117,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "html5ever",
+ "ignore",
  "image",
  "interprocess",
  "markdown",

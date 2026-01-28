@@ -33,6 +33,7 @@ html5ever = "0.27"
 markup5ever_rcdom = "0.3.0"
 ropey = "1.6"
 tree-sitter-kotlin = { git = "https://github.com/fwcd/tree-sitter-kotlin", branch = "main" }
+ignore = "0.4"
 
 [build-dependencies]
 winres = "0.1"

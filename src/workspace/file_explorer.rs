@@ -4,7 +4,7 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::{ActiveTheme, scroll::ScrollableElement, v_flex, h_flex, button::Button, button::ButtonVariants, Icon, IconName, Sizable, menu::DropdownMenu, menu::PopupMenuItem, tooltip::Tooltip};
 use std::path::PathBuf;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use crate::state::config::{ExplorerRootMode, ExplorerSortMode};
 
@@ -14,18 +14,30 @@ const MIN_WIDTH: f32 = 120.0;
 const MAX_WIDTH: f32 = 400.0;
 const RESIZE_HANDLE_WIDTH: f32 = 6.0;
 
+/// Normalize a Windows UNC path (\\?\ prefix) to a regular path.
+fn normalize_unc_path(path: &str) -> String {
+    if path.starts_with("\\\\?\\") {
+        path[4..].to_string()
+    } else if path.starts_with("//?/") {
+        path[4..].to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 /// Truncate a path in the middle, preserving the root and final component.
 /// Example: "C:\very\long\path\to\project" -> "C:\...\project"
 fn truncate_path_middle(path: &str, max_chars: usize) -> String {
+    let path = normalize_unc_path(path);
     if path.chars().count() <= max_chars {
-        return path.to_string();
+        return path;
     }
 
     // Detect path separator
     let sep = if path.contains('\\') { '\\' } else { '/' };
 
     // Get the last component (directory/file name)
-    let last_component = path.rsplit(sep).next().unwrap_or(path);
+    let last_component = path.rsplit(sep).next().unwrap_or(&path);
 
     // Reserve space for "..." (3 chars) + separator (1 char) + last component
     let reserved = 4 + last_component.chars().count();
@@ -102,6 +114,8 @@ pub struct FileExplorerView {
     entries: Vec<FileEntry>,
     expanded_dirs: HashSet<PathBuf>,
     is_loading: bool,
+    refresh_seq: u64,
+    subtree_refresh_seq: HashMap<PathBuf, u64>,
     root_mode: ExplorerRootMode,
     sort_mode: ExplorerSortMode,
     width: f32,
@@ -127,6 +141,8 @@ impl FileExplorerView {
             entries: Vec::new(),
             expanded_dirs: HashSet::new(),
             is_loading: false,
+            refresh_seq: 0,
+            subtree_refresh_seq: HashMap::new(),
             root_mode: ExplorerRootMode::CurrentDir,
             sort_mode: ExplorerSortMode::default(),
             width: DEFAULT_WIDTH,
@@ -256,8 +272,10 @@ impl FileExplorerView {
             return;
         };
 
-        // Start loading
+        // Start loading. Keep current entries visible to avoid layout jitter.
         self.is_loading = true;
+        self.refresh_seq = self.refresh_seq.wrapping_add(1);
+        let request_id = self.refresh_seq;
         let expanded_dirs = self.expanded_dirs.clone();
         let sort_mode = self.sort_mode;
 
@@ -271,6 +289,10 @@ impl FileExplorerView {
 
                 // Update entries on main thread
                 let _ = this.update(&mut cx, |view, cx| {
+                    // Ignore stale results from older refreshes.
+                    if view.refresh_seq != request_id {
+                        return;
+                    }
                     view.entries = entries;
                     view.is_loading = false;
                     cx.notify();
@@ -283,17 +305,103 @@ impl FileExplorerView {
 
     /// Toggle directory expanded state.
     fn toggle_directory(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.expanded_dirs.contains(&path) {
+        if self.root_path.is_none() {
+            return;
+        }
+
+        let was_expanded = self.expanded_dirs.contains(&path);
+        if was_expanded {
             self.expanded_dirs.remove(&path);
         } else {
             self.expanded_dirs.insert(path.clone());
+        }
+
+        // Update the entry's expanded flag for UI rendering
+        if let Some(dir_index) = self.entries.iter().position(|e| e.path == path) {
+            if let EntryKind::Directory { expanded, .. } = &mut self.entries[dir_index].kind {
+                *expanded = !was_expanded;
+            }
         }
 
         if let Some(on_expanded_change) = &self.on_expanded_change {
             on_expanded_change(self.expanded_dirs.clone(), cx);
         }
 
-        self.refresh_entries(cx);
+        if was_expanded {
+            // Collapsing: remove children immediately for visual feedback
+            if let Some(dir_index) = self.entries.iter().position(|e| e.path == path) {
+                let dir_depth = self.entries[dir_index].depth;
+                let mut end = dir_index + 1;
+                while end < self.entries.len() && self.entries[end].depth > dir_depth {
+                    end += 1;
+                }
+                self.entries.drain(dir_index + 1..end);
+                cx.notify();
+            }
+        } else {
+            // Expanding: schedule a subtree refresh
+            self.refresh_subtree(path, cx);
+        }
+    }
+
+    fn refresh_subtree(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        let seq = self.subtree_refresh_seq.entry(dir.clone()).or_insert(0);
+        *seq = seq.wrapping_add(1);
+        let request_id = *seq;
+
+        let expanded_dirs = self.expanded_dirs.clone();
+        let sort_mode = self.sort_mode;
+        let dir_for_update = dir.clone();
+
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                let subtree_entries = smol::unblock(move || {
+                    build_tree_lazy(&dir, 0, &expanded_dirs, sort_mode)
+                }).await;
+
+                let _ = this.update(&mut cx, |view, cx| {
+                    let Some(current_seq) = view.subtree_refresh_seq.get(&dir_for_update).copied() else {
+                        return;
+                    };
+                    if current_seq != request_id {
+                        return;
+                    }
+
+                    let Some(dir_index) = view.entries.iter().position(|e| e.path == dir_for_update) else {
+                        return;
+                    };
+                    let dir_depth = view.entries[dir_index].depth;
+
+                    // Compute current range of children.
+                    let mut end = dir_index + 1;
+                    while end < view.entries.len() && view.entries[end].depth > dir_depth {
+                        end += 1;
+                    }
+
+                    // If the dir is currently collapsed, keep it collapsed.
+                    if !view.expanded_dirs.contains(&dir_for_update) {
+                        if end > dir_index + 1 {
+                            view.entries.drain(dir_index + 1..end);
+                        }
+                        cx.notify();
+                        return;
+                    }
+
+                    // Transform subtree_entries into entries with correct depth.
+                    // build_tree_lazy returns children with depth relative to the dir (starting at 0).
+                    // We need to adjust them to be relative to the global tree.
+                    let mut normalized = Vec::new();
+                    for mut e in subtree_entries {
+                        e.depth = dir_depth + e.depth + 1;
+                        normalized.push(e);
+                    }
+
+                    view.entries.splice(dir_index + 1..end, normalized);
+                    cx.notify();
+                });
+            }
+        }).detach();
     }
 
     /// Expand a directory (without toggling).
@@ -531,16 +639,6 @@ impl Render for FileExplorerView {
                                 div()
                                     .id("explorer-items")
                                     .size_full()
-                                    .when(self.is_loading, |this| {
-                                        this.child(
-                                            div()
-                                                .px_3()
-                                                .py_2()
-                                                .text_sm()
-                                                .text_color(theme.muted_foreground)
-                                                .child("Loading...")
-                                        )
-                                    })
                                     .when(!self.is_loading && self.entries.is_empty(), |this| {
                                         this.child(
                                             div()
@@ -669,21 +767,26 @@ fn build_tree_lazy(
 ) -> Vec<FileEntry> {
     let mut entries = Vec::new();
 
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return entries;
-    };
+    // Use ignore crate to respect .gitignore
+    let mut dir_entries = Vec::new();
+    let walker = ignore::WalkBuilder::new(dir)
+        .max_depth(Some(1))
+        .standard_filters(true)
+        .hidden(false) // We handle hidden files ourselves below
+        .build();
 
-    let mut dir_entries: Vec<_> = read_dir
-        .filter_map(|e| {
-            let entry = e.ok()?;
-            let metadata = entry.metadata().ok();
-            let modified_time = metadata.as_ref().and_then(|m| m.modified().ok());
-            Some((entry, modified_time))
-        })
-        .collect();
+    for result in walker {
+        let Ok(entry) = result else { continue };
+        if entry.depth() == 0 { continue; } // Skip root
+
+        let path = entry.path().to_path_buf();
+        let metadata = entry.metadata().ok();
+        let modified_time = metadata.as_ref().and_then(|m| m.modified().ok());
+        dir_entries.push((entry, path, modified_time));
+    }
 
     // Sort: directories first, then by selected mode within same type
-    dir_entries.sort_by(|(a, a_time), (b, b_time)| {
+    dir_entries.sort_by(|(a, _, a_time), (b, _, b_time)| {
         let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
 
@@ -719,8 +822,7 @@ fn build_tree_lazy(
         }
     });
 
-    for (entry, modified_time) in dir_entries {
-        let path = entry.path();
+    for (entry, path, modified_time) in dir_entries {
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Skip hidden files/directories
@@ -728,7 +830,7 @@ fn build_tree_lazy(
             continue;
         }
 
-        if let Ok(file_type) = entry.file_type() {
+        if let Some(file_type) = entry.file_type() {
             if file_type.is_dir() {
                 // Check if this directory has subdirectories or .md files
                 let has_children = has_relevant_children(&path);
@@ -767,19 +869,22 @@ fn build_tree_lazy(
 
 /// Check if directory has relevant children (subdirectories or .md files).
 fn has_relevant_children(dir: &PathBuf) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
+    let walker = ignore::WalkBuilder::new(dir)
+        .max_depth(Some(1))
+        .standard_filters(true)
+        .hidden(false)
+        .build();
 
-    for entry in entries.filter_map(|e| e.ok()) {
+    for result in walker {
+        let Ok(entry) = result else { continue };
+        if entry.depth() == 0 { continue; }
+
         let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip hidden files/directories
         if name.starts_with('.') {
             continue;
         }
 
-        if let Ok(file_type) = entry.file_type() {
+        if let Some(file_type) = entry.file_type() {
             if file_type.is_file() {
                 if entry.path().extension().and_then(|s| s.to_str()) == Some("md") {
                     return true;
