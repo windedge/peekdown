@@ -2,11 +2,13 @@
 
 use gpui::*;
 use gpui::prelude::FluentBuilder;
-use gpui_component::{ActiveTheme, scroll::ScrollableElement, v_flex, h_flex, button::Button, button::ButtonVariants, Icon, IconName, Sizable, menu::DropdownMenu, menu::PopupMenuItem, tooltip::Tooltip};
+use gpui_component::{ActiveTheme, scroll::ScrollableElement, v_flex, h_flex, button::Button, button::ButtonVariants, Icon, IconName, Sizable, menu::DropdownMenu, menu::PopupMenuItem, menu::ContextMenuExt, tooltip::Tooltip};
 use std::path::PathBuf;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use crate::state::config::{ExplorerRootMode, ExplorerSortMode};
+use crate::services::shell;
+use crate::text::ElementExt;
 
 /// Default and minimum width for the file explorer sidebar.
 const DEFAULT_WIDTH: f32 = 200.0;
@@ -14,21 +16,10 @@ const MIN_WIDTH: f32 = 120.0;
 const MAX_WIDTH: f32 = 400.0;
 const RESIZE_HANDLE_WIDTH: f32 = 6.0;
 
-/// Normalize a Windows UNC path (\\?\ prefix) to a regular path.
-fn normalize_unc_path(path: &str) -> String {
-    if path.starts_with("\\\\?\\") {
-        path[4..].to_string()
-    } else if path.starts_with("//?/") {
-        path[4..].to_string()
-    } else {
-        path.to_string()
-    }
-}
-
 /// Truncate a path in the middle, preserving the root and final component.
 /// Example: "C:\very\long\path\to\project" -> "C:\...\project"
 fn truncate_path_middle(path: &str, max_chars: usize) -> String {
-    let path = normalize_unc_path(path);
+    let path = super::normalize_unc_path(path);
     if path.chars().count() <= max_chars {
         return path;
     }
@@ -124,6 +115,8 @@ pub struct FileExplorerView {
     resize_start_width: f32,
     /// Currently selected file path (highlighted in the tree)
     selected_path: Option<PathBuf>,
+    /// Row bounds cache for right-click selection (window coordinates).
+    entry_hitboxes: Vec<(PathBuf, Bounds<Pixels>)>,
     on_click: Option<OnFileClick>,
     on_width_change: Option<OnWidthChange>,
     on_close: Option<OnExplorerClose>,
@@ -150,6 +143,7 @@ impl FileExplorerView {
             resize_start_x: 0.0,
             resize_start_width: DEFAULT_WIDTH,
             selected_path: None,
+            entry_hitboxes: Vec::new(),
             on_click: None,
             on_width_change: None,
             on_close: None,
@@ -422,6 +416,12 @@ impl FileExplorerView {
         self.is_resizing
     }
 
+    fn entry_path_at_position(&self, position: Point<Pixels>) -> Option<&PathBuf> {
+        self.entry_hitboxes
+            .iter()
+            .find_map(|(path, bounds)| bounds.contains(&position).then_some(path))
+    }
+
     /// Handle mouse move during resize (called from workspace).
     pub fn handle_resize_move(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
         if self.is_resizing {
@@ -440,6 +440,45 @@ impl FileExplorerView {
         self.is_resizing = false;
         cx.notify();
     }
+}
+
+fn select_entry_under_cursor(
+    view: &mut FileExplorerView,
+    position: Point<Pixels>,
+    cx: &mut Context<FileExplorerView>,
+) {
+    let Some(path) = view.entry_path_at_position(position).cloned() else {
+        return;
+    };
+
+    if view.selected_path.as_ref() == Some(&path) {
+        return;
+    }
+
+    view.selected_path = Some(path);
+    cx.notify();
+}
+
+fn right_click_selection_overlay(view: Entity<FileExplorerView>) -> impl IntoElement {
+    canvas(
+        |_bounds, _window, _cx| (),
+        move |bounds, (), window, _cx| {
+            let view = view.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _window, cx| {
+                if !phase.capture()
+                    || event.button != MouseButton::Right
+                    || !bounds.contains(&event.position)
+                {
+                    return;
+                }
+
+                let position = event.position;
+                view.update(cx, |view, cx| select_entry_under_cursor(view, position, cx));
+            });
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 impl Render for FileExplorerView {
@@ -638,7 +677,16 @@ impl Render for FileExplorerView {
                             .child(
                                 div()
                                     .id("explorer-items")
+                                    .relative()
                                     .size_full()
+                                    .child({
+                                        let view = cx.entity().clone();
+                                        right_click_selection_overlay(view)
+                                    })
+                                    .on_prepaint({
+                                        let view = cx.entity().clone();
+                                        move |_bounds, _window, cx| view.update(cx, |view, _cx| view.entry_hitboxes.clear())
+                                    })
                                     .when(!self.is_loading && self.entries.is_empty(), |this| {
                                         this.child(
                                             div()
@@ -657,19 +705,25 @@ impl Render for FileExplorerView {
                                             EntryKind::Directory { expanded, has_children } => (*expanded, *has_children),
                                             EntryKind::File => (false, false),
                                         };
-                                        let is_selected = self.selected_path.as_ref() == Some(&entry.path);
+                                        let is_selected = self.selected_path.as_ref() == Some(&path);
 
                                         div()
-                                            .id(SharedString::from(entry.path.to_string_lossy().to_string()))
+                                            .id(SharedString::from(path.to_string_lossy().to_string()))
+                                            .on_prepaint({
+                                                let view = cx.entity().clone();
+                                                let path_for_hitbox = path.clone();
+                                                move |bounds, _window, cx| {
+                                                    view.update(cx, |view, _cx| {
+                                                        view.entry_hitboxes.push((path_for_hitbox.clone(), bounds));
+                                                    });
+                                                }
+                                            })
                                             .w_full()
                                             .px_3()
                                             .py_1()
                                             .pl(px(12.0 + indent))
                                             .text_sm()
                                             .cursor_pointer()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
                                             .text_color(theme.foreground)
                                             .when(is_selected, |this| this.bg(theme.list_active))
                                             .when(!is_selected, |this| this.hover(|s| s.bg(theme.accent)))
@@ -677,13 +731,25 @@ impl Render for FileExplorerView {
                                             .flex_row()
                                             .items_center()
                                             .gap_1()
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                if is_dir {
-                                                    this.toggle_directory(path.clone(), cx);
-                                                } else {
-                                                    if let Some(on_click) = &this.on_click {
+                                            .capture_any_mouse_down(cx.listener({
+                                                let path = path.clone();
+                                                move |this, event: &MouseDownEvent, _window, cx| {
+                                                    if event.button == MouseButton::Right {
+                                                        this.selected_path = Some(path.clone());
+                                                        cx.notify();
+                                                    }
+                                                }
+                                            }))
+                                            .on_click(cx.listener({
+                                                let path = path.clone();
+                                                move |this, _, window, cx| {
+                                                    if is_dir {
+                                                        this.toggle_directory(path.clone(), cx);
+                                                    } else if let Some(on_click) = &this.on_click {
                                                         on_click(path.clone(), window, cx);
                                                     }
+                                                    this.selected_path = Some(path.clone());
+                                                    cx.notify();
                                                 }
                                             }))
                                             .child(
@@ -735,6 +801,31 @@ impl Render for FileExplorerView {
                                             )
                                     }))
                                     .overflow_y_scrollbar()
+                                    .context_menu({
+                                        let view = cx.entity().clone();
+                                        move |menu, _window, cx| {
+                                            let Some(selected_path) = view.read(cx).selected_path.clone() else {
+                                                return menu;
+                                            };
+
+                                            menu.item(
+                                                PopupMenuItem::new("Open in File Manager")
+                                                    .on_click({
+                                                        let selected_path = selected_path.clone();
+                                                        move |_, _window, _cx| shell::open_in_explorer(&selected_path)
+                                                    }),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new("Copy File Path")
+                                                    .on_click(move |_, _window, cx| {
+                                                        let path_str = super::normalize_unc_path(
+                                                            selected_path.to_string_lossy().as_ref(),
+                                                        );
+                                                        cx.write_to_clipboard(ClipboardItem::new_string(path_str));
+                                                    }),
+                                            )
+                                        }
+                                    })
                             )
                     )
             )

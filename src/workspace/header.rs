@@ -2,6 +2,7 @@ use gpui::*;
 use gpui::prelude::FluentBuilder;
 use super::{WorkspaceView, settings_dialog};
 use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable, tooltip::Tooltip, menu::{ContextMenuExt, PopupMenuItem}};
+use crate::services::shell;
 
 pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
@@ -34,8 +35,9 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;
                     let is_last = ix == workspace.tabs.len() - 1;
-                    let tab_path = super::normalize_unc_path(&tab.path.display().to_string());
-                    let tab_path_for_reveal = tab.path.clone();
+                    let tab_path_str = super::normalize_unc_path(&tab.path.display().to_string());
+                    let tab_path_tooltip = tab_path_str.clone();
+                    let tab_path_buf = tab.path.clone();
 
                     div()
                         .id(("tab", ix))
@@ -46,7 +48,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .gap_2()
                         .text_sm()
                         .cursor_pointer()
-                        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tab_path.clone())).into())
+                        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tab_path_tooltip.clone())).into())
                         .when(is_active, |this| {
                             this
                                 .bg(theme.background)
@@ -67,32 +69,54 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                             workspace.activate_tab(ix, cx);
                         }))
                         .context_menu({
-                            let tab_path = tab_path_for_reveal.clone();
+                            let tab_path_buf = tab_path_buf.clone();
+                            let tab_path_str = tab_path_str.clone();
                             let tab_index = ix;
                             let ws_for_reveal = workspace_entity.clone();
                             let ws_for_close = workspace_entity.clone();
                             move |menu, _window, _cx| {
-                                let path_for_reveal = tab_path.clone();
-                                let ws_reveal = ws_for_reveal.clone();
-                                let ws_close = ws_for_close.clone();
                                 menu.item(
                                     PopupMenuItem::new("Reveal in Sidebar")
-                                        .on_click(move |_, _window, cx| {
-                                            if let Some(ws) = ws_reveal.upgrade() {
-                                                ws.update(cx, |workspace, cx| {
-                                                    workspace.reveal_in_explorer(path_for_reveal.clone(), cx);
-                                                });
+                                        .on_click({
+                                            let ws_for_reveal = ws_for_reveal.clone();
+                                            let tab_path_buf = tab_path_buf.clone();
+                                            move |_, _window, cx| {
+                                                if let Some(ws) = ws_for_reveal.upgrade() {
+                                                    let path = tab_path_buf.clone();
+                                                    ws.update(cx, move |workspace, cx| {
+                                                        workspace.reveal_in_explorer(path, cx);
+                                                    });
+                                                }
+                                            }
+                                        })
+                                )
+                                .item(
+                                    PopupMenuItem::new("Open in File Manager")
+                                        .on_click({
+                                            let tab_path_buf = tab_path_buf.clone();
+                                            move |_, _window, _cx| shell::open_in_explorer(&tab_path_buf)
+                                        })
+                                )
+                                .item(
+                                    PopupMenuItem::new("Copy File Path")
+                                        .on_click({
+                                            let tab_path_str = tab_path_str.clone();
+                                            move |_, _window, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(tab_path_str.clone()));
                                             }
                                         })
                                 )
                                 .separator()
                                 .item(
                                     PopupMenuItem::new("Close Tab")
-                                        .on_click(move |_, _window, cx| {
-                                            if let Some(ws) = ws_close.upgrade() {
-                                                ws.update(cx, |workspace, cx| {
-                                                    workspace.close_tab(tab_index, cx);
-                                                });
+                                        .on_click({
+                                            let ws_for_close = ws_for_close.clone();
+                                            move |_, _window, cx| {
+                                                if let Some(ws) = ws_for_close.upgrade() {
+                                                    ws.update(cx, |workspace, cx| {
+                                                        workspace.close_tab(tab_index, cx);
+                                                    });
+                                                }
                                             }
                                         })
                                 )
