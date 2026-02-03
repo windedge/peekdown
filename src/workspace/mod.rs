@@ -11,6 +11,34 @@ fn normalize_unc_path(path: &str) -> String {
     }
 }
 
+#[cfg(windows)]
+pub(super) fn normalize_unc_pathbuf(path: &std::path::Path) -> PathBuf {
+    let s = path.to_string_lossy();
+
+    if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+        return PathBuf::from(format!("\\\\{}", rest));
+    }
+
+    if let Some(rest) = s.strip_prefix("//?/UNC/") {
+        return PathBuf::from(format!("//{}", rest));
+    }
+
+    if let Some(rest) = s.strip_prefix("\\\\?\\") {
+        return PathBuf::from(rest.to_string());
+    }
+
+    if let Some(rest) = s.strip_prefix("//?/") {
+        return PathBuf::from(rest.to_string());
+    }
+
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+pub(super) fn normalize_unc_pathbuf(path: &std::path::Path) -> PathBuf {
+    path.to_path_buf()
+}
+
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::path::PathBuf;
@@ -638,6 +666,11 @@ impl WorkspaceView {
             });
         }
 
+        // Canonicalize to reduce path-mismatch between explorer entries and selection paths.
+        // On Windows, canonicalize may introduce the \\?\ prefix; strip it to match ignore::WalkBuilder paths.
+        let path = path.canonicalize().unwrap_or(path);
+        let path = normalize_unc_pathbuf(&path);
+
         // Calculate root based on the file path (NOT the current active tab)
         let current_dir = match path.parent() {
             Some(dir) => dir.to_path_buf(),
@@ -663,9 +696,7 @@ impl WorkspaceView {
 
         // Normalize to reduce path-mismatch between watcher and explorer map keys.
         let root = root.canonicalize().unwrap_or(root);
-
-        // Normalize to reduce path-mismatch between watcher and explorer map keys.
-        let root = root.canonicalize().unwrap_or(root);
+        let root = normalize_unc_pathbuf(&root);
 
         // Ensure we have an explorer for this root (create if needed)
         if !self.explorer_views.contains_key(&root) {
@@ -752,13 +783,28 @@ impl WorkspaceView {
                 expanded_dirs
             };
 
+            // Calculate parent directories that need to be expanded for the target file
+            let mut dirs_to_expand_for_new = restored_expanded.clone();
+            {
+                let mut current = path.parent();
+                while let Some(dir) = current {
+                    if dir.starts_with(&root) && dir != root {
+                        dirs_to_expand_for_new.insert(dir.to_path_buf());
+                    }
+                    if dir == root || !dir.starts_with(&root) {
+                        break;
+                    }
+                    current = dir.parent();
+                }
+            }
+
             explorer_view.update(cx, |view, cx| {
                 // Set metadata before triggering root scan
                 view.set_width(explorer_width, cx);
                 view.set_root_mode(root_mode, cx);
                 view.set_sort_mode(sort_mode, cx);
-                *view.expanded_dirs_mut() = restored_expanded;
-                
+                *view.expanded_dirs_mut() = dirs_to_expand_for_new;
+
                 // set_root triggers async refresh_entries which uses current view state
                 view.set_root(Some(root.clone()), cx);
                 view.set_selected_path(Some(path.clone()), cx);
@@ -801,13 +847,16 @@ impl WorkspaceView {
                     }
                 }
 
+                // Set the selected path first so scrolling targets the right item.
+                view.set_selected_path(Some(path.clone()), cx);
+
                 // Only refresh once after expanding all directories
                 if needs_refresh {
                     view.refresh_entries(cx);
+                } else {
+                    // Directories already expanded, scroll immediately
+                    view.scroll_to_selected(cx);
                 }
-
-                // Set the selected path
-                view.set_selected_path(Some(path.clone()), cx);
             });
         }
 
@@ -846,6 +895,7 @@ impl WorkspaceView {
 
         // Normalize to reduce path-mismatch between watcher and explorer map keys.
         let root = root.canonicalize().unwrap_or(root);
+        let root = normalize_unc_pathbuf(&root);
 
         let explorer_width = self.explorer_width;
 

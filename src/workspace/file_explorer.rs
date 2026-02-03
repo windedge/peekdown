@@ -117,6 +117,10 @@ pub struct FileExplorerView {
     selected_path: Option<PathBuf>,
     /// Row bounds cache for right-click selection (window coordinates).
     entry_hitboxes: Vec<(PathBuf, Bounds<Pixels>)>,
+    /// Scroll handle for programmatic scrolling to selected items.
+    scroll_handle: ScrollHandle,
+    /// Pending path to scroll to after async refresh.
+    pending_scroll_to: Option<PathBuf>,
     on_click: Option<OnFileClick>,
     on_width_change: Option<OnWidthChange>,
     on_close: Option<OnExplorerClose>,
@@ -144,6 +148,8 @@ impl FileExplorerView {
             resize_start_width: DEFAULT_WIDTH,
             selected_path: None,
             entry_hitboxes: Vec::new(),
+            scroll_handle: ScrollHandle::new(),
+            pending_scroll_to: None,
             on_click: None,
             on_width_change: None,
             on_close: None,
@@ -236,8 +242,26 @@ impl FileExplorerView {
 
     /// Set selected file path (for highlighting).
     pub fn set_selected_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
-        self.selected_path = path;
+        self.selected_path = path.clone();
+        self.pending_scroll_to = path;
         cx.notify();
+    }
+
+    /// Scroll to the selected (or pending) file if it's present in current entries.
+    pub fn scroll_to_selected(&mut self, _cx: &mut Context<Self>) {
+        let target = self
+            .pending_scroll_to
+            .as_ref()
+            .or(self.selected_path.as_ref());
+
+        let Some(target) = target else {
+            return;
+        };
+
+        if let Some(index) = self.entries.iter().position(|e| &e.path == target) {
+            self.scroll_handle.scroll_to_item(index);
+            self.pending_scroll_to = None;
+        }
     }
 
     /// Set root directory and scan for files.
@@ -289,6 +313,10 @@ impl FileExplorerView {
                     }
                     view.entries = entries;
                     view.is_loading = false;
+                    // Scroll to pending selected path if any
+                    if view.pending_scroll_to.is_some() {
+                        view.scroll_to_selected(cx);
+                    }
                     cx.notify();
                 });
             }
@@ -800,6 +828,7 @@ impl Render for FileExplorerView {
                                                     .child(entry.name.clone())
                                             )
                                     }))
+                                    .track_scroll(&self.scroll_handle)
                                     .overflow_y_scrollbar()
                                     .context_menu({
                                         let view = cx.entity().clone();
