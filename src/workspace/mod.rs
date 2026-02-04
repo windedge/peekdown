@@ -314,6 +314,12 @@ struct WorkspaceView {
     file_watcher: FileWatchManager,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExplorerUpdateMode {
+    Default,
+    PreserveRootIfContains,
+}
+
 /// Simple FPS counter
 struct FpsCounter {
     last_frame_time: Instant,
@@ -434,12 +440,20 @@ impl WorkspaceView {
     }
 
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.open_files(vec![path], cx);
+        self.open_files_with_mode(vec![path], ExplorerUpdateMode::Default, cx);
     }
 
     pub fn open_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.open_files_with_mode(paths, ExplorerUpdateMode::Default, cx);
+    }
+
+    fn open_file_from_explorer(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_files_with_mode(vec![path], ExplorerUpdateMode::PreserveRootIfContains, cx);
+    }
+
+    fn open_files_with_mode(&mut self, paths: Vec<PathBuf>, mode: ExplorerUpdateMode, cx: &mut Context<Self>) {
         let config = self.config.clone();
-        cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+        cx.spawn(move |workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 let mut loaded = Vec::new();
@@ -488,7 +502,7 @@ impl WorkspaceView {
                              workspace.tab_scroll_handle.scroll_to_item(workspace.active_tab_index);
                          }
                          workspace.update_outline(cx);
-                         workspace.update_explorer(cx);
+                         workspace.update_explorer_with_mode(mode, cx);
                          cx.notify();
                      }).ok();
                 }
@@ -734,7 +748,7 @@ impl WorkspaceView {
                     .on_click(move |path, _window, cx| {
                         if let Some(ws) = workspace_for_click.upgrade() {
                             ws.update(cx, |ws, cx| {
-                                ws.open_file(path, cx);
+                                ws.open_file_from_explorer(path, cx);
                             });
                         }
                     })
@@ -864,6 +878,10 @@ impl WorkspaceView {
     }
 
     fn update_explorer(&mut self, cx: &mut Context<Self>) {
+        self.update_explorer_with_mode(ExplorerUpdateMode::Default, cx);
+    }
+
+    fn update_explorer_with_mode(&mut self, mode: ExplorerUpdateMode, cx: &mut Context<Self>) {
         if self.tabs.is_empty() {
             self.current_explorer_root = None;
             return;
@@ -872,7 +890,9 @@ impl WorkspaceView {
         // Get current file path and parent directory
         let tab = &self.tabs[self.active_tab_index];
         let current_file = tab.path.clone();
-        let current_dir = tab.path.parent().map(|p| p.to_path_buf());
+        let current_file = current_file.canonicalize().unwrap_or(current_file);
+        let current_file = normalize_unc_pathbuf(&current_file);
+        let current_dir = current_file.parent().map(|p| p.to_path_buf());
         let Some(current_dir) = current_dir else { return };
 
         // Resolve explorer root based on config
@@ -885,7 +905,7 @@ impl WorkspaceView {
             )
         };
 
-        let root = match root_mode {
+        let mut root = match root_mode {
             ExplorerRootMode::CurrentDir => current_dir.clone(),
             ExplorerRootMode::ProjectRoot => {
                 Self::find_project_root(&current_dir, &markers)
@@ -893,9 +913,21 @@ impl WorkspaceView {
             }
         };
 
+        let mut use_current_root = false;
+        if mode == ExplorerUpdateMode::PreserveRootIfContains {
+            if let Some(current_root) = self.current_explorer_root.clone() {
+                root = current_root;
+                use_current_root = true;
+            }
+        }
+
         // Normalize to reduce path-mismatch between watcher and explorer map keys.
-        let root = root.canonicalize().unwrap_or(root);
-        let root = normalize_unc_pathbuf(&root);
+        let root = if use_current_root {
+            root
+        } else {
+            let root = root.canonicalize().unwrap_or(root);
+            normalize_unc_pathbuf(&root)
+        };
 
         let explorer_width = self.explorer_width;
 
@@ -907,8 +939,9 @@ impl WorkspaceView {
             }
 
             // Same root - just update selection and width
+            let current_file_for_view = current_file.clone();
             explorer_view.update(cx, |view, cx| {
-                view.set_selected_path(Some(current_file), cx);
+                view.set_selected_path(Some(current_file_for_view), cx);
                 view.set_width(explorer_width, cx);
                 view.set_root_mode(root_mode, cx);
                 view.set_sort_mode(sort_mode, cx);
@@ -918,7 +951,6 @@ impl WorkspaceView {
         }
 
         // Create new explorer view for this root
-        let root = root.canonicalize().unwrap_or(root);
         // Register root watcher
         if let Err(e) = self.file_watcher.watch_root(root.clone()) {
             tracing::warn!("Failed to watch explorer root {:?}: {}", root, e);
@@ -951,7 +983,7 @@ impl WorkspaceView {
                 .on_click(move |path, _window, cx| {
                     if let Some(ws) = workspace_for_click.upgrade() {
                         ws.update(cx, |ws, cx| {
-                            ws.open_file(path, cx);
+                            ws.open_file_from_explorer(path, cx);
                         });
                     }
                 })
@@ -991,13 +1023,39 @@ impl WorkspaceView {
                 })
         });
 
+        // Initialize with restored expanded_dirs from config
+        let restored_expanded = {
+            let cfg = self.config.read(cx);
+            let expanded_dirs: HashSet<PathBuf> = cfg.appearance.expanded_dirs.iter()
+                .map(|rel| root.join(rel))
+                .collect();
+            expanded_dirs
+        };
+
+        // Calculate parent directories that need to be expanded for the target file
+        let mut dirs_to_expand_for_new = restored_expanded.clone();
+        {
+            let mut current = current_file.parent();
+            while let Some(dir) = current {
+                if dir.starts_with(&root) && dir != root {
+                    dirs_to_expand_for_new.insert(dir.to_path_buf());
+                }
+                if dir == root || !dir.starts_with(&root) {
+                    break;
+                }
+                current = dir.parent();
+            }
+        }
+
         // Initialize the explorer
+        let current_file_for_view = current_file.clone();
         explorer_view.update(cx, |view, cx| {
             view.set_width(explorer_width, cx);
             view.set_root_mode(root_mode, cx);
             view.set_sort_mode(sort_mode, cx);
+            *view.expanded_dirs_mut() = dirs_to_expand_for_new;
             view.set_root(Some(root.clone()), cx);
-            view.set_selected_path(Some(current_file), cx);
+            view.set_selected_path(Some(current_file_for_view), cx);
         });
 
 
