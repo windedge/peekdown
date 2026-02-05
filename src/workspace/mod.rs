@@ -63,6 +63,7 @@ use search_bar::{SearchBar, SearchState};
 use smol::channel::Receiver;
 use crate::ipc::IpcMessage;
 use crate::file_watcher::FileWatchManager;
+use crate::services::shell;
 use serde::Deserialize;
 
 #[cfg(windows)]
@@ -299,6 +300,9 @@ struct WorkspaceView {
     outline_visible: bool,
     outline_view: Option<Entity<OutlineView>>,
     search_bar: Option<Entity<SearchBar>>,
+    tab_context_menu: Option<TabContextMenuState>,
+    tab_tooltip: Option<TabTooltipState>,
+    tab_hitboxes: Vec<(usize, Bounds<Pixels>)>,
     outline_width: f32,
     explorer_visible: bool,
     /// Explorer instances per project root (preserves state when switching tabs)
@@ -312,6 +316,19 @@ struct WorkspaceView {
     fps_counter: FpsCounter,
     // File watcher for auto-refresh
     file_watcher: FileWatchManager,
+}
+
+#[derive(Clone)]
+struct TabContextMenuState {
+    position: Point<Pixels>,
+    tab_index: usize,
+    tab_path: PathBuf,
+}
+
+#[derive(Clone)]
+struct TabTooltipState {
+    position: Point<Pixels>,
+    text: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -408,6 +425,9 @@ impl WorkspaceView {
             outline_visible,
             outline_view: None,
             search_bar: None,
+            tab_context_menu: None,
+            tab_tooltip: None,
+            tab_hitboxes: Vec::new(),
             outline_width,
             explorer_visible,
             explorer_views: HashMap::new(),
@@ -437,6 +457,65 @@ impl WorkspaceView {
         text_view_state.update(cx, |state, cx| {
             state.set_search_query("", cx);
         });
+    }
+
+    fn open_tab_context_menu(
+        &mut self,
+        tab_index: usize,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if tab_index >= self.tabs.len() {
+            return;
+        }
+        let tab_path = self.tabs[tab_index].path.clone();
+        self.tab_tooltip = None;
+        self.tab_context_menu = Some(TabContextMenuState {
+            position,
+            tab_index,
+            tab_path,
+        });
+        cx.notify();
+    }
+
+    fn close_tab_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.tab_context_menu.is_some() {
+            self.tab_context_menu = None;
+            cx.notify();
+        }
+    }
+
+    fn show_tab_tooltip(&mut self, tab_index: usize, cx: &mut Context<Self>) {
+        if tab_index >= self.tabs.len() {
+            return;
+        }
+        if self.tab_context_menu.is_some() {
+            return;
+        }
+        let tab_path = self.tabs[tab_index].path.clone();
+        let text = normalize_unc_path(&tab_path.display().to_string());
+        let position = self
+            .tab_hitboxes
+            .iter()
+            .find(|(ix, _)| *ix == tab_index)
+            .map(|(_, bounds)| {
+                let mut pos = bounds.origin;
+                // Position tooltip above tab with enough spacing for its content
+                pos.y -= px(40.);
+                pos
+            });
+
+        if let Some(position) = position {
+            self.tab_tooltip = Some(TabTooltipState { position, text });
+            cx.notify();
+        }
+    }
+
+    fn clear_tab_tooltip(&mut self, cx: &mut Context<Self>) {
+        if self.tab_tooltip.is_some() {
+            self.tab_tooltip = None;
+            cx.notify();
+        }
     }
 
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -541,6 +620,32 @@ impl WorkspaceView {
         }
         if self.search_bar.is_some() {
             // Clear search bar without restoring focus (tab is being closed)
+            self.search_bar = None;
+            self.clear_search_highlight_for_tab(self.active_tab_index, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
+        // Unregister all file watchers
+        for tab in &self.tabs {
+            if let Err(e) = self.file_watcher.unwatch(&tab.path) {
+                tracing::warn!("Failed to unwatch file {:?}: {}", tab.path, e);
+            }
+        }
+
+        // Unregister all explorer root watchers
+        for (root, _) in self.explorer_views.iter() {
+            let _ = self.file_watcher.unwatch(root);
+        }
+
+        self.tabs.clear();
+        self.active_tab_index = 0;
+        self.outline_view = None;
+        self.explorer_views.clear();
+        self.current_explorer_root = None;
+
+        if self.search_bar.is_some() {
             self.search_bar = None;
             self.clear_search_highlight_for_tab(self.active_tab_index, cx);
         }
@@ -1346,11 +1451,23 @@ impl WorkspaceView {
                 }
             }
             crate::file_watcher::WatchEvent::RootChanged(root) => {
+                // Normalize watcher root to match `explorer_views` keys.
+                let root = root.canonicalize().unwrap_or_else(|_| root.clone());
+                let root = normalize_unc_pathbuf(&root);
+
                 if let Some(view) = self.explorer_views.get(&root) {
                     tracing::debug!("Refreshing explorer for root: {:?}", root);
                     view.update(cx, |view, cx| {
                         view.refresh_entries(cx);
                     });
+                } else {
+                    // Fallback: avoid missing updates due to path normalization mismatches.
+                    tracing::debug!("Refreshing all explorers (unmatched root): {:?}", root);
+                    for view in self.explorer_views.values() {
+                        view.update(cx, |view, cx| {
+                            view.refresh_entries(cx);
+                        });
+                    }
                 }
             }
         }
@@ -1525,6 +1642,8 @@ impl Render for WorkspaceView {
 
         // Search bar overlay
         let search_bar = self.search_bar.clone();
+        let tab_context_menu = self.tab_context_menu.clone();
+        let tab_tooltip = self.tab_tooltip.clone();
 
         // Clone views for event handlers
         let explorer_for_move = self.current_explorer_view().cloned();
@@ -1704,6 +1823,174 @@ impl Render for WorkspaceView {
                             )
                     )
             )
+            .when_some(tab_tooltip, |this, tooltip| {
+                let theme = theme.clone();
+                let position = tooltip.position;
+                let text = tooltip.text.clone();
+                this.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .child(
+                                anchored()
+                                    .position(position)
+                                    .snap_to_window_with_margin(px(8.))
+                                    .anchor(Corner::BottomLeft)
+                                    .child(
+                                        div()
+                                            .bg(theme.popover)
+                                            .text_color(theme.popover_foreground)
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded(px(6.))
+                                            .shadow_md()
+                                            .py_0p5()
+                                            .px_2()
+                                            .text_sm()
+                                            .child(text),
+                                    ),
+                            )
+                    )
+                    .priority(15),
+                )
+            })
+            .when_some(tab_context_menu, |this, menu_state| {
+                let theme = theme.clone();
+                let position = menu_state.position;
+                let tab_index = menu_state.tab_index;
+                let tab_path = menu_state.tab_path.clone();
+                this.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|workspace, _event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                workspace.close_tab_context_menu(cx);
+                            }))
+                            .on_mouse_down(MouseButton::Right, cx.listener(|workspace, _event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                workspace.close_tab_context_menu(cx);
+                            }))
+                            .child(
+                                anchored()
+                                    .position(position)
+                                    .snap_to_window_with_margin(px(8.))
+                                    .anchor(Corner::TopLeft)
+                                    .child(
+                                        div()
+                                            .bg(theme.popover)
+                                            .text_color(theme.popover_foreground)
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .rounded(theme.radius)
+                                            .py_1()
+                                            .min_w(px(180.))
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Reveal in Sidebar")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        let tab_path = tab_path.clone();
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            workspace.reveal_in_explorer(tab_path.clone(), cx);
+                                                        }
+                                                    }))
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Open in File Manager")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        let tab_path = tab_path.clone();
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            shell::open_in_explorer(&tab_path);
+                                                        }
+                                                    }))
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Copy File Path")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        let tab_path = tab_path.clone();
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            let path_str = normalize_unc_path(&tab_path.to_string_lossy());
+                                                            cx.write_to_clipboard(ClipboardItem::new_string(path_str));
+                                                        }
+                                                    }))
+                                            )
+                                            .child(
+                                                div()
+                                                    .h(px(1.))
+                                                    .mx_2()
+                                                    .my_1()
+                                                    .bg(theme.border)
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Close Tab")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        let tab_path = tab_path.clone();
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            let index = workspace
+                                                                .tabs
+                                                                .iter()
+                                                                .position(|t| t.path == tab_path)
+                                                                .unwrap_or(tab_index);
+                                                            workspace.close_tab(index, cx);
+                                                        }
+                                                    }))
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Close All Tabs")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            workspace.close_all_tabs(cx);
+                                                        }
+                                                    }))
+                                            )
+                                    ),
+                            )
+                    )
+                    .priority(20),
+                )
+            })
             .child(
                 // Footer
                 div()

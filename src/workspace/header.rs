@@ -1,16 +1,14 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use super::{WorkspaceView, settings_dialog};
-use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable, tooltip::Tooltip, menu::{ContextMenuExt, PopupMenuItem}};
-use crate::services::shell;
+use gpui_component::{Icon, IconName, button::Button, ActiveTheme, button::ButtonVariants, Sizable};
+use crate::text::ElementExt;
 
 pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceView>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let config = workspace.config.clone();
     let has_tabs = !workspace.tabs.is_empty();
     let tab_scroll_handle = workspace.tab_scroll_handle.clone();
-    let workspace_entity = cx.entity().downgrade();  // Get weak reference to workspace
-
     // Tab bar design:
     // - No bottom border line on header
     // - Active tab has same background as content area (seamless)
@@ -30,14 +28,20 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .flex_grow()
                 .items_end()
                 .overflow_x_scroll()
+                .on_prepaint({
+                    let view = cx.entity().clone();
+                    move |_bounds, _window, cx| {
+                        view.update(cx, |view, _cx| {
+                            view.tab_hitboxes.clear();
+                        });
+                    }
+                })
                 .track_scroll(&tab_scroll_handle)
                 .pl_2()
                 .children(workspace.tabs.iter().enumerate().map(|(ix, tab)| {
                     let is_active = ix == workspace.active_tab_index;
                     let is_last = ix == workspace.tabs.len() - 1;
-                    let tab_path_str = super::normalize_unc_path(&tab.path.display().to_string());
-                    let tab_path_tooltip = tab_path_str.clone();
-                    let tab_path_buf = tab.path.clone();
+                    let tab_index = ix;
 
                     div()
                         .id(("tab", ix))
@@ -48,7 +52,25 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .gap_2()
                         .text_sm()
                         .cursor_pointer()
-                        .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tab_path_tooltip.clone())).into())
+                        .on_prepaint({
+                            let view = cx.entity().clone();
+                            let tab_index = ix;
+                            move |bounds, _window, cx| {
+                                view.update(cx, |view, _cx| {
+                                    view.tab_hitboxes.push((tab_index, bounds));
+                                });
+                            }
+                        })
+                        .on_hover(cx.listener({
+                            let tab_index = ix;
+                            move |workspace, hovering: &bool, _window, cx| {
+                                if *hovering {
+                                    workspace.show_tab_tooltip(tab_index, cx);
+                                } else {
+                                    workspace.clear_tab_tooltip(cx);
+                                }
+                            }
+                        }))
                         .when(is_active, |this| {
                             this
                                 .bg(theme.background)
@@ -68,60 +90,10 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .on_click(cx.listener(move |workspace, _, _window, cx| {
                             workspace.activate_tab(ix, cx);
                         }))
-                        .context_menu({
-                            let tab_path_buf = tab_path_buf.clone();
-                            let tab_path_str = tab_path_str.clone();
-                            let tab_index = ix;
-                            let ws_for_reveal = workspace_entity.clone();
-                            let ws_for_close = workspace_entity.clone();
-                            move |menu, _window, _cx| {
-                                menu.item(
-                                    PopupMenuItem::new("Reveal in Sidebar")
-                                        .on_click({
-                                            let ws_for_reveal = ws_for_reveal.clone();
-                                            let tab_path_buf = tab_path_buf.clone();
-                                            move |_, _window, cx| {
-                                                if let Some(ws) = ws_for_reveal.upgrade() {
-                                                    let path = tab_path_buf.clone();
-                                                    ws.update(cx, move |workspace, cx| {
-                                                        workspace.reveal_in_explorer(path, cx);
-                                                    });
-                                                }
-                                            }
-                                        })
-                                )
-                                .item(
-                                    PopupMenuItem::new("Open in File Manager")
-                                        .on_click({
-                                            let tab_path_buf = tab_path_buf.clone();
-                                            move |_, _window, _cx| shell::open_in_explorer(&tab_path_buf)
-                                        })
-                                )
-                                .item(
-                                    PopupMenuItem::new("Copy File Path")
-                                        .on_click({
-                                            let tab_path_str = tab_path_str.clone();
-                                            move |_, _window, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(tab_path_str.clone()));
-                                            }
-                                        })
-                                )
-                                .separator()
-                                .item(
-                                    PopupMenuItem::new("Close Tab")
-                                        .on_click({
-                                            let ws_for_close = ws_for_close.clone();
-                                            move |_, _window, cx| {
-                                                if let Some(ws) = ws_for_close.upgrade() {
-                                                    ws.update(cx, |workspace, cx| {
-                                                        workspace.close_tab(tab_index, cx);
-                                                    });
-                                                }
-                                            }
-                                        })
-                                )
-                            }
-                        })
+                        .on_mouse_down(MouseButton::Right, cx.listener(move |workspace, event: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            workspace.open_tab_context_menu(tab_index, event.position, cx);
+                        }))
                         .child(
                             // Use relative positioning with two layers to prevent width jumping
                             // when font weight changes between active/inactive states
