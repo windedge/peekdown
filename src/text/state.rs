@@ -333,9 +333,17 @@ impl TextViewState {
 
     /// Save bounds and unselect if bounds changed.
     pub(super) fn update_bounds(&mut self, bounds: Bounds<Pixels>) {
+        let width_changed = self.bounds.size.width != bounds.size.width;
+
         if self.bounds.size != bounds.size {
             self.clear_selection();
         }
+
+        if width_changed {
+            let block_count = self.block_count();
+            self.list_state.reset(block_count);
+        }
+
         self.bounds = bounds;
     }
 

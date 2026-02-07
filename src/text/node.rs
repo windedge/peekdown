@@ -453,6 +453,14 @@ impl Table {
             .unwrap_or(Self::DEFAULT_COLUMN_WIDTH)
     }
 
+    pub(crate) fn max_column_count(&self) -> usize {
+        self.children
+            .iter()
+            .map(|row| row.children.len())
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Calculate column widths based on cell text content.
     /// Should be called once after parsing is complete.
     pub(crate) fn calculate_column_widths(&mut self) {
@@ -472,6 +480,36 @@ impl Table {
         }
 
         self.column_widths = col_widths;
+    }
+
+    pub(crate) fn normalized_column_ratios(
+        &self,
+        column_count: usize,
+        min_weight: usize,
+        max_weight: usize,
+        padding_weight: usize,
+    ) -> Vec<f32> {
+        if column_count == 0 {
+            return vec![];
+        }
+
+        let min_weight = min_weight.max(1);
+        let max_weight = max_weight.max(min_weight);
+        let mut weights = Vec::with_capacity(column_count);
+
+        for index in 0..column_count {
+            let column_width = self.column_width(index);
+            let weight = column_width.clamp(min_weight, max_weight) + padding_weight;
+            weights.push(weight as f32);
+        }
+
+        let total_weight: f32 = weights.iter().sum();
+        if total_weight <= f32::EPSILON {
+            let ratio = 1.0 / column_count as f32;
+            return vec![ratio; column_count];
+        }
+
+        weights.into_iter().map(|weight| weight / total_weight).collect()
     }
 }
 
@@ -1279,74 +1317,106 @@ impl BlockNode {
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
-        const MAX_LENGTH: usize = 150;
+        const MAX_COLUMN_WEIGHT: usize = 150;
+        const MIN_COLUMN_WEIGHT: usize = 6;
+        const COLUMN_PADDING_WEIGHT: usize = 3;
+        const ESTIMATED_CHAR_WIDTH_PX: f32 = 9.0;
 
         match item {
-            BlockNode::Table(table) => div()
-                .pb(rems(1.))
-                .w_full()
-                .child(
-                    div()
-                        .id(("table", options.ix))
-                        .w_full()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded(cx.theme().radius)
-                        .children({
-                            let mut rows = Vec::with_capacity(table.children.len());
-                            for (row_ix, row) in table.children.iter().enumerate() {
-                                rows.push(
-                                    div()
-                                        .id("row")
-                                        .w_full()
-                                        .when(row_ix < table.children.len() - 1, |this| {
-                                            this.border_b_1()
-                                        })
-                                        .border_color(cx.theme().border)
-                                        .flex()
-                                        .flex_row()
-                                        .children({
-                                            let mut cells = Vec::with_capacity(row.children.len());
-                                            for (ix, cell) in row.children.iter().enumerate() {
-                                                let align = table.column_align(ix);
-                                                let is_last_col = ix == row.children.len() - 1;
-                                                // Use pre-calculated column width instead of computing each render
-                                                let len = table.column_width(ix).min(MAX_LENGTH);
+            BlockNode::Table(table) => {
+                let column_count = table.max_column_count();
+                let column_ratios = table.normalized_column_ratios(
+                    column_count,
+                    MIN_COLUMN_WEIGHT,
+                    MAX_COLUMN_WEIGHT,
+                    COLUMN_PADDING_WEIGHT,
+                );
+                let column_weights = (0..column_count)
+                    .map(|index| {
+                        table.column_width(index).clamp(MIN_COLUMN_WEIGHT, MAX_COLUMN_WEIGHT)
+                            + COLUMN_PADDING_WEIGHT
+                    })
+                    .collect::<Vec<_>>();
+                let total_column_weight = column_weights.iter().sum::<usize>().max(1);
+                let estimated_table_width = total_column_weight as f32 * ESTIMATED_CHAR_WIDTH_PX;
 
-                                                cells.push(
-                                                    div()
-                                                        .id("cell")
-                                                        .flex()
-                                                        .when(
-                                                            align == ColumnumnAlign::Center,
-                                                            |this| this.justify_center(),
-                                                        )
-                                                        .when(
-                                                            align == ColumnumnAlign::Right,
-                                                            |this| this.justify_end(),
-                                                        )
-                                                        .w(Length::Definite(relative(len as f32)))
-                                                        .px_2()
-                                                        .py_1()
-                                                        .when(!is_last_col, |this| {
-                                                            this.border_r_1()
-                                                                .border_color(cx.theme().border)
-                                                        })
-                                                        .truncate()
-                                                        .child(
-                                                            cell.children
-                                                                .render(node_cx, window, cx),
-                                                        ),
-                                                )
-                                            }
-                                            cells
-                                        }),
-                                )
-                            }
-                            rows
-                        }),
-                )
-                .into_any_element(),
+                div()
+                    .pb(rems(1.))
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .child(
+                        div()
+                            .id(("table", options.ix))
+                            .w_full()
+                            .max_w(px(estimated_table_width))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded(cx.theme().radius)
+                            .children({
+                                let mut rows = Vec::with_capacity(table.children.len());
+                                for (row_ix, row) in table.children.iter().enumerate() {
+                                    rows.push(
+                                        div()
+                                            .id("row")
+                                            .w_full()
+                                            .when(row_ix < table.children.len() - 1, |this| {
+                                                this.border_b_1()
+                                            })
+                                            .border_color(cx.theme().border)
+                                            .flex()
+                                            .flex_row()
+                                            .children({
+                                                let mut cells =
+                                                    Vec::with_capacity(row.children.len());
+                                                for (ix, cell) in row.children.iter().enumerate() {
+                                                    let align = table.column_align(ix);
+                                                    let is_last_col = ix == row.children.len() - 1;
+                                                    let fallback_ratio =
+                                                        1.0 / row.children.len().max(1) as f32;
+                                                    let column_ratio = column_ratios
+                                                        .get(ix)
+                                                        .copied()
+                                                        .unwrap_or(fallback_ratio);
+
+                                                    cells.push(
+                                                        div()
+                                                            .id("cell")
+                                                            .flex()
+                                                            .min_w(px(0.))
+                                                            .when(
+                                                                align == ColumnumnAlign::Center,
+                                                                |this| this.justify_center(),
+                                                            )
+                                                            .when(
+                                                                align == ColumnumnAlign::Right,
+                                                                |this| this.justify_end(),
+                                                            )
+                                                            .w(Length::Definite(relative(
+                                                                column_ratio,
+                                                            )))
+                                                            .px_2()
+                                                            .py_1()
+                                                            .when(!is_last_col, |this| {
+                                                                this.border_r_1()
+                                                                    .border_color(cx.theme().border)
+                                                            })
+                                                            .whitespace_normal()
+                                                            .child(
+                                                                cell.children
+                                                                    .render(node_cx, window, cx),
+                                                            ),
+                                                    )
+                                                }
+                                                cells
+                                            }),
+                                    )
+                                }
+                                rows
+                            }),
+                    )
+                    .into_any_element()
+            }
             _ => div().into_any_element(),
         }
     }
@@ -1476,5 +1546,71 @@ impl BlockNode {
                 div().into_any_element()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Paragraph, Table, TableCell, TableRow};
+
+    fn make_cell(text: &str) -> TableCell {
+        let mut paragraph = Paragraph::default();
+        paragraph.push_str(text);
+        TableCell {
+            children: paragraph,
+            width: None,
+        }
+    }
+
+    #[test]
+    fn calculate_column_widths_uses_longest_cell_text() {
+        let mut table = Table {
+            children: vec![
+                TableRow {
+                    children: vec![make_cell("12345678"), make_cell("123456")],
+                },
+                TableRow {
+                    children: vec![make_cell("123456789012"), make_cell("1234567")],
+                },
+            ],
+            ..Default::default()
+        };
+
+        table.calculate_column_widths();
+
+        assert_eq!(table.column_widths, vec![12, 7]);
+    }
+
+    #[test]
+    fn normalized_column_ratios_respect_min_and_max_weights() {
+        let table = Table {
+            column_widths: vec![2, 10, 200],
+            ..Default::default()
+        };
+
+        let ratios = table.normalized_column_ratios(3, 8, 150, 0);
+        let expected = [8.0 / 168.0, 10.0 / 168.0, 150.0 / 168.0];
+
+        assert_eq!(ratios.len(), 3);
+        for (ratio, expected_ratio) in ratios.iter().zip(expected) {
+            assert!((ratio - expected_ratio).abs() < 1e-6);
+        }
+
+        let total: f32 = ratios.iter().sum();
+        assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalized_column_ratios_fill_missing_columns_with_default_width() {
+        let table = Table {
+            column_widths: vec![20],
+            ..Default::default()
+        };
+
+        let ratios = table.normalized_column_ratios(2, 8, 150, 0);
+
+        assert_eq!(ratios.len(), 2);
+        assert!((ratios[0] - (20.0 / 28.0)).abs() < 1e-6);
+        assert!((ratios[1] - (8.0 / 28.0)).abs() < 1e-6);
     }
 }
