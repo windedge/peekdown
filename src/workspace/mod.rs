@@ -500,8 +500,8 @@ impl WorkspaceView {
             .find(|(ix, _)| *ix == tab_index)
             .map(|(_, bounds)| {
                 let mut pos = bounds.origin;
-                // Position tooltip above tab with enough spacing for its content
-                pos.y -= px(40.);
+                // Position tooltip below tab with small spacing.
+                pos.y += bounds.size.height + px(4.);
                 pos
             });
 
@@ -1836,7 +1836,7 @@ impl Render for WorkspaceView {
                                 anchored()
                                     .position(position)
                                     .snap_to_window_with_margin(px(8.))
-                                    .anchor(Corner::BottomLeft)
+                                    .anchor(Corner::TopLeft)
                                     .child(
                                         div()
                                             .bg(theme.popover)
