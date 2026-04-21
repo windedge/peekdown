@@ -302,6 +302,7 @@ struct WorkspaceView {
     search_bar: Option<Entity<SearchBar>>,
     tab_context_menu: Option<TabContextMenuState>,
     tab_tooltip: Option<TabTooltipState>,
+    tab_bar_bounds: Option<Bounds<Pixels>>,
     tab_hitboxes: Vec<(usize, Bounds<Pixels>)>,
     outline_width: f32,
     explorer_visible: bool,
@@ -427,6 +428,7 @@ impl WorkspaceView {
             search_bar: None,
             tab_context_menu: None,
             tab_tooltip: None,
+            tab_bar_bounds: None,
             tab_hitboxes: Vec::new(),
             outline_width,
             explorer_visible,
@@ -515,6 +517,37 @@ impl WorkspaceView {
         if self.tab_tooltip.is_some() {
             self.tab_tooltip = None;
             cx.notify();
+        }
+    }
+
+    fn ensure_tab_visible(&mut self, tab_index: usize) {
+        let Some(tab_bar_bounds) = self.tab_bar_bounds else {
+            return;
+        };
+        let Some((_, tab_bounds)) = self.tab_hitboxes.iter().find(|(ix, _)| *ix == tab_index) else {
+            return;
+        };
+
+        let current_offset = self.tab_scroll_handle.offset();
+        let max_offset = self.tab_scroll_handle.max_offset();
+        let mut next_offset_x = current_offset.x;
+
+        let visible_left = tab_bar_bounds.left();
+        let visible_right = tab_bar_bounds.right();
+        let tab_left = tab_bounds.left() + current_offset.x;
+        let tab_right = tab_bounds.right() + current_offset.x;
+
+        if tab_left < visible_left {
+            next_offset_x = visible_left - tab_bounds.left();
+        } else if tab_right > visible_right {
+            next_offset_x = visible_right - tab_bounds.right();
+        }
+
+        next_offset_x = next_offset_x.clamp(-max_offset.width, px(0.));
+
+        if next_offset_x != current_offset.x {
+            self.tab_scroll_handle
+                .set_offset(point(next_offset_x, current_offset.y));
         }
     }
 
@@ -618,6 +651,10 @@ impl WorkspaceView {
             self.update_explorer(cx);
             self.cleanup_unused_explorers(cx);
         }
+        // Ensure the new active tab is scrolled into view
+        if !self.tabs.is_empty() {
+            self.tab_scroll_handle.scroll_to_item(self.active_tab_index);
+        }
         if self.search_bar.is_some() {
             // Clear search bar without restoring focus (tab is being closed)
             self.search_bar = None;
@@ -649,6 +686,44 @@ impl WorkspaceView {
             self.search_bar = None;
             self.clear_search_highlight_for_tab(self.active_tab_index, cx);
         }
+        cx.notify();
+    }
+
+    fn close_other_tabs(&mut self, keep_index: usize, cx: &mut Context<Self>) {
+        if keep_index >= self.tabs.len() || self.tabs.len() <= 1 {
+            return;
+        }
+
+        // Collect indices of tabs to remove (all except keep_index)
+        let indices_to_remove: Vec<usize> = (0..self.tabs.len())
+            .filter(|&i| i != keep_index)
+            .collect();
+
+        // Unregister file watchers for tabs being closed
+        for &i in &indices_to_remove {
+            let path = self.tabs[i].path.clone();
+            if let Err(e) = self.file_watcher.unwatch(&path) {
+                tracing::warn!("Failed to unwatch file {:?}: {}", path, e);
+            }
+        }
+
+        // Keep only the specified tab
+        let kept_tab = self.tabs.remove(keep_index);
+        self.tabs.clear();
+        self.tabs.push(kept_tab);
+
+        self.active_tab_index = 0;
+        self.tab_scroll_handle.scroll_to_item(0);
+
+        // Clear search if open
+        if self.search_bar.is_some() {
+            self.search_bar = None;
+            self.clear_search_highlight_for_tab(0, cx);
+        }
+
+        self.update_outline(cx);
+        self.update_explorer(cx);
+        self.cleanup_unused_explorers(cx);
         cx.notify();
     }
 
@@ -1966,6 +2041,28 @@ impl Render for WorkspaceView {
                                                                 .position(|t| t.path == tab_path)
                                                                 .unwrap_or(tab_index);
                                                             workspace.close_tab(index, cx);
+                                                        }
+                                                    }))
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .text_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.accent))
+                                                    .child("Close Other Tabs")
+                                                    .on_mouse_down(MouseButton::Left, cx.listener({
+                                                        let tab_path = tab_path.clone();
+                                                        move |workspace, _event: &MouseDownEvent, _window, cx| {
+                                                            cx.stop_propagation();
+                                                            workspace.close_tab_context_menu(cx);
+                                                            let index = workspace
+                                                                .tabs
+                                                                .iter()
+                                                                .position(|t| t.path == tab_path)
+                                                                .unwrap_or(tab_index);
+                                                            workspace.close_other_tabs(index, cx);
                                                         }
                                                     }))
                                             )

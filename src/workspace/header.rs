@@ -30,8 +30,9 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .overflow_x_scroll()
                 .on_prepaint({
                     let view = cx.entity().clone();
-                    move |_bounds, _window, cx| {
+                    move |bounds, _window, cx| {
                         view.update(cx, |view, _cx| {
+                            view.tab_bar_bounds = Some(bounds);
                             view.tab_hitboxes.clear();
                         });
                     }
@@ -47,6 +48,7 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .id(("tab", ix))
                         .flex()
                         .items_center()
+                        .flex_shrink_0()
                         .h(px(34.))
                         .px_3()
                         .gap_2()
@@ -55,9 +57,13 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .on_prepaint({
                             let view = cx.entity().clone();
                             let tab_index = ix;
+                            let is_active = is_active;
                             move |bounds, _window, cx| {
                                 view.update(cx, |view, _cx| {
                                     view.tab_hitboxes.push((tab_index, bounds));
+                                    if is_active {
+                                        view.ensure_tab_visible(tab_index);
+                                    }
                                 });
                             }
                         })
