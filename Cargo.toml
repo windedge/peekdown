@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 gpui = "0.2.2"
-gpui-component = { version = "0.5", features = ["tree-sitter-languages"] }
+gpui-component = { version = "0.5.1", features = ["tree-sitter-languages"] }
 gpui-component-assets = "0.5"
 smol = "2.0"
 async-fs = "2.0"
