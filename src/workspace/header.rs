@@ -30,9 +30,40 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                 .overflow_x_scroll()
                 .on_prepaint({
                     let view = cx.entity().clone();
-                    move |bounds, _window, cx| {
+                    move |_container_bounds, _window, cx| {
                         view.update(cx, |view, _cx| {
-                            view.tab_bar_bounds = Some(bounds);
+                            if let Some(target_index) = view.scroll_target_tab.take() {
+                                let handle = &view.tab_scroll_handle;
+                                if let Some((_, tab_bounds)) = view.tab_hitboxes.iter().find(|(ix, _)| *ix == target_index) {
+                                    let offset = handle.offset();
+                                    let max_offset = handle.max_offset();
+                                    let bounds = handle.bounds();
+                                    let viewport_width = bounds.size.width;
+
+                                    let tab_content_left = tab_bounds.left() - bounds.left();
+                                    let tab_content_right = tab_bounds.right() - bounds.left();
+                                    let vis_content_left = -offset.x;
+                                    let vis_content_right = -offset.x + viewport_width;
+
+                                    let fully_visible = tab_content_left >= vis_content_left
+                                        && tab_content_right <= vis_content_right;
+
+                                    if !fully_visible {
+                                        let mut new_x = offset.x;
+                                        if tab_content_right > vis_content_right {
+                                            new_x = -(tab_content_right - viewport_width);
+                                        } else if tab_content_left < vis_content_left {
+                                            new_x = -tab_content_left;
+                                        }
+                                        new_x = new_x.clamp(-max_offset.width, px(0.));
+                                        if (new_x - offset.x).abs() > px(0.5) {
+                                            handle.set_offset(point(new_x, offset.y));
+                                        }
+                                    }
+                                } else {
+                                    view.scroll_target_tab = Some(target_index);
+                                }
+                            }
                             view.tab_hitboxes.clear();
                         });
                     }
@@ -57,13 +88,9 @@ pub fn render_header(workspace: &mut WorkspaceView, cx: &mut Context<WorkspaceVi
                         .on_prepaint({
                             let view = cx.entity().clone();
                             let tab_index = ix;
-                            let is_active = is_active;
                             move |bounds, _window, cx| {
                                 view.update(cx, |view, _cx| {
                                     view.tab_hitboxes.push((tab_index, bounds));
-                                    if is_active {
-                                        view.ensure_tab_visible(tab_index);
-                                    }
                                 });
                             }
                         })

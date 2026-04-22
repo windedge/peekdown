@@ -302,7 +302,6 @@ struct WorkspaceView {
     search_bar: Option<Entity<SearchBar>>,
     tab_context_menu: Option<TabContextMenuState>,
     tab_tooltip: Option<TabTooltipState>,
-    tab_bar_bounds: Option<Bounds<Pixels>>,
     tab_hitboxes: Vec<(usize, Bounds<Pixels>)>,
     outline_width: f32,
     explorer_visible: bool,
@@ -313,6 +312,7 @@ struct WorkspaceView {
     explorer_width: f32,
     focus_handle: FocusHandle,
     tab_scroll_handle: ScrollHandle,
+    scroll_target_tab: Option<usize>,
     // FPS counter
     fps_counter: FpsCounter,
     // File watcher for auto-refresh
@@ -428,7 +428,6 @@ impl WorkspaceView {
             search_bar: None,
             tab_context_menu: None,
             tab_tooltip: None,
-            tab_bar_bounds: None,
             tab_hitboxes: Vec::new(),
             outline_width,
             explorer_visible,
@@ -437,6 +436,7 @@ impl WorkspaceView {
             explorer_width,
             focus_handle: cx.focus_handle(),
             tab_scroll_handle: ScrollHandle::new(),
+            scroll_target_tab: None,
             fps_counter: FpsCounter::new(),
             file_watcher,
         }
@@ -520,34 +520,60 @@ impl WorkspaceView {
         }
     }
 
-    fn ensure_tab_visible(&mut self, tab_index: usize) {
-        let Some(tab_bar_bounds) = self.tab_bar_bounds else {
-            return;
-        };
-        let Some((_, tab_bounds)) = self.tab_hitboxes.iter().find(|(ix, _)| *ix == tab_index) else {
-            return;
-        };
+    fn request_scroll_to_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let handle = self.tab_scroll_handle.clone();
+        let offset = handle.offset();
+        let max_offset = handle.max_offset();
+        let container_bounds = handle.bounds();
 
-        let current_offset = self.tab_scroll_handle.offset();
-        let max_offset = self.tab_scroll_handle.max_offset();
-        let mut next_offset_x = current_offset.x;
+        if let Some(new_offset) = Self::compute_scroll_offset(index, &handle, offset, max_offset, container_bounds) {
+            handle.set_offset(point(new_offset, offset.y));
+        } else {
+            self.scroll_target_tab = Some(index);
+        }
+        cx.notify();
+    }
 
-        let visible_left = tab_bar_bounds.left();
-        let visible_right = tab_bar_bounds.right();
-        let tab_left = tab_bounds.left() + current_offset.x;
-        let tab_right = tab_bounds.right() + current_offset.x;
+    /// Compute the scroll offset needed to make a tab fully visible.
+    /// Returns None if bounds_for_item is unavailable (tab not yet rendered).
+    /// Returns Some(offset.x) if already fully visible (no change needed).
+    fn compute_scroll_offset(
+        index: usize,
+        handle: &ScrollHandle,
+        offset: Point<Pixels>,
+        max_offset: Size<Pixels>,
+        container_bounds: Bounds<Pixels>,
+    ) -> Option<Pixels> {
+        // child 0 is an extra layout element, tabs start at index 1
+        let child_bounds = handle.bounds_for_item(index + 1)?;
+        let viewport_width = container_bounds.size.width;
 
-        if tab_left < visible_left {
-            next_offset_x = visible_left - tab_bounds.left();
-        } else if tab_right > visible_right {
-            next_offset_x = visible_right - tab_bounds.right();
+        // child_bounds is in content-space (not affected by scroll offset).
+        // Visible content range: [-offset.x, -offset.x + viewport_width]
+        let tab_content_left = child_bounds.left() - container_bounds.left();
+        let tab_content_right = child_bounds.right() - container_bounds.left();
+        let vis_content_left = -offset.x;
+        let vis_content_right = -offset.x + viewport_width;
+
+        let fully_visible = tab_content_left >= vis_content_left
+            && tab_content_right <= vis_content_right;
+
+        if fully_visible {
+            return Some(offset.x);
         }
 
-        next_offset_x = next_offset_x.clamp(-max_offset.width, px(0.));
+        let mut new_x = offset.x;
+        if tab_content_right > vis_content_right {
+            new_x = -(tab_content_right - viewport_width);
+        } else if tab_content_left < vis_content_left {
+            new_x = -tab_content_left;
+        }
+        new_x = new_x.clamp(-max_offset.width, px(0.));
 
-        if next_offset_x != current_offset.x {
-            self.tab_scroll_handle
-                .set_offset(point(next_offset_x, current_offset.y));
+        if (new_x - offset.x).abs() > px(0.5) {
+            Some(new_x)
+        } else {
+            Some(offset.x)
         }
     }
 
@@ -560,6 +586,23 @@ impl WorkspaceView {
     }
 
     fn open_file_from_explorer(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Fast path: if file is already open, activate tab synchronously
+        if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
+            self.active_tab_index = index;
+            self.request_scroll_to_tab(index, cx);
+            self.update_outline(cx);
+            cx.notify();
+            // Defer explorer update to avoid double-borrow (we're inside explorer's on_click)
+            cx.spawn(|workspace: WeakEntity<WorkspaceView>, cx: &mut AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    workspace.update(&mut cx, |workspace, cx| {
+                        workspace.update_explorer_with_mode(ExplorerUpdateMode::PreserveRootIfContains, cx);
+                    }).ok();
+                }
+            }).detach();
+            return;
+        }
         self.open_files_with_mode(vec![path], ExplorerUpdateMode::PreserveRootIfContains, cx);
     }
 
@@ -581,7 +624,7 @@ impl WorkspaceView {
                          for (path, content) in loaded {
                              if let Some(index) = workspace.tabs.iter().position(|t| t.path == path) {
                                  workspace.active_tab_index = index;
-                                 workspace.tab_scroll_handle.scroll_to_item(index);
+                                 workspace.request_scroll_to_tab(index, cx);
                                  continue;
                              }
 
@@ -611,7 +654,7 @@ impl WorkspaceView {
                              }
 
                              workspace.active_tab_index = workspace.tabs.len() - 1;
-                             workspace.tab_scroll_handle.scroll_to_item(workspace.active_tab_index);
+                             workspace.request_scroll_to_tab(workspace.active_tab_index, cx);
                          }
                          workspace.update_outline(cx);
                          workspace.update_explorer_with_mode(mode, cx);
@@ -627,6 +670,8 @@ impl WorkspaceView {
             return;
         }
 
+        self.clear_tab_tooltip(cx);
+
         // Unregister file watcher before removing tab
         let path = self.tabs[index].path.clone();
         if let Err(e) = self.file_watcher.unwatch(&path) {
@@ -637,6 +682,7 @@ impl WorkspaceView {
 
         if self.tabs.is_empty() {
             self.active_tab_index = 0;
+        self.request_scroll_to_tab(0, cx);
             self.outline_view = None;
             self.explorer_views.clear();
             self.current_explorer_root = None;
@@ -646,6 +692,7 @@ impl WorkspaceView {
             }
             if self.active_tab_index >= self.tabs.len() {
                 self.active_tab_index = self.tabs.len().saturating_sub(1);
+                self.request_scroll_to_tab(self.active_tab_index, cx);
             }
             self.update_outline(cx);
             self.update_explorer(cx);
@@ -653,7 +700,6 @@ impl WorkspaceView {
         }
         // Ensure the new active tab is scrolled into view
         if !self.tabs.is_empty() {
-            self.tab_scroll_handle.scroll_to_item(self.active_tab_index);
         }
         if self.search_bar.is_some() {
             // Clear search bar without restoring focus (tab is being closed)
@@ -664,6 +710,8 @@ impl WorkspaceView {
     }
 
     fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
+        self.clear_tab_tooltip(cx);
+
         // Unregister all file watchers
         for tab in &self.tabs {
             if let Err(e) = self.file_watcher.unwatch(&tab.path) {
@@ -678,6 +726,7 @@ impl WorkspaceView {
 
         self.tabs.clear();
         self.active_tab_index = 0;
+        self.request_scroll_to_tab(0, cx);
         self.outline_view = None;
         self.explorer_views.clear();
         self.current_explorer_root = None;
@@ -693,6 +742,8 @@ impl WorkspaceView {
         if keep_index >= self.tabs.len() || self.tabs.len() <= 1 {
             return;
         }
+
+        self.clear_tab_tooltip(cx);
 
         // Collect indices of tabs to remove (all except keep_index)
         let indices_to_remove: Vec<usize> = (0..self.tabs.len())
@@ -713,7 +764,7 @@ impl WorkspaceView {
         self.tabs.push(kept_tab);
 
         self.active_tab_index = 0;
-        self.tab_scroll_handle.scroll_to_item(0);
+        self.request_scroll_to_tab(0, cx);
 
         // Clear search if open
         if self.search_bar.is_some() {
@@ -735,7 +786,7 @@ impl WorkspaceView {
                 self.clear_search_highlight_for_tab(previous_tab_index, cx);
             }
             self.active_tab_index = index;
-            self.tab_scroll_handle.scroll_to_item(index);
+            self.request_scroll_to_tab(index, cx);
             self.update_outline(cx);
             self.update_explorer(cx);
             cx.notify();
@@ -1843,49 +1894,8 @@ impl Render for WorkspaceView {
                                     .overflow_hidden()
                                     .child(body_content)
                                     .children(outline_sidebar)
-                                    // Explorer toggle button at top-left (when explorer hidden)
-                                    .when(!self.explorer_visible && !self.tabs.is_empty(), |this| {
-                                        this.child(
-                                            deferred(
-                                                div()
-                                                    .absolute()
-                                                    .top_2()
-                                                    .left_2()
-                                                    .child(
-                                                        Button::new("explorer-toggle-btn")
-                                                            .icon(Icon::new(IconName::Folder))
-                                                            .ghost()
-                                                            .small()
-                                                            .on_click(cx.listener(|workspace, _, _window, cx| {
-                                                                workspace.toggle_explorer(cx);
-                                                            })),
-                                                    ),
-                                            )
-                                            .priority(10),
-                                        )
-                                    })
-                                    // Outline toggle button at top-right (when outline hidden and has tabs)
-                                    .when(!self.outline_visible && !self.tabs.is_empty(), |this| {
-                                        this.child(
-                                            deferred(
-                                                div()
-                                                    .absolute()
-                                                    .top_2()
-                                                    .right_2()
-                                                    .child(
-                                                        Button::new("outline-toggle-btn")
-                                                            .icon(Icon::new(IconName::Menu))
-                                                            .ghost()
-                                                            .small()
-                                                            .on_click(cx.listener(|workspace, _, _window, cx| {
-                                                                workspace.toggle_outline(cx);
-                                                            })),
-                                                    ),
-                                            )
-                                            .priority(10),
-                                        )
-                                    })
-                                    // Search bar overlay at top-right
+                
+                                                    // Search bar overlay at top-right
                                     .when_some(search_bar, |this, search_bar| {
                                         this.child(
                                             div()
@@ -2095,12 +2105,39 @@ impl Render for WorkspaceView {
                     .items_center()
                     .justify_between()
                     .h_8()
+                    .flex_shrink_0()
                     .px_4()
                     .bg(theme.tab_bar)
                     .border_t_1()
                     .border_color(theme.border)
                     .text_xs()
-                    .child(if self.tabs.is_empty() { "No file" } else { "Ready" })
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("explorer-toggle-btn")
+                                    .icon(Icon::new(if self.explorer_visible { IconName::FolderOpen } else { IconName::Folder }))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Toggle Explorer")
+                                    .on_click(cx.listener(|workspace, _, _window, cx| {
+                                        workspace.toggle_explorer(cx);
+                                    }))
+                            )
+                            .child(
+                                Button::new("outline-toggle-btn")
+                                    .icon(Icon::new(IconName::Menu))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Toggle Outline")
+                                    .on_click(cx.listener(|workspace, _, _window, cx| {
+                                        workspace.toggle_outline(cx);
+                                    }))
+                            )
+                    )
                     .when_some(fps_text, |this, fps| this.child(fps)),
             )
             // Render dialogs on top
