@@ -167,13 +167,23 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
         KeyBinding::new("ctrl-shift-e", ToggleExplorer, Some("Workspace")),
     ]);
 
-    // Read window size from config
-    let window_size = {
+    // Read window bounds from config
+    let (window_size, is_maximized) = {
         let cfg = config.read(cx);
-        size(
-            px(cfg.appearance.window_width),
-            px(cfg.appearance.window_height),
+        (
+            size(
+                px(cfg.appearance.window_width),
+                px(cfg.appearance.window_height),
+            ),
+            cfg.appearance.is_maximized,
         )
+    };
+
+    // Choose window bounds based on maximized state
+    let window_bounds = if is_maximized {
+        WindowBounds::Maximized(Bounds::centered(None, window_size, cx))
+    } else {
+        WindowBounds::Windowed(Bounds::centered(None, window_size, cx))
     };
 
     cx.open_window(
@@ -182,11 +192,7 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
                 title: Some("Peekdown".into()),
                 ..Default::default()
             }),
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                window_size,
-                cx,
-            ))),
+            window_bounds: Some(window_bounds),
             ..Default::default()
         },
         move |window, cx| {
@@ -247,10 +253,15 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
                 // Observe window bounds changes to save window size
                 cx.observe_window_bounds(window, move |_root, window, cx| {
                     if window.is_maximized() {
+                        config_for_bounds.update(cx, |config, _| {
+                            config.appearance.is_maximized = true;
+                            config.save();
+                        });
                         return;
                     }
                     let bounds = window.bounds();
                     config_for_bounds.update(cx, |config, _| {
+                        config.appearance.is_maximized = false;
                         config.appearance.window_width = bounds.size.width.into();
                         config.appearance.window_height = bounds.size.height.into();
                         config.save();

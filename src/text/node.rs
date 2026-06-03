@@ -6,10 +6,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half, HighlightStyle,
-    InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement, SharedString,
-    SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div, img,
-    prelude::FluentBuilder as _, px, relative, rems,
+    AnyElement, App, ClipboardItem, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half,
+    HighlightStyle, InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement,
+    SharedString, SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div,
+    img, prelude::FluentBuilder as _, px, relative, rems,
 };
 use markdown::mdast;
 
@@ -17,9 +17,12 @@ use gpui_component::{
     ActiveTheme as _, Icon, IconName, StyledExt, h_flex,
     highlighter::HighlightTheme,
 
+    menu::ContextMenuExt,
     tooltip::Tooltip,
     v_flex,
 };
+
+use crate::state::frontmatter::Value as FrontmatterValue;
 
 use super::{
     CodeBlockActionsFn,
@@ -67,6 +70,7 @@ pub(crate) enum BlockNode {
         html: bool,
         span: Option<Span>,
     },
+    Frontmatter(FrontmatterBlock),
     Divider {
         span: Option<Span>,
     },
@@ -89,6 +93,10 @@ impl BlockNode {
         matches!(self, Self::Break { .. })
     }
 
+    pub(super) fn is_frontmatter(&self) -> bool {
+        matches!(self, Self::Frontmatter(_))
+    }
+
     /// Combine all children, omitting the empt parent nodes.
     pub(super) fn compact(self) -> BlockNode {
         match self {
@@ -109,6 +117,7 @@ impl BlockNode {
             BlockNode::CodeBlock(code_block) => code_block.span,
             BlockNode::Table(table) => table.span,
             BlockNode::Break { span, .. } => *span,
+            BlockNode::Frontmatter(fm) => fm.span,
             BlockNode::Divider { span, .. } => *span,
             BlockNode::Definition { span, .. } => *span,
             BlockNode::Unknown { .. } => None,
@@ -144,6 +153,7 @@ impl BlockNode {
             }
             BlockNode::Definition { .. }
             | BlockNode::Break { .. }
+            | BlockNode::Frontmatter(_)
             | BlockNode::Divider { .. }
             | BlockNode::Unknown { .. } => {}
         }
@@ -222,6 +232,16 @@ impl BlockNode {
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
                     text.push('\n');
+                }
+            }
+            BlockNode::Frontmatter(fm) => {
+                for (key, value) in &fm.entries {
+                    if !key.is_empty() {
+                        text.push_str(key);
+                        text.push_str(": ");
+                        text.push_str(&value.to_string());
+                        text.push('\n');
+                    }
                 }
             }
             BlockNode::Definition { .. }
@@ -727,6 +747,22 @@ impl CodeBlock {
     }
 }
 
+/// A parsed frontmatter block rendered as a key-value table.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FrontmatterBlock {
+    /// Ordered key-value entries.
+    pub entries: Vec<(String, FrontmatterValue)>,
+    /// Byte span in the original source.
+    pub span: Option<Span>,
+}
+
+/// Create an [`InlineState`] pre-loaded with text for selection support.
+fn inline_state_for(text: &str) -> Arc<Mutex<InlineState>> {
+    let state = Arc::new(Mutex::new(InlineState::default()));
+    state.lock().unwrap().text = SharedString::from(text.to_string());
+    state
+}
+
 /// A context for rendering nodes, contains link references.
 #[derive(Default, Clone)]
 pub(crate) struct NodeContext {
@@ -1172,6 +1208,14 @@ impl BlockNode {
                     .join("\n");
                 format!("{}\n{}\n{}", header, alignments, rows)
             }
+            BlockNode::Frontmatter(fm) => {
+                let lines: Vec<String> = fm
+                    .entries
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect();
+                format!("---\n{}\n---", lines.join("\n"))
+            }
             BlockNode::Break { html, .. } => {
                 if *html {
                     "<br>".to_string()
@@ -1200,6 +1244,115 @@ impl BlockNode {
 }
 
 impl BlockNode {
+    /// Render frontmatter as a key-value property table with selectable text.
+    fn render_frontmatter(
+        fm: &FrontmatterBlock,
+        options: &NodeRenderOptions,
+        node_cx: &NodeContext,
+        cx: &mut App,
+    ) -> AnyElement {
+        if fm.entries.is_empty() {
+            return div().into_any_element();
+        }
+
+        use gpui::prelude::FluentBuilder as _;
+
+        // Use foreground (not muted_foreground) for readability on the muted background.
+        let text_color = cx.theme().foreground;
+        let border_color = cx.theme().border;
+        let mono_font = cx.theme().mono_font_family.clone();
+        let mono_size = cx.theme().mono_font_size;
+        let max_key_chars = fm
+            .entries
+            .iter()
+            .map(|(k, _)| k.chars().count())
+            .max()
+            .unwrap_or(8);
+        let key_width = px(max_key_chars as f32 * f32::from(mono_size) * 0.7 + 16.0);
+        let total = fm.entries.len();
+
+        let rows: Vec<AnyElement> = fm
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, (key, value))| {
+                let is_last = i + 1 == total;
+
+                let key_el = div()
+                    .text_color(text_color)
+                    .font_family(mono_font.clone())
+                    .text_size(mono_size)
+                    .w(key_width)
+                    .flex_shrink_0()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(Inline::new(
+                        SharedString::from(format!("fm-key-{}-{}", options.ix, i)),
+                        inline_state_for(key),
+                        vec![],
+                        vec![],
+                    ));
+
+                let val_el = div()
+                    .text_color(text_color)
+                    .font_family(mono_font.clone())
+                    .text_size(mono_size)
+                    .flex_1()
+                    .child(Inline::new(
+                        SharedString::from(format!("fm-val-{}-{}", options.ix, i)),
+                        inline_state_for(&value.to_string()),
+                        vec![],
+                        vec![],
+                    ));
+
+                h_flex()
+                    .w_full()
+                    .py_1()
+                    .when(!is_last, |this| this.border_b_1().border_color(border_color))
+                    .child(key_el)
+                    .child(val_el)
+                    .into_any_element()
+            })
+            .collect();
+
+        let yaml_text = std::rc::Rc::new({
+            let mut s = String::from("---\n");
+            for (k, v) in &fm.entries {
+                s.push_str(&format!("{}: {}\n", k, v));
+            }
+            s.push_str("---");
+            s
+        });
+
+        div()
+            .pt_3()
+            .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
+            .child(
+                div()
+                    .id(("fm", options.ix))
+                    .w_full()
+                    .border_1()
+                    .border_color(border_color)
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().muted)
+                    .p_3()
+                    .context_menu(move |menu, _window, _cx| {
+                        menu.item(
+                            gpui_component::menu::PopupMenuItem::new("Copy").on_click({
+                                let yaml_text = std::rc::Rc::clone(&yaml_text);
+                                move |_, _window, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        yaml_text.to_string(),
+                                    ));
+                                }
+                            }),
+                        )
+                        .menu("Select All", Box::new(crate::workspace::SelectAll))
+                    })
+                    .child(v_flex().w_full().gap_1().children(rows)),
+            )
+            .into_any_element()
+    }
+
     fn render_list_item(
         item: &BlockNode,
         ix: usize,
@@ -1532,6 +1685,7 @@ impl BlockNode {
             BlockNode::Table { .. } => {
                 Self::render_table(self, &options, node_cx, window, cx).into_any_element()
             }
+            BlockNode::Frontmatter(fm) => Self::render_frontmatter(fm, &options, node_cx, cx),
             BlockNode::Divider { .. } => div()
                 .pb(mb)
                 .child(div().id("divider").bg(cx.theme().border).h(px(2.)))

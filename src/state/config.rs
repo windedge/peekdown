@@ -73,6 +73,9 @@ pub struct AppearanceConfig {
     /// Window height in pixels
     #[serde(default = "default_window_height")]
     pub window_height: f32,
+    /// Whether the window was maximized when last closed
+    #[serde(default)]
+    pub is_maximized: bool,
     /// Whether the outline sidebar is visible
     #[serde(default = "default_outline_visible")]
     pub outline_visible: bool,
@@ -195,6 +198,7 @@ impl Default for AppearanceConfig {
             scroll_speed: default_scroll_speed(),
             window_width: default_window_width(),
             window_height: default_window_height(),
+            is_maximized: false,
             outline_visible: default_outline_visible(),
             outline_width: default_outline_width(),
             font_family: default_font_family(),

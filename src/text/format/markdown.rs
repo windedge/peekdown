@@ -11,8 +11,8 @@ use gpui_component::highlighter::HighlightTheme;
 use super::super::{
     document::ParsedDocument,
     node::{
-        self, BlockNode, CodeBlock, ImageNode, InlineNode, LinkMark, NodeContext, Paragraph,
-        Span, Table, TableRow, TextMark,
+        self, BlockNode, CodeBlock, ImageNode, InlineNode, LinkMark, NodeContext,
+        Paragraph, Span, Table, TableRow, TextMark,
     },
 };
 
@@ -51,7 +51,9 @@ pub(crate) fn parse(
     cx: &mut NodeContext,
     highlight_theme: &HighlightTheme,
 ) -> Result<ParsedDocument, SharedString> {
-    markdown::to_mdast(&source, &ParseOptions::gfm())
+    let mut options = ParseOptions::gfm();
+    options.constructs.frontmatter = true;
+    markdown::to_mdast(&source, &options)
         .map(|n| ast_to_document(source, n, cx, highlight_theme))
         .map_err(|e| e.to_string().into())
 }
@@ -381,12 +383,26 @@ fn ast_to_node(
             highlight_theme,
             new_span(val.position, cx),
         )),
-        Node::Yaml(val) => BlockNode::CodeBlock(CodeBlock::new(
-            val.value.into(),
-            Some("yml".into()),
-            highlight_theme,
-            new_span(val.position, cx),
-        )),
+        Node::Yaml(val) => {
+            let span = new_span(val.position, cx);
+            match crate::state::frontmatter::parse(&val.value) {
+                Ok(fm) => BlockNode::Frontmatter(node::FrontmatterBlock {
+                    entries: fm.entries,
+                    span,
+                }),
+                Err(_) => {
+                    if cfg!(debug_assertions) {
+                        tracing::warn!("failed parsing YAML frontmatter, falling back to code block");
+                    }
+                    BlockNode::CodeBlock(CodeBlock::new(
+                        val.value.into(),
+                        Some("yml".into()),
+                        highlight_theme,
+                        span,
+                    ))
+                }
+            }
+        },
         Node::Toml(val) => BlockNode::CodeBlock(CodeBlock::new(
             val.value.into(),
             Some("toml".into()),

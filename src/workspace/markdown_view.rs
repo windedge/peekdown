@@ -8,6 +8,7 @@ use crate::text::document::HeadingItem;
 use crate::text::ElementExt;
 use gpui_component::{ActiveTheme, menu::ContextMenuExt};
 use crate::state::document::Document;
+use crate::state::frontmatter::Frontmatter;
 use crate::state::config::{AppConfig, LayoutMode};
 use crate::services::shell;
 use super::{OpenSearch, RefreshDocument, SelectAll, WorkspaceView};
@@ -87,6 +88,12 @@ impl MarkdownView {
     /// Get the file path of the document.
     pub fn file_path(&self, cx: &App) -> PathBuf {
         self.document.read(cx).path.clone()
+    }
+
+    /// Get the parsed frontmatter of the document, if any.
+    #[allow(dead_code)]
+    pub fn frontmatter(&self, cx: &App) -> Option<Frontmatter> {
+        self.document.read(cx).frontmatter.clone()
     }
 }
 
