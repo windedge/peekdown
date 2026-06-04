@@ -42,10 +42,16 @@ pub(super) fn normalize_unc_pathbuf(path: &std::path::Path) -> PathBuf {
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::path::PathBuf;
+
+/// Width of the sidebar resize handle in pixels.
+const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+/// Min/max width for the unified sidebar (matches outline/explorer limits).
+const SIDEBAR_MIN_WIDTH: f32 = 120.0;
+const SIDEBAR_MAX_WIDTH: f32 = 400.0;
 use std::time::Instant;
 use std::collections::{HashMap, HashSet};
 use crate::state::document::Document;
-use gpui_component::{ActiveTheme, Root, button::Button, button::ButtonVariants, Icon, IconName, Sizable};
+use gpui_component::{ActiveTheme, Root, h_flex, v_flex, button::Button, button::ButtonVariants, Icon, IconName, Sizable};
 use crate::state::config::{AppConfig, ExplorerRootMode, ExplorerSortMode};
 
 mod welcome;
@@ -96,6 +102,10 @@ gpui::actions!([
     RefreshDocument,
     ToggleOutline,
     ToggleExplorer,
+    // Font zoom
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 ]);
 
 #[derive(Action, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -165,6 +175,12 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
         KeyBinding::new("cmd-shift-e", ToggleExplorer, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-e", ToggleExplorer, Some("Workspace")),
+
+        // Font zoom
+        KeyBinding::new("ctrl-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("ctrl--", ZoomOut, Some("Workspace")),
+        KeyBinding::new("ctrl-0", ZoomReset, Some("Workspace")),
     ]);
 
     // Read window bounds from config
@@ -268,22 +284,25 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
                     });
                 }).detach();
 
-                // Save outline and explorer visibility and width on app quit
+                // Save sidebar state on app quit
                 cx.on_app_quit({
                     let config = config_for_quit.clone();
                     let workspace = workspace_for_quit.clone();
                     move |_root, cx| {
                         if let Some(ws) = workspace.upgrade() {
                             let ws = ws.read(cx);
-                            let outline_visible = ws.outline_visible;
-                            let outline_width = ws.outline_width;
-                            let explorer_visible = ws.explorer_visible;
-                            let explorer_width = ws.explorer_width;
+                            let sidebar_visible = ws.sidebar_visible;
+                            let sidebar_width = ws.sidebar_width;
+                            let sidebar_tab = match ws.sidebar_tab {
+                                SidebarTab::Explorer => "explorer",
+                                SidebarTab::Outline => "outline",
+                            };
                             config.update(cx, |config, _| {
-                                config.appearance.outline_visible = outline_visible;
-                                config.appearance.outline_width = outline_width;
-                                config.appearance.explorer_visible = explorer_visible;
-                                config.appearance.explorer_width = explorer_width;
+                                config.appearance.sidebar_visible = sidebar_visible;
+                                config.appearance.outline_visible = false;
+                                config.appearance.explorer_visible = false;
+                                config.appearance.sidebar_width = sidebar_width;
+                                config.appearance.sidebar_tab = sidebar_tab.to_string();
                                 config.save();
                             });
                         }
@@ -308,19 +327,21 @@ struct WorkspaceView {
     tabs: Vec<WorkspaceTab>,
     active_tab_index: usize,
     config: Entity<AppConfig>,
-    outline_visible: bool,
+    sidebar_visible: bool,
     outline_view: Option<Entity<OutlineView>>,
     search_bar: Option<Entity<SearchBar>>,
     tab_context_menu: Option<TabContextMenuState>,
     tab_tooltip: Option<TabTooltipState>,
     tab_hitboxes: Vec<(usize, Bounds<Pixels>)>,
-    outline_width: f32,
-    explorer_visible: bool,
     /// Explorer instances per project root (preserves state when switching tabs)
     explorer_views: HashMap<PathBuf, Entity<FileExplorerView>>,
     /// Current active explorer root
     current_explorer_root: Option<PathBuf>,
-    explorer_width: f32,
+    sidebar_tab: SidebarTab,
+    sidebar_width: f32,
+    sidebar_is_resizing: bool,
+    sidebar_resize_start_x: f32,
+    sidebar_resize_start_width: f32,
     focus_handle: FocusHandle,
     tab_scroll_handle: ScrollHandle,
     scroll_target_tab: Option<usize>,
@@ -347,6 +368,12 @@ struct TabTooltipState {
 enum ExplorerUpdateMode {
     Default,
     PreserveRootIfContains,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarTab {
+    Explorer,
+    Outline,
 }
 
 /// Simple FPS counter
@@ -386,13 +413,10 @@ impl FpsCounter {
 
 impl WorkspaceView {
     pub fn new(cx: &mut Context<Self>, config: Entity<AppConfig>) -> Self {
-        let (outline_visible, outline_width, explorer_visible, explorer_width, auto_refresh) = {
+        let (sidebar_visible, auto_refresh) = {
             let cfg = config.read(cx);
             (
-                cfg.appearance.outline_visible,
-                cfg.appearance.outline_width,
-                cfg.appearance.explorer_visible,
-                cfg.appearance.explorer_width,
+                cfg.appearance.sidebar_visible,
                 cfg.appearance.auto_refresh,
             )
         };
@@ -430,21 +454,37 @@ impl WorkspaceView {
             cx.notify();
         }).detach();
 
+        // Restore sidebar width and tab from config
+        let cfg_ref = config.read(cx);
+        let sidebar_tab_str = cfg_ref.appearance.sidebar_tab.clone();
+        let sidebar_tab = match sidebar_tab_str.as_str() {
+            "outline" => SidebarTab::Outline,
+            _ => SidebarTab::Explorer,
+        };
+        let sidebar_width = if cfg_ref.appearance.sidebar_width > 0.0 {
+            cfg_ref.appearance.sidebar_width
+        } else {
+            // Fallback to old explorer_width for configs that don't have sidebar_width yet
+            cfg_ref.appearance.explorer_width
+        };
+
         Self {
             tabs: Vec::new(),
             active_tab_index: 0,
             config: config_clone,
-            outline_visible,
+            sidebar_visible,
             outline_view: None,
             search_bar: None,
             tab_context_menu: None,
             tab_tooltip: None,
             tab_hitboxes: Vec::new(),
-            outline_width,
-            explorer_visible,
             explorer_views: HashMap::new(),
             current_explorer_root: None,
-            explorer_width,
+            sidebar_tab,
+            sidebar_width,
+            sidebar_is_resizing: false,
+            sidebar_resize_start_x: 0.0,
+            sidebar_resize_start_width: sidebar_width,
             focus_handle: cx.focus_handle(),
             tab_scroll_handle: ScrollHandle::new(),
             scroll_target_tab: None,
@@ -636,36 +676,43 @@ impl WorkspaceView {
                              if let Some(index) = workspace.tabs.iter().position(|t| t.path == path) {
                                  workspace.active_tab_index = index;
                                  workspace.request_scroll_to_tab(index, cx);
-                                 continue;
+                             } else {
+                                 let title = path.file_name()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "Untitled".to_string());
+
+                                 let doc = cx.new(|_cx| Document::new(content, path.clone()));
+                                 let view = cx.new(|cx| MarkdownView::new(doc, config.clone(), workspace_weak.clone(), cx));
+
+                                 // Observe the MarkdownView's text_view_state for changes
+                                 let text_view_state = view.read(cx).text_view_state().clone();
+                                 cx.observe(&text_view_state, |workspace, _, cx| {
+                                     // Update outline when text parsing completes
+                                     workspace.update_outline(cx);
+                                 }).detach();
+
+                                 workspace.tabs.push(WorkspaceTab {
+                                     path: path.clone(),
+                                     view,
+                                     title,
+                                 });
+
+                                 // Register file watcher for auto-refresh
+                                 if let Err(e) = workspace.file_watcher.watch(path.clone()) {
+                                     tracing::warn!("Failed to watch file: {}", e);
+                                 }
+
+                                 workspace.active_tab_index = workspace.tabs.len() - 1;
+                                 workspace.request_scroll_to_tab(workspace.active_tab_index, cx);
                              }
 
-                             let title = path.file_name()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "Untitled".to_string());
-
-                             let doc = cx.new(|_cx| Document::new(content, path.clone()));
-                             let view = cx.new(|cx| MarkdownView::new(doc, config.clone(), workspace_weak.clone(), cx));
-
-                             // Observe the MarkdownView's text_view_state for changes
-                             let text_view_state = view.read(cx).text_view_state().clone();
-                             cx.observe(&text_view_state, |workspace, _, cx| {
-                                 // Update outline when text parsing completes
-                                 workspace.update_outline(cx);
-                             }).detach();
-
-                             workspace.tabs.push(WorkspaceTab {
-                                 path: path.clone(),
-                                 view,
-                                 title,
+                             // Record in recent files
+                             let normalized = path.canonicalize().unwrap_or_else(|_| path.clone());
+                             let normalized = normalize_unc_pathbuf(&normalized);
+                             config.update(cx, |cfg, _| {
+                                 cfg.add_recent_file(normalized);
+                                 cfg.save();
                              });
-
-                             // Register file watcher for auto-refresh
-                             if let Err(e) = workspace.file_watcher.watch(path) {
-                                 tracing::warn!("Failed to watch file: {}", e);
-                             }
-
-                             workspace.active_tab_index = workspace.tabs.len() - 1;
-                             workspace.request_scroll_to_tab(workspace.active_tab_index, cx);
                          }
                          workspace.update_outline(cx);
                          workspace.update_explorer_with_mode(mode, cx);
@@ -804,30 +851,64 @@ impl WorkspaceView {
         }
     }
 
-    fn toggle_outline(&mut self, cx: &mut Context<Self>) {
-        self.outline_visible = !self.outline_visible;
+    fn toggle_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if self.sidebar_tab != tab || !self.sidebar_visible {
+            self.sidebar_tab = tab;
+            self.sidebar_visible = true;
+            match tab {
+                SidebarTab::Explorer => {
+                    self.update_explorer(cx);
+                }
+                SidebarTab::Outline => {
+                    self.update_outline(cx);
+                }
+            }
 
-        // Save to config
-        let visible = self.outline_visible;
-        self.config.update(cx, |config, _| {
-            config.appearance.outline_visible = visible;
-            config.save();
-        });
+            // Save visibility to config
+            let sidebar_tab = match self.sidebar_tab {
+                SidebarTab::Explorer => "explorer",
+                SidebarTab::Outline => "outline",
+            };
+            self.config.update(cx, |config, _| {
+                config.appearance.sidebar_visible = self.sidebar_visible;
+                config.appearance.outline_visible = false;
+                config.appearance.explorer_visible = false;
+                config.appearance.sidebar_tab = sidebar_tab.to_string();
+                config.appearance.sidebar_width = self.sidebar_width;
+                config.save();
+            });
+        }
+        // If sidebar_tab is already the current tab, do nothing (keep sidebar as-is)
 
         cx.notify();
     }
 
-    fn toggle_explorer(&mut self, cx: &mut Context<Self>) {
-        self.explorer_visible = !self.explorer_visible;
-        if self.explorer_visible {
-            self.update_explorer(cx);
-        }
-        let visible = self.explorer_visible;
+    /// Close the sidebar and save visibility state to config.
+    fn close_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_visible = false;
         self.config.update(cx, |config, _| {
-            config.appearance.explorer_visible = visible;
+            config.appearance.sidebar_visible = false;
+            config.appearance.outline_visible = false;
+            config.appearance.explorer_visible = false;
             config.save();
         });
         cx.notify();
+    }
+
+    fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_visible && self.sidebar_tab == SidebarTab::Outline {
+            self.close_sidebar(cx);
+        } else {
+            self.toggle_sidebar_tab(SidebarTab::Outline, cx);
+        }
+    }
+
+    fn toggle_explorer(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_visible && self.sidebar_tab == SidebarTab::Explorer {
+            self.close_sidebar(cx);
+        } else {
+            self.toggle_sidebar_tab(SidebarTab::Explorer, cx);
+        }
     }
 
     fn update_outline(&mut self, cx: &mut Context<Self>) {
@@ -839,13 +920,13 @@ impl WorkspaceView {
         let tab = &self.tabs[self.active_tab_index];
         let headings = tab.view.read(cx).headings(cx);
         let markdown_view = tab.view.clone();
-        let outline_width = self.outline_width;
+        let sidebar_width = self.sidebar_width;
         let workspace = cx.entity().downgrade();
 
         if let Some(outline_view) = &self.outline_view {
             outline_view.update(cx, |view, cx| {
                 view.set_headings(headings);
-                view.set_width(outline_width, cx);
+                view.set_width(sidebar_width, cx);
                 view.set_on_click(move |block_index, _window, cx| {
                     markdown_view.update(cx, |view, cx| {
                         view.scroll_to_heading(block_index, cx);
@@ -858,17 +939,17 @@ impl WorkspaceView {
         let workspace_for_close = workspace.clone();
         let config_for_width = self.config.clone();
         self.outline_view = Some(cx.new(|_| {
-            OutlineView::new(headings)
-                .width(outline_width)
+            let mut view = OutlineView::new(headings)
+                .width(sidebar_width)
                 .on_width_change(move |width, cx| {
                     if let Some(ws) = workspace.upgrade() {
                         ws.update(cx, |ws, _| {
-                            ws.outline_width = width;
+                            ws.sidebar_width = width;
                         });
                     }
                     // Save width to config immediately
                     config_for_width.update(cx, |config, _| {
-                        config.appearance.outline_width = width;
+                        config.appearance.sidebar_width = width;
                         config.save();
                     });
                 })
@@ -880,10 +961,12 @@ impl WorkspaceView {
                 .on_close(move |_window, cx| {
                     if let Some(ws) = workspace_for_close.upgrade() {
                         ws.update(cx, |ws, cx| {
-                            ws.toggle_outline(cx);
+                            ws.close_sidebar(cx);
                         });
                     }
-                })
+                });
+            view.set_show_resize_handle(false);
+            view
         }));
     }
 
@@ -913,11 +996,15 @@ impl WorkspaceView {
 
     /// Reveal a file in the explorer sidebar
     fn reveal_in_explorer(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        // Ensure explorer is visible
-        if !self.explorer_visible {
-            self.explorer_visible = true;
+        // Ensure explorer sidebar is visible
+        if !self.sidebar_visible || self.sidebar_tab != SidebarTab::Explorer {
+            self.sidebar_visible = true;
+            self.sidebar_tab = SidebarTab::Explorer;
             self.config.update(cx, |config, _| {
-                config.appearance.explorer_visible = true;
+                config.appearance.sidebar_visible = true;
+                config.appearance.outline_visible = false;
+                config.appearance.explorer_visible = false;
+                config.appearance.sidebar_tab = "explorer".to_string();
                 config.save();
             });
         }
@@ -962,7 +1049,7 @@ impl WorkspaceView {
             }
 
             // Need to create a new explorer for this root
-            let explorer_width = self.explorer_width;
+            let sidebar_width = self.sidebar_width;
 
             let config = self.config.clone();
             let workspace = cx.entity().downgrade();
@@ -977,13 +1064,13 @@ impl WorkspaceView {
             let config_for_expanded = config.clone();
 
             let explorer_view = cx.new(|_| {
-                FileExplorerView::new()
+                let mut view = FileExplorerView::new()
                     .on_width_change(move |width, cx| {
                         if let Some(ws) = workspace_for_width.upgrade() {
-                            ws.update(cx, |ws, _| ws.explorer_width = width);
+                            ws.update(cx, |ws, _| ws.sidebar_width = width);
                         }
                         config_for_width.update(cx, |config, _| {
-                            config.appearance.explorer_width = width;
+                            config.appearance.sidebar_width = width;
                             config.save();
                         });
                     })
@@ -997,7 +1084,7 @@ impl WorkspaceView {
                     .on_close(move |_window, cx| {
                         if let Some(ws) = workspace_for_close.upgrade() {
                             ws.update(cx, |ws, cx| {
-                                ws.toggle_explorer(cx);
+                                ws.close_sidebar(cx);
                             });
                         }
                     })
@@ -1027,7 +1114,9 @@ impl WorkspaceView {
                     })
                     .on_edit_markers(move |window, cx| {
                         settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
-                    })
+                    });
+                view.set_show_resize_handle(false);
+                view
             });
 
             // Initialize with restored expanded_dirs from config
@@ -1056,9 +1145,10 @@ impl WorkspaceView {
 
             explorer_view.update(cx, |view, cx| {
                 // Set metadata before triggering root scan
-                view.set_width(explorer_width, cx);
+                view.set_width(sidebar_width, cx);
                 view.set_root_mode(root_mode, cx);
                 view.set_sort_mode(sort_mode, cx);
+                view.set_show_resize_handle(false);
                 *view.expanded_dirs_mut() = dirs_to_expand_for_new;
 
                 // set_root triggers async refresh_entries which uses current view state
@@ -1171,7 +1261,7 @@ impl WorkspaceView {
             normalize_unc_pathbuf(&root)
         };
 
-        let explorer_width = self.explorer_width;
+        let sidebar_width = self.sidebar_width;
 
         // Check if we already have an explorer for this root
         if let Some(explorer_view) = self.explorer_views.get(&root) {
@@ -1184,9 +1274,10 @@ impl WorkspaceView {
             let current_file_for_view = current_file.clone();
             explorer_view.update(cx, |view, cx| {
                 view.set_selected_path(Some(current_file_for_view), cx);
-                view.set_width(explorer_width, cx);
+                view.set_width(sidebar_width, cx);
                 view.set_root_mode(root_mode, cx);
                 view.set_sort_mode(sort_mode, cx);
+                view.set_show_resize_handle(false);
             });
             self.current_explorer_root = Some(root);
             return;
@@ -1212,13 +1303,13 @@ impl WorkspaceView {
         let config_for_expanded = config.clone();
 
         let explorer_view = cx.new(|_| {
-            FileExplorerView::new()
+            let mut view = FileExplorerView::new()
                 .on_width_change(move |width, cx| {
                     if let Some(ws) = workspace_for_width.upgrade() {
-                        ws.update(cx, |ws, _| ws.explorer_width = width);
+                        ws.update(cx, |ws, _| ws.sidebar_width = width);
                     }
                     config_for_width.update(cx, |config, _| {
-                        config.appearance.explorer_width = width;
+                        config.appearance.sidebar_width = width;
                         config.save();
                     });
                 })
@@ -1232,7 +1323,7 @@ impl WorkspaceView {
                 .on_close(move |_window, cx| {
                     if let Some(ws) = workspace_for_close.upgrade() {
                         ws.update(cx, |ws, cx| {
-                            ws.toggle_explorer(cx);
+                            ws.close_sidebar(cx);
                         });
                     }
                 })
@@ -1262,8 +1353,10 @@ impl WorkspaceView {
                 })
                 .on_edit_markers(move |window, cx| {
                     settings_dialog::open_settings_dialog(config_for_markers.clone(), window, cx);
-                })
-        });
+                });
+                view.set_show_resize_handle(false);
+                view
+            });
 
         // Initialize with restored expanded_dirs from config
         let restored_expanded = {
@@ -1292,9 +1385,10 @@ impl WorkspaceView {
         // Initialize the explorer
         let current_file_for_view = current_file.clone();
         explorer_view.update(cx, |view, cx| {
-            view.set_width(explorer_width, cx);
+            view.set_width(sidebar_width, cx);
             view.set_root_mode(root_mode, cx);
             view.set_sort_mode(sort_mode, cx);
+            view.set_show_resize_handle(false);
             *view.expanded_dirs_mut() = dirs_to_expand_for_new;
             view.set_root(Some(root.clone()), cx);
             view.set_selected_path(Some(current_file_for_view), cx);
@@ -1487,11 +1581,22 @@ impl WorkspaceView {
             return;
         }
 
+        // Read search options from the search bar before creating state
+        let (is_regex, is_case_sensitive) = self
+            .search_bar
+            .as_ref()
+            .map(|sb| sb.read(cx).search_flags())
+            .unwrap_or((false, false));
+
         let tab = &self.tabs[self.active_tab_index];
         let source = tab.view.read(cx).source_text(cx);
         let block_spans = tab.view.read(cx).block_spans(cx);
 
-        let mut state = SearchState::default();
+        let mut state = SearchState {
+            is_regex,
+            is_case_sensitive,
+            ..Default::default()
+        };
         state.search(source.as_ref(), query, &block_spans);
         let query_text = query.to_string();
         let text_view_state = tab.view.read(cx).text_view_state().clone();
@@ -1729,42 +1834,17 @@ impl Render for WorkspaceView {
             None
         };
 
-        // Check if explorer is resizing
-        let is_explorer_resizing = if let Some(explorer_view) = self.current_explorer_view() {
-            explorer_view.read(cx).is_resizing()
-        } else {
-            false
-        };
+        let is_resizing = self.sidebar_is_resizing;
 
-        // Check if outline is resizing
-        let is_outline_resizing = if let Some(outline_view) = &self.outline_view {
-            outline_view.read(cx).is_resizing()
-        } else {
-            false
-        };
-
-        let is_resizing = is_explorer_resizing || is_outline_resizing;
-
-        // Use cached sidebars if visible
-        let explorer_sidebar = if self.explorer_visible {
-            self.current_explorer_view().cloned()
-        } else {
-            None
-        };
-
-        let outline_sidebar = if self.outline_visible {
-            self.outline_view.clone()
-        } else {
-            None
-        };
+        // Determine sidebar visibility
+        let sidebar_visible = self.sidebar_visible;
 
         let body_content = if self.tabs.is_empty() {
             div()
                 .relative()
                 .size_full()
                 .flex_grow()
-                .child(render_welcome(cx))
-                // No outline toggle button when no documents are open
+                .child(render_welcome(&self.config, cx))
         } else {
             let tab = &self.tabs[self.active_tab_index];
             div()
@@ -1782,11 +1862,15 @@ impl Render for WorkspaceView {
         let tab_context_menu = self.tab_context_menu.clone();
         let tab_tooltip = self.tab_tooltip.clone();
 
-        // Clone views for event handlers
-        let explorer_for_move = self.current_explorer_view().cloned();
-        let explorer_for_up = self.current_explorer_view().cloned();
-        let outline_for_move = self.outline_view.clone();
-        let outline_for_up = self.outline_view.clone();
+        // Clone entities for sidebar resize handler
+        let outline_for_resize = self.outline_view.clone();
+        let explorer_for_resize = self.current_explorer_view().cloned();
+        let config_for_resize = self.config.clone();
+        let workspace_for_resize: WeakEntity<WorkspaceView> = cx.entity().downgrade();
+
+        // Clone views for sidebar content rendering
+        let current_explorer_view = self.current_explorer_view().cloned();
+        let current_outline_view = self.outline_view.clone();
 
         div()
             .flex()
@@ -1848,45 +1932,235 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(|workspace, action: &CloseTabAt, _window, cx| {
                 workspace.close_tab(action.0, cx);
             }))
+            .on_action(cx.listener(|workspace, _: &ZoomIn, _window, cx| {
+                let config = workspace.config.clone();
+                let appearance = config.update(cx, |cfg, _| {
+                    cfg.appearance.zoom_font_size(2.0);
+                    cfg.save();
+                    cfg.appearance.clone()
+                });
+                appearance.apply_font_settings(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|workspace, _: &ZoomOut, _window, cx| {
+                let config = workspace.config.clone();
+                let appearance = config.update(cx, |cfg, _| {
+                    cfg.appearance.zoom_font_size(-2.0);
+                    cfg.save();
+                    cfg.appearance.clone()
+                });
+                appearance.apply_font_settings(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|workspace, _: &ZoomReset, _window, cx| {
+                let config = workspace.config.clone();
+                let appearance = config.update(cx, |cfg, _| {
+                    cfg.appearance.reset_font_size();
+                    cfg.save();
+                    cfg.appearance.clone()
+                });
+                appearance.apply_font_settings(cx);
+                cx.notify();
+            }))
             .on_drop(cx.listener(|workspace, event: &ExternalPaths, _, cx| {
                 workspace.open_files(event.paths().to_vec(), cx);
             }))
-            // Handle global mouse move when resizing
+            // Handle global mouse move when sidebar resizing
             .when(is_resizing, |this| {
+                let outline_for_move = outline_for_resize.clone();
+                let explorer_for_move = explorer_for_resize.clone();
+                let workspace_for_move = workspace_for_resize.clone();
+
+                let workspace_for_up = workspace_for_resize.clone();
+                let config_for_up = config_for_resize.clone();
                 this.on_mouse_move(move |event: &MouseMoveEvent, _, cx| {
-                    if let Some(explorer) = &explorer_for_move {
-                        explorer.update(cx, |view, cx| {
-                            view.handle_resize_move(f32::from(event.position.x), cx);
-                        });
-                    }
-                    if let Some(outline) = &outline_for_move {
-                        outline.update(cx, |view, cx| {
-                            view.handle_resize_move(f32::from(event.position.x), cx);
+                    // Directly manage sidebar_width in WorkspaceView instead of
+                    // delegating to outline/explorer handle_resize_move (which
+                    // checks their own is_resizing flag that is never set to true
+                    // because their individual resize handles are hidden).
+                    let mouse_x = f32::from(event.position.x);
+                    if let Some(ws) = workspace_for_move.upgrade() {
+                        let _ = ws.update(cx, |ws, cx| {
+                            if !ws.sidebar_is_resizing {
+                                return;
+                            }
+                            let delta = mouse_x - ws.sidebar_resize_start_x;
+                            let new_width = (ws.sidebar_resize_start_width + delta)
+                                .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+                            ws.sidebar_width = new_width;
+                            // Sync width to child views
+                            if let Some(outline) = &outline_for_move {
+                                outline.update(cx, |view, cx| {
+                                    view.set_width(new_width, cx);
+                                });
+                            }
+                            if let Some(explorer) = &explorer_for_move {
+                                explorer.update(cx, |view, cx| {
+                                    view.set_width(new_width, cx);
+                                });
+                            }
+                            cx.notify();
                         });
                     }
                 })
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                    if let Some(explorer) = &explorer_for_up {
-                        explorer.update(cx, |view, cx| {
-                            view.end_resize(cx);
-                        });
-                    }
-                    if let Some(outline) = &outline_for_up {
-                        outline.update(cx, |view, cx| {
-                            view.end_resize(cx);
+                    if let Some(ws) = workspace_for_up.upgrade() {
+                        let _ = ws.update(cx, |ws, cx| {
+                            ws.sidebar_is_resizing = false;
+                            let width = ws.sidebar_width;
+                            config_for_up.update(cx, |config, _| {
+                                config.appearance.sidebar_width = width;
+                                config.save();
+                            });
+                            cx.notify();
                         });
                     }
                 })
             })
             .child(
-                // Main area: Explorer + Right content
+                // Main area: Unified sidebar + content
                 div()
                     .relative()
                     .flex()
                     .flex_row()
                     .flex_grow()
                     .overflow_hidden()
-                    .children(explorer_sidebar)  // Explorer on left, full height
+                    // Unified sidebar
+                    .when(sidebar_visible, |this| {
+                        let sidebar_width_px = px(self.sidebar_width);
+                        let tab = self.sidebar_tab;
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_shrink_0()
+                                .h_full()
+                                .child(
+                                    v_flex()
+                                        .id("sidebar-view")
+                                        .w(sidebar_width_px)
+                                        .h_full()
+                                        .flex_shrink_0()
+                                        .bg(theme.sidebar)
+                                        .child(
+                                            // Tab bar
+                                            div()
+                                                .flex_shrink_0()
+                                                .px_2()
+                                                .py_1()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .justify_between()
+                                                .border_b_1()
+                                                .border_color(theme.border)
+                                                .child(
+                                                    h_flex()
+                                                        .gap_0p5()
+                                                        .child(
+                                                            div()
+                                                                .id("sidebar-files-tab")
+                                                                .px_2()
+                                                                .py_1()
+                                                                .rounded(px(4.0))
+                                                                .cursor_pointer()
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::MEDIUM)
+                                                                .when(tab == SidebarTab::Explorer, |this| {
+                                                                    this.bg(theme.primary.alpha(0.15))
+                                                                        .text_color(theme.primary)
+                                                                })
+                                                                .when(tab != SidebarTab::Explorer, |this| {
+                                                                    this.text_color(theme.muted_foreground)
+                                                                        .hover(|s| s.bg(theme.accent))
+                                                                })
+                                                                .child("Files")
+                                                                .on_click(cx.listener(move |workspace, _, _window, cx| {
+                                                                    workspace.toggle_sidebar_tab(SidebarTab::Explorer, cx);
+                                                                }))
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("sidebar-outline-tab")
+                                                                .px_2()
+                                                                .py_1()
+                                                                .rounded(px(4.0))
+                                                                .cursor_pointer()
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::MEDIUM)
+                                                                .when(tab == SidebarTab::Outline, |this| {
+                                                                    this.bg(theme.primary.alpha(0.15))
+                                                                        .text_color(theme.primary)
+                                                                })
+                                                                .when(tab != SidebarTab::Outline, |this| {
+                                                                    this.text_color(theme.muted_foreground)
+                                                                        .hover(|s| s.bg(theme.accent))
+                                                                })
+                                                                .child("Outline")
+                                                                .on_click(cx.listener(move |workspace, _, _window, cx| {
+                                                                    workspace.toggle_sidebar_tab(SidebarTab::Outline, cx);
+                                                                }))
+                                                        )
+                                                )
+                                                .child(
+                                                    Button::new("sidebar-close-btn")
+                                                        .icon(Icon::new(IconName::Close))
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .on_click(cx.listener(|workspace, _, _window, cx| {
+                                                            // Close entire sidebar
+                                                            workspace.sidebar_visible = false;
+                                                            workspace.config.update(cx, |c, _| {
+                                                                c.appearance.sidebar_visible = false;
+                                                                c.appearance.outline_visible = false;
+                                                                c.appearance.explorer_visible = false;
+                                                                c.save();
+                                                            });
+                                                            cx.notify();
+                                                        }))
+                                                )
+                                        )
+                                        .child(
+                                            // Content area
+                                            div()
+                                                .flex_grow()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .when(tab == SidebarTab::Explorer, |this| {
+                                                    if let Some(exp) = &current_explorer_view {
+                                                        this.child(exp.clone())
+                                                    } else {
+                                                        this
+                                                    }
+                                                })
+                                                .when(tab == SidebarTab::Outline, |this| {
+                                                    if let Some(out) = &current_outline_view {
+                                                        this.child(out.clone())
+                                                    } else {
+                                                        this
+                                                    }
+                                                })
+                                        )
+                                )
+                                .child(
+                                    // Resize handle on the right edge
+                                    div()
+                                        .id("sidebar-resize-handle")
+                                        .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                                        .h_full()
+                                        .cursor_col_resize()
+                                        .bg(theme.border)
+                                        .hover(|s| s.bg(theme.primary))
+                                        .when(is_resizing, |this| this.bg(theme.primary))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                            this.sidebar_is_resizing = true;
+                                            this.sidebar_resize_start_x = f32::from(event.position.x);
+                                            this.sidebar_resize_start_width = this.sidebar_width;
+                                            cx.notify();
+                                        }))
+                                )
+                        )
+                    })
                     .child(
                         // Right side content
                         div()
@@ -1904,9 +2178,7 @@ impl Render for WorkspaceView {
                                     .flex_grow()
                                     .overflow_hidden()
                                     .child(body_content)
-                                    .children(outline_sidebar)
-                
-                                                    // Search bar overlay at top-right
+                                    // Search bar overlay at top-right
                                     .when_some(search_bar, |this, search_bar| {
                                         this.child(
                                             div()
@@ -2130,7 +2402,7 @@ impl Render for WorkspaceView {
                             .gap_2()
                             .child(
                                 Button::new("explorer-toggle-btn")
-                                    .icon(Icon::new(if self.explorer_visible { IconName::FolderOpen } else { IconName::Folder }))
+                                    .icon(Icon::new(if self.sidebar_visible && self.sidebar_tab == SidebarTab::Explorer { IconName::FolderOpen } else { IconName::Folder }))
                                     .ghost()
                                     .xsmall()
                                     .tooltip("Toggle Explorer")

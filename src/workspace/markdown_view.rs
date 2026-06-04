@@ -1,12 +1,18 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use crate::text::{TextView, TextViewState, TextViewStyle};
 use crate::text::document::HeadingItem;
 use crate::text::ElementExt;
-use gpui_component::{ActiveTheme, menu::ContextMenuExt};
+use gpui_component::{
+    ActiveTheme, IconName, Sizable,
+    button::{Button, ButtonVariants},
+    menu::ContextMenuExt,
+};
 use crate::state::document::Document;
 use crate::state::frontmatter::Frontmatter;
 use crate::state::config::{AppConfig, LayoutMode};
@@ -49,6 +55,12 @@ impl MarkdownView {
                 .scroll_speed(scroll_speed)
                 .inertia_enabled(inertia_enabled)
         });
+
+        // Observe text_view_state changes to re-render when scroll state updates
+        // (e.g., floating button visibility must react to scrolling)
+        cx.observe(&text_view_state, |_, _, cx| {
+            cx.notify();
+        }).detach();
 
         Self {
             document,
@@ -99,7 +111,7 @@ impl MarkdownView {
 
 impl Render for MarkdownView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let layout_mode = self.config.read(cx).appearance.layout;
         let scroll_speed = self.config.read(cx).appearance.scroll_speed;
         let file_path = self.document.read(cx).path.clone();
@@ -120,13 +132,28 @@ impl Render for MarkdownView {
         let container_origin_x_for_prepaint = container_origin_x.clone();
         let container_origin_x_for_scroll = container_origin_x.clone();
 
-        let text_state = self.text_view_state.clone();
+        let text_state_for_scroll = self.text_view_state.clone();
+        let text_state_for_floating = self.text_view_state.clone();
         let text_state_for_menu = self.text_view_state.clone();
+        // Read scroll state for floating action buttons
+        let scroll_offset = self.text_view_state.read(cx).scroll_offset_y();
+        let max_scroll = self.text_view_state.read(cx).max_scroll_y();
+        let is_at_top = scroll_offset <= px(0.);
+        let is_at_bottom = scroll_offset >= max_scroll;
+
+        // Calculate reading progress (0.0 ~ 1.0)
+        let progress = if max_scroll > px(0.) {
+            (scroll_offset / max_scroll).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
 
         div()
             .id("markdown-container")
             .relative()
             .size_full()
+            .flex()
+            .flex_col()
             .bg(theme.background)
             // Use on_prepaint to get actual container bounds
             .on_prepaint(move |bounds, _, _cx| {
@@ -164,7 +191,7 @@ impl Render for MarkdownView {
 
                 // Scroll padding area with same logic as content area
                 let delta = event.delta.pixel_delta(px(20.)).y;
-                text_state.update(cx, |state, cx| {
+                text_state_for_scroll.update(cx, |state, cx| {
                     if state.is_inertia_enabled() {
                         state.add_scroll_impulse(f32::from(delta));
                     } else {
@@ -176,6 +203,10 @@ impl Render for MarkdownView {
                 cx.stop_propagation();
             })
             .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
                 TextView::new(&self.text_view_state)
                     .style(text_style)
                     .scrollable(true)
@@ -183,7 +214,113 @@ impl Render for MarkdownView {
                     .selectable(true)
                     .pb_8()
                     .px(min_padding)
-                    .text_size(rems(1.0))
+                    .text_size(px(self.config.read(cx).appearance.font_size))
+                    .code_block_actions(|code_block, window, cx| {
+                        let code = code_block.code();
+                        let key: SharedString = match code_block.span {
+                            Some(s) => format!("code-copy-{}-{}", s.start, s.end).into(),
+                            None => format!("code-copy-{}", code.len()).into(),
+                        };
+                        let state: Entity<bool> = window.use_keyed_state(
+                            gpui::ElementId::Name(key.clone()),
+                            cx,
+                            |_, _| false,
+                        );
+                        let copied = *state.read(cx);
+
+                        Button::new(gpui::ElementId::Name(format!("copy-btn-{key}").into()))
+                            .icon(if copied { IconName::Check } else { IconName::Copy })
+                            .ghost()
+                            .xsmall()
+                            .tooltip("Copy code")
+                            .when(!copied, |this| {
+                                this.on_click({
+                                    let code = code.clone();
+                                    move |_, _window, cx| {
+                                        cx.stop_propagation();
+                                        cx.write_to_clipboard(
+                                            ClipboardItem::new_string(code.to_string()),
+                                        );
+                                        state.update(cx, |copied, cx| {
+                                            *copied = true;
+                                            cx.notify();
+                                        });
+
+                                        let s = state.clone();
+                                        cx.spawn(async move |cx| {
+                                            cx.background_executor()
+                                                .timer(Duration::from_secs(2))
+                                                .await;
+                                            _ = s.update(cx, |copied, cx| {
+                                                *copied = false;
+                                                cx.notify();
+                                            });
+                                        })
+                                        .detach();
+                                    }
+                                })
+                            })
+                            .into_any_element()
+                        })
+                    )
+            )
+            // Reading progress bar at the top
+            .when(max_scroll > px(0.), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .h(px(2.))
+                        .w(relative(progress))
+                        .bg(theme.progress_bar),
+                )
+            })
+            .child(
+                // Floating scroll-to-top/bottom buttons
+                div()
+                    .absolute()
+                    .bottom(px(24.))
+                    .right(px(24.))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .when(!is_at_top, |this| {
+                        this.child(
+                            Button::new("scroll-top-btn")
+                                .icon(IconName::ChevronUp)
+                                .ghost()
+                                .xsmall()
+                                .tooltip("Scroll to top")
+                                .on_click({
+                                    let text_state = text_state_for_floating.clone();
+                                    move |_, _, cx| {
+                                        text_state.update(cx, |state, _| {
+                                            state.scroll_to_block(0);
+                                        });
+                                    }
+                                }),
+                        )
+                    })
+                    .when(!is_at_bottom, |this| {
+                        this.child(
+                            Button::new("scroll-bottom-btn")
+                                .icon(IconName::ChevronDown)
+                                .ghost()
+                                .xsmall()
+                                .tooltip("Scroll to bottom")
+                                .on_click({
+                                    let text_state = text_state_for_floating.clone();
+                                    move |_, _, cx| {
+                                        let last =
+                                            text_state.read(cx).block_count().saturating_sub(1);
+                                        text_state.update(cx, |state, _| {
+                                            state.scroll_to_block(last);
+                                        });
+                                    }
+                                }),
+                        )
+                    }),
             )
             .context_menu({
                 let file_path = file_path.clone();

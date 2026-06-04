@@ -13,8 +13,6 @@ use gpui::{
 use smol::{Timer, stream::StreamExt as _};
 
 use gpui_component::{
-    ActiveTheme,
-    highlighter::HighlightTheme,
     input::{self, Copy},
     v_flex,
 };
@@ -131,7 +129,7 @@ impl TextViewState {
             }
         });
 
-        let _parse_task = cx.background_spawn(UpdateFuture::new(format, rx, tx_result, cx));
+        let _parse_task = cx.background_spawn(UpdateFuture::new(format, rx, tx_result));
 
         let mut this = Self {
             focus_handle,
@@ -259,6 +257,18 @@ impl TextViewState {
         });
     }
 
+    /// Scroll to a heading identified by its anchor slug.
+    /// Looks up the slug in the heading_map and scrolls to the corresponding block.
+    pub fn scroll_to_anchor(&mut self, anchor: &str) {
+        let block_index = {
+            let content = self.parsed_content.lock().unwrap();
+            content.document.heading_map.get(anchor).copied()
+        };
+        if let Some(index) = block_index {
+            self.scroll_to_block(index);
+        }
+    }
+
     /// Get the headings from the parsed document for outline display.
     pub fn headings(&self) -> Vec<HeadingItem> {
         self.parsed_content.lock().unwrap().document.extract_headings()
@@ -316,13 +326,12 @@ impl TextViewState {
         self.parsed_content.lock().unwrap().document.selected_text()
     }
 
-    fn increment_update(&mut self, text: &str, append: bool, cx: &mut Context<Self>) {
+    fn increment_update(&mut self, text: &str, append: bool, _cx: &mut Context<Self>) {
         let code_block_actions = self.code_block_actions.clone();
         let update_options = UpdateOptions {
             append,
             content: self.parsed_content.clone(),
             pending_text: text.to_string(),
-            highlight_theme: cx.theme().highlight_theme.clone(),
             code_block_actions: code_block_actions.clone(),
             document_path: self.document_path.clone(),
         };
@@ -354,10 +363,15 @@ impl TextViewState {
         self.is_select_all = false;
     }
 
-    /// Get the current scroll offset in pixels (Y component only, as negative value).
-    fn scroll_offset_y(&self) -> Pixels {
+    /// Get the current scroll offset in pixels (Y component only).
+    pub fn scroll_offset_y(&self) -> Pixels {
         // scroll_px_offset_for_scrollbar returns Point with negative Y
         -self.list_state.scroll_px_offset_for_scrollbar().y
+    }
+
+    /// Get the maximum scrollable offset (total content height minus viewport).
+    pub fn max_scroll_y(&self) -> Pixels {
+        self.list_state.max_offset_for_scrollbar().height
     }
 
     pub(super) fn start_selection(&mut self, pos: Point<Pixels>) {
@@ -497,6 +511,7 @@ impl Render for TextViewState {
         };
         let mut node_cx = node_cx;
         node_cx.search_query = self.search_query.clone();
+        node_cx.code_block_actions = self.code_block_actions.clone();
         let content_max_width = self.text_view_style.content_max_width;
 
         // Capture settings for scroll handler
@@ -594,7 +609,6 @@ impl UpdateFuture {
         format: TextViewFormat,
         rx: smol::channel::Receiver<UpdateOptions>,
         tx_result: smol::channel::Sender<Result<(), SharedString>>,
-        cx: &App,
     ) -> Self {
         Self {
             format,
@@ -603,7 +617,6 @@ impl UpdateFuture {
                 append: false,
                 pending_text: String::new(),
                 content: Default::default(),
-                highlight_theme: cx.theme().highlight_theme.clone(),
                 code_block_actions: None,
                 document_path: None,
             },
@@ -661,7 +674,6 @@ struct UpdateOptions {
     content: Arc<Mutex<ParsedContent>>,
     pending_text: String,
     append: bool,
-    highlight_theme: Arc<HighlightTheme>,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     document_path: Option<std::path::PathBuf>,
 }
@@ -689,7 +701,7 @@ fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), 
 
     let new_content = match format {
         TextViewFormat::Markdown => {
-            format::markdown::parse(&source, &mut node_cx, &options.highlight_theme)
+            format::markdown::parse(&source, &mut node_cx)
         }
         TextViewFormat::Html => format::html::parse(&source, &mut node_cx),
     }?;
@@ -702,6 +714,7 @@ fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), 
         content.document = new_content;
     }
 
+    content.node_cx = node_cx;
     Ok(())
 }
 

@@ -150,7 +150,6 @@ impl Render for SettingsContent {
         let current_layout = *self.selected_layout.read(cx);
         let current_inertia = *self.inertia_scroll.read(cx);
         let current_root_mode = *self.explorer_root_mode.read(cx);
-
         v_flex()
             .gap_4()
             // Theme section
@@ -181,6 +180,7 @@ impl Render for SettingsContent {
                 "Code Font",
                 font_control(self.mono_font_family_state.clone(), self.mono_font_size_slider.clone(), 10.0, 18.0),
             ))
+
     }
 }
 
@@ -200,7 +200,6 @@ pub fn open_settings_dialog(
     let current_mono_font_size = config.read(cx).appearance.mono_font_size;
     let current_root_mode = config.read(cx).appearance.explorer_root_mode;
     let current_markers = config.read(cx).appearance.project_root_markers.join(", ");
-
     // Get system font list
     let all_fonts = cx.text_system().all_font_names();
 
@@ -275,7 +274,6 @@ pub fn open_settings_dialog(
     let selected_layout = cx.new(|_| current_layout);
     let inertia_scroll = cx.new(|_| current_inertia_scroll);
     let explorer_root_mode = cx.new(|_| current_root_mode);
-
     // Create content view for reactive updates
     let content = cx.new(|cx| SettingsContent::new(
         selected_theme.clone(),
@@ -347,7 +345,6 @@ pub fn open_settings_dialog(
                     config.appearance.mono_font_size = new_mono_font_size;
                     config.appearance.explorer_root_mode = new_root_mode;
                     config.appearance.project_root_markers = new_markers;
-
                     // Apply font settings immediately
                     config.appearance.apply_font_settings(cx);
 
@@ -557,3 +554,4 @@ fn font_control(
                 )
         )
 }
+

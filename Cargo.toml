@@ -33,6 +33,7 @@ markdown = { version = "1.0.0", features = ["serde"] }
 html5ever = "0.27"
 markup5ever_rcdom = "0.3.0"
 ropey = "1.6"
+regex = "1"
 tree-sitter-kotlin = { git = "https://github.com/fwcd/tree-sitter-kotlin", branch = "main" }
 ignore = "0.4"
 
@@ -40,6 +41,7 @@ ignore = "0.4"
 winres = "0.1"
 
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
+incremental = true
 strip = true

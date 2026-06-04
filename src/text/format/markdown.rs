@@ -6,8 +6,6 @@ use markdown::{
     mdast::{self, Node},
 };
 
-use gpui_component::highlighter::HighlightTheme;
-
 use super::super::{
     document::ParsedDocument,
     node::{
@@ -44,17 +42,14 @@ fn resolve_image_url(url: &str, doc_path: Option<&Path>) -> (String, Option<Path
 }
 
 /// Parse Markdown into a tree of nodes.
-///
-/// TODO: Remove `highlight_theme` option, this should in render stage.
 pub(crate) fn parse(
     source: &str,
     cx: &mut NodeContext,
-    highlight_theme: &HighlightTheme,
 ) -> Result<ParsedDocument, SharedString> {
     let mut options = ParseOptions::gfm();
     options.constructs.frontmatter = true;
     markdown::to_mdast(&source, &options)
-        .map(|n| ast_to_document(source, n, cx, highlight_theme))
+        .map(|n| ast_to_document(source, n, cx))
         .map_err(|e| e.to_string().into())
 }
 
@@ -258,7 +253,6 @@ fn ast_to_document(
     source: &str,
     root: mdast::Node,
     cx: &mut NodeContext,
-    highlight_theme: &HighlightTheme,
 ) -> ParsedDocument {
     let root = match root {
         Node::Root(r) => r,
@@ -268,12 +262,15 @@ fn ast_to_document(
     let blocks = root
         .children
         .into_iter()
-        .map(|c| ast_to_node(c, cx, highlight_theme))
+        .map(|c| ast_to_node(c, cx))
         .collect();
-    ParsedDocument {
+    let mut doc = ParsedDocument {
         source: source.to_string().into(),
         blocks,
-    }
+        ..Default::default()
+    };
+    doc.build_heading_map();
+    doc
 }
 
 fn new_span(pos: Option<markdown::unist::Position>, cx: &NodeContext) -> Option<Span> {
@@ -288,7 +285,6 @@ fn new_span(pos: Option<markdown::unist::Position>, cx: &NodeContext) -> Option<
 fn ast_to_node(
     value: mdast::Node,
     cx: &mut NodeContext,
-    highlight_theme: &HighlightTheme,
 ) -> BlockNode {
     match value {
         Node::Root(_) => unreachable!("node::Root should be handled separately"),
@@ -304,7 +300,7 @@ fn ast_to_node(
             let children = val
                 .children
                 .into_iter()
-                .map(|c| ast_to_node(c, cx, highlight_theme))
+                .map(|c| ast_to_node(c, cx))
                 .collect();
             BlockNode::Blockquote {
                 children,
@@ -315,7 +311,7 @@ fn ast_to_node(
             let children = list
                 .children
                 .into_iter()
-                .map(|c| ast_to_node(c, cx, highlight_theme))
+                .map(|c| ast_to_node(c, cx))
                 .collect();
             BlockNode::List {
                 ordered: list.ordered,
@@ -327,7 +323,7 @@ fn ast_to_node(
             let children = val
                 .children
                 .into_iter()
-                .map(|c| ast_to_node(c, cx, highlight_theme))
+                .map(|c| ast_to_node(c, cx))
                 .collect();
             BlockNode::ListItem {
                 children,
@@ -343,7 +339,6 @@ fn ast_to_node(
         Node::Code(raw) => BlockNode::CodeBlock(CodeBlock::new(
             raw.value.into(),
             raw.lang.map(|s| s.into()),
-            highlight_theme,
             new_span(raw.position, cx),
         )),
         Node::Heading(val) => {
@@ -352,16 +347,29 @@ fn ast_to_node(
                 parse_paragraph(&mut paragraph, c, cx);
             });
 
+            // Extract text from paragraph children and generate slug ID
+            let heading_text: String = paragraph
+                .children
+                .iter()
+                .map(|n| n.text.to_string())
+                .collect::<Vec<_>>()
+                .join("");
+            let id = if heading_text.is_empty() {
+                None
+            } else {
+                Some(SharedString::from(node::slugify(&heading_text)))
+            };
+
             BlockNode::Heading {
                 level: val.depth,
                 children: paragraph,
                 span: new_span(val.position, cx),
+                id,
             }
         }
         Node::Math(val) => BlockNode::CodeBlock(CodeBlock::new(
             val.value.into(),
             None,
-            highlight_theme,
             new_span(val.position, cx),
         )),
         Node::Html(val) => match super::html::parse(&val.value, cx) {
@@ -380,7 +388,6 @@ fn ast_to_node(
         Node::MdxFlowExpression(val) => BlockNode::CodeBlock(CodeBlock::new(
             val.value.into(),
             Some("mdx".into()),
-            highlight_theme,
             new_span(val.position, cx),
         )),
         Node::Yaml(val) => {
@@ -397,7 +404,6 @@ fn ast_to_node(
                     BlockNode::CodeBlock(CodeBlock::new(
                         val.value.into(),
                         Some("yml".into()),
-                        highlight_theme,
                         span,
                     ))
                 }
@@ -406,7 +412,6 @@ fn ast_to_node(
         Node::Toml(val) => BlockNode::CodeBlock(CodeBlock::new(
             val.value.into(),
             Some("toml".into()),
-            highlight_theme,
             new_span(val.position, cx),
         )),
         Node::MdxJsxTextElement(val) => {

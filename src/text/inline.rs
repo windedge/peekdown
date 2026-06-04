@@ -395,7 +395,7 @@ impl Element for Inline {
             });
 
             if !is_selection {
-                // click to open link
+                // click to open link or navigate to anchor
                 window.on_mouse_event({
                     let links = self.links.clone();
                     let text_layout = text_layout.clone();
@@ -409,6 +409,23 @@ impl Element for Inline {
                             Self::link_for_position(&text_layout, &links, event.position)
                         {
                             cx.stop_propagation();
+
+                            // Handle anchor links (#) for heading navigation
+                            if let Some(anchor) = link.url.strip_prefix('#') {
+                                if !anchor.is_empty() {
+                                    // Clone Entity handle to break borrow before update
+                                    let state_entity = GlobalState::global(cx)
+                                        .text_view_state()
+                                        .cloned();
+                                    if let Some(text_view_state) = state_entity {
+                                        text_view_state.update(cx, |state, _cx| {
+                                            state.scroll_to_anchor(anchor);
+                                        });
+                                    }
+                                }
+                                return;
+                            }
+
                             cx.open_url(&link.url);
                         }
                     }

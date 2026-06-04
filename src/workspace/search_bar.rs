@@ -2,11 +2,16 @@
 
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Selectable, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
     h_flex,
 };
+use regex::RegexBuilder;
+
+/// Maximum number of search matches to collect.
+/// Prevents excessive memory/CPU usage with broad regex patterns (e.g `.` or `\w+`).
+const MAX_MATCHES: usize = 10_000;
 
 /// A single search match in the document.
 #[derive(Debug, Clone)]
@@ -27,10 +32,16 @@ pub struct SearchState {
     pub matches: Vec<SearchMatch>,
     /// Index of the currently focused match.
     pub current_match: usize,
+    /// Whether to use regex mode.
+    pub is_regex: bool,
+    /// Whether to use case-sensitive search.
+    pub is_case_sensitive: bool,
 }
 
 impl SearchState {
-    /// Perform a case-insensitive search in the source text.
+    /// Perform search in the source text with current mode settings.
+    /// Supports 4 modes: regex/case-sensitive, regex/case-insensitive,
+    /// plain/case-sensitive, plain/case-insensitive.
     pub fn search(&mut self, source: &str, query: &str, block_spans: &[(usize, std::ops::Range<usize>)]) {
         self.query = query.to_string();
         self.matches.clear();
@@ -40,36 +51,104 @@ impl SearchState {
             return;
         }
 
-        let query_lower = query.to_lowercase();
-        let source_lower = source.to_lowercase();
+        // Binary search: block_spans are sorted by span.start (from document order).
+        // O(log n) instead of O(n) linear scan per match.
+        let find_block = |byte_pos: usize| -> usize {
+            match block_spans.binary_search_by(|(_, span)| {
+                if byte_pos < span.start {
+                    std::cmp::Ordering::Less
+                } else if byte_pos >= span.end {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            }) {
+                Ok(idx) => block_spans[idx].0,
+                Err(_) => 0,
+            }
+        };
 
-        let mut start = 0;
-        while start < source_lower.len() {
-            // Find match in the remaining substring
-            let Some(pos) = source_lower[start..].find(&query_lower) else {
-                break;
+        if self.is_regex {
+            // --- Regex mode ---
+            // Configure safety limits to prevent pathological patterns from
+            // consuming excessive CPU or memory during compilation/execution.
+            let re = if self.is_case_sensitive {
+                RegexBuilder::new(query)
+                    .nest_limit(50)
+                    .size_limit(1 << 20) // 1 MB NFA budget
+                    .build()
+            } else {
+                RegexBuilder::new(query)
+                    .case_insensitive(true)
+                    .nest_limit(50)
+                    .size_limit(1 << 20)
+                    .build()
             };
-            let absolute_pos = start + pos;
-            let byte_range = absolute_pos..(absolute_pos + query_lower.len());
 
-            // Find which block contains this match
-            let block_index = block_spans
-                .iter()
-                .find(|(_, span)| span.start <= absolute_pos && absolute_pos < span.end)
-                .map(|(ix, _)| *ix)
-                .unwrap_or(0);
+            let Ok(re) = re else {
+                // Invalid regex, no matches (error display deferred to future)
+                return;
+            };
 
-            self.matches.push(SearchMatch {
-                block_index,
-                byte_range: byte_range.clone(),
-            });
-
-            // Move start to the next character boundary after the match start
-            // to avoid slicing in the middle of a multi-byte character
-            start = absolute_pos + query_lower.len();
-            // Ensure we're at a valid char boundary
-            while start < source_lower.len() && !source_lower.is_char_boundary(start) {
-                start += 1;
+            for mat in re.find_iter(source) {
+                if self.matches.len() >= MAX_MATCHES {
+                    break;
+                }
+                let byte_range = mat.start()..mat.end();
+                let block_index = find_block(mat.start());
+                self.matches.push(SearchMatch {
+                    block_index,
+                    byte_range,
+                });
+            }
+        } else {
+            // --- Plain text mode ---
+            if self.is_case_sensitive {
+                // Case-sensitive find
+                let mut start = 0;
+                while start < source.len() {
+                    let Some(pos) = source[start..].find(query) else {
+                        break;
+                    };
+                    let absolute_pos = start + pos;
+                    let byte_range = absolute_pos..(absolute_pos + query.len());
+                    let block_index = find_block(absolute_pos);
+                    if self.matches.len() >= MAX_MATCHES {
+                        break;
+                    }
+                    self.matches.push(SearchMatch {
+                        block_index,
+                        byte_range,
+                    });
+                    start = absolute_pos + query.len();
+                    while start < source.len() && !source.is_char_boundary(start) {
+                        start += 1;
+                    }
+                }
+            } else {
+                // Case-insensitive find (original logic)
+                let query_lower = query.to_lowercase();
+                let source_lower = source.to_lowercase();
+                let mut start = 0;
+                while start < source_lower.len() {
+                    let Some(pos) = source_lower[start..].find(&query_lower) else {
+                        break;
+                    };
+                    let absolute_pos = start + pos;
+                    let byte_range = absolute_pos..(absolute_pos + query_lower.len());
+                    let block_index = find_block(absolute_pos);
+                    if self.matches.len() >= MAX_MATCHES {
+                        break;
+                    }
+                    self.matches.push(SearchMatch {
+                        block_index,
+                        byte_range,
+                    });
+                    start = absolute_pos + query_lower.len();
+                    while start < source_lower.len() && !source_lower.is_char_boundary(start) {
+                        start += 1;
+                    }
+                }
             }
         }
     }
@@ -191,6 +270,11 @@ impl SearchBar {
         &self.input_state
     }
 
+    /// Get current search mode flags.
+    pub fn search_flags(&self) -> (bool, bool) {
+        (self.search_state.is_regex, self.search_state.is_case_sensitive)
+    }
+
     fn handle_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(m) = self.search_state.next_match() {
             let block_index = m.block_index;
@@ -258,6 +342,40 @@ impl Render for SearchBar {
                     .text_color(theme.muted_foreground)
                     .min_w(px(40.))
                     .child(count_display)
+            )
+            // Regex toggle button
+            .child(
+                Button::new("regex-toggle")
+                    .label(".*")
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Use regular expression")
+                    .selected(self.search_state.is_regex)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.search_state.is_regex = !this.search_state.is_regex;
+                        if let Some(on_change) = &this.on_change {
+                            let query = this.search_state.query.clone();
+                            on_change(&query, cx);
+                        }
+                        cx.notify();
+                    }))
+            )
+            // Case sensitivity toggle button
+            .child(
+                Button::new("case-toggle")
+                    .label("Aa")
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Match case")
+                    .selected(self.search_state.is_case_sensitive)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.search_state.is_case_sensitive = !this.search_state.is_case_sensitive;
+                        if let Some(on_change) = &this.on_change {
+                            let query = this.search_state.query.clone();
+                            on_change(&query, cx);
+                        }
+                        cx.notify();
+                    }))
             )
             .child(
                 Button::new("prev-btn")

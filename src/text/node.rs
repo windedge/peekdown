@@ -46,6 +46,8 @@ pub(crate) enum BlockNode {
         level: u8,
         children: Paragraph,
         span: Option<Span>,
+        /// The anchor ID generated from heading text (e.g., "my-heading").
+        id: Option<SharedString>,
     },
     Blockquote {
         children: Vec<BlockNode>,
@@ -84,6 +86,22 @@ pub(crate) enum BlockNode {
     Unknown,
 }
 
+/// Generate an anchor slug from heading text.
+///
+/// - Lowercases the text
+/// - Replaces whitespace with `-`
+/// - Removes characters that are not alphanumeric or `-`
+/// - Trims leading/trailing `-`
+pub(crate) fn slugify(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
 impl BlockNode {
     pub(super) fn is_list_item(&self) -> bool {
         matches!(self, Self::ListItem { .. })
@@ -97,7 +115,7 @@ impl BlockNode {
         matches!(self, Self::Frontmatter(_))
     }
 
-    /// Combine all children, omitting the empt parent nodes.
+/// Combine all children, omitting the empt parent nodes.
     pub(super) fn compact(self) -> BlockNode {
         match self {
             Self::Root { mut children, .. } if children.len() == 1 => children.remove(0).compact(),
@@ -621,15 +639,17 @@ impl Paragraph {
 
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
+    code: SharedString,
     lang: Option<SharedString>,
-    styles: Vec<(Range<usize>, HighlightStyle)>,
+    styles: Arc<Mutex<Vec<(Range<usize>, HighlightStyle)>>>,
+    cached_theme: Arc<Mutex<Option<String>>>,
     state: Arc<Mutex<InlineState>>,
     pub span: Option<Span>,
 }
 
 impl PartialEq for CodeBlock {
     fn eq(&self, other: &Self) -> bool {
-        self.lang == other.lang && self.styles == other.styles
+        self.lang == other.lang && self.code == other.code
     }
 }
 
@@ -641,27 +661,22 @@ impl CodeBlock {
 
     /// Get the code content of the code block.
     pub fn code(&self) -> SharedString {
-        self.state.lock().unwrap().text.clone()
+        self.code.clone()
     }
 
     pub(crate) fn new(
         code: SharedString,
         lang: Option<SharedString>,
-        highlight_theme: &HighlightTheme,
         span: Option<impl Into<Span>>,
     ) -> Self {
-        let styles = if let Some(lang) = &lang {
-            highlight_code(code.as_ref(), lang, highlight_theme)
-        } else {
-            vec![]
-        };
-
         let state = Arc::new(Mutex::new(InlineState::default()));
-        state.lock().unwrap().set_text(code);
+        state.lock().unwrap().set_text(code.clone());
 
         Self {
+            code,
             lang,
-            styles,
+            styles: Arc::new(Mutex::new(vec![])),
+            cached_theme: Arc::new(Mutex::new(None)),
             state,
             span: span.map(|s| s.into()),
         }
@@ -682,6 +697,25 @@ impl CodeBlock {
         self.state.lock().unwrap().selection = None;
     }
 
+    /// Ensure styles are computed for the current highlight theme.
+    /// Lazily computes syntax highlighting styles on first render or when theme changes.
+    fn ensure_styles(&self, highlight_theme: &HighlightTheme) {
+        let theme_key = format!("{:p}", highlight_theme as *const HighlightTheme);
+
+        let mut cached = self.cached_theme.lock().unwrap();
+        if cached.as_deref() == Some(&theme_key) && !self.styles.lock().unwrap().is_empty() {
+            return;
+        }
+
+        let mut styles = self.styles.lock().unwrap();
+        if let Some(lang) = &self.lang {
+            *styles = highlight_code(self.code.as_ref(), lang, highlight_theme);
+        } else {
+            styles.clear();
+        }
+        *cached = Some(theme_key);
+    }
+
     fn render(
         &self,
         options: &NodeRenderOptions,
@@ -691,12 +725,16 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
 
+        // Ensure styles are computed for current highlight theme
+        self.ensure_styles(cx.theme().highlight_theme.as_ref());
+
         // Only clone and merge highlights if there's an active search query
+        let styles = self.styles.lock().unwrap();
         let code_highlights = match node_cx.search_query.as_ref() {
             Some(query) if !query.is_empty() => {
-                let ranges = search_ranges(self.code().as_ref(), query);
+                let ranges = search_ranges(self.code.as_ref(), query);
                 if ranges.is_empty() {
-                    self.styles.clone()
+                    styles.clone()
                 } else {
                     let search_style = HighlightStyle {
                         background_color: Some(cx.theme().selection.alpha(0.35)),
@@ -706,11 +744,12 @@ impl CodeBlock {
                         .into_iter()
                         .map(|range| (range, search_style))
                         .collect::<Vec<_>>();
-                    gpui::combine_highlights(self.styles.clone(), search_highlights).collect()
+                    gpui::combine_highlights(styles.clone(), search_highlights).collect()
                 }
             }
-            _ => self.styles.clone(),
+            _ => styles.clone(),
         };
+        drop(styles);
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -733,7 +772,7 @@ impl CodeBlock {
                     .when_some(node_cx.code_block_actions.clone(), |this, actions| {
                         this.child(
                             div()
-                                .id("actions")
+                                .id(("codeblock-actions", options.ix))
                                 .absolute()
                                 .top_2()
                                 .right_2()

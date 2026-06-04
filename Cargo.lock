@@ -4125,6 +4125,7 @@ dependencies = [
  "markup5ever_rcdom",
  "notify 6.1.1",
  "pulldown-cmark",
+ "regex",
  "ropey 1.6.1",
  "rust-embed",
  "serde",

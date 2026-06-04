@@ -43,7 +43,7 @@ pub fn send_message(message: IpcMessage) -> anyhow::Result<()> {
     }
 
     let name_str = if cfg!(windows) {
-        format!("\\\\.\\pipe\\ருங்கள்{}", PIPE_NAME)
+        format!("\\\\.\\pipe\\{}", PIPE_NAME)
     } else {
         format!("/tmp/{}.sock", PIPE_NAME)
     };
@@ -60,7 +60,7 @@ pub fn send_message(message: IpcMessage) -> anyhow::Result<()> {
 
 pub fn spawn_ipc_server(tx: Sender<IpcMessage>) -> anyhow::Result<()> {
     let name_str = if cfg!(windows) {
-        format!("\\\\.\\pipe\\ருங்கள்{}", PIPE_NAME)
+        format!("\\\\.\\pipe\\{}", PIPE_NAME)
     } else {
         format!("/tmp/{}.sock", PIPE_NAME)
     };

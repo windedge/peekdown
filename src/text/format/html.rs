@@ -103,10 +103,13 @@ pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument
         parse_node(&dom.document, &mut paragraph, cx).unwrap_or(BlockNode::Unknown);
     let node = node.compact();
 
-    Ok(ParsedDocument {
+    let mut doc = ParsedDocument {
         source: source.to_string().into(),
         blocks: vec![node],
-    })
+        ..Default::default()
+    };
+    doc.build_heading_map();
+    Ok(doc)
 }
 
 fn cleanup_html(source: &str) -> Vec<u8> {
@@ -439,10 +442,26 @@ fn parse_node(
                     parse_paragraph(&mut paragraph, child, cx.document_path.as_deref());
                 }
 
+                // Generate slug ID for HTML heading
+                let heading_text: String = paragraph
+                    .children
+                    .iter()
+                    .map(|n| n.text.to_string())
+                    .collect::<Vec<_>>()
+                    .join("");
+                let id = if heading_text.is_empty() {
+                    None
+                } else {
+                    Some(SharedString::from(super::super::node::slugify(
+                        &heading_text,
+                    )))
+                };
+
                 let heading = BlockNode::Heading {
                     level,
                     children: paragraph,
                     span: None,
+                    id,
                 };
                 if children.len() > 0 {
                     children.push(heading);
@@ -750,7 +769,8 @@ mod tests {
                         ..Default::default()
                     })],
                     ..Default::default()
-                })]
+                })],
+                ..Default::default()
             }
         );
 
@@ -771,7 +791,8 @@ mod tests {
                         ..Default::default()
                     })],
                     ..Default::default()
-                })]
+                })],
+                ..Default::default()
             }
         );
     }

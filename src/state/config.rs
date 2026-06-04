@@ -76,8 +76,8 @@ pub struct AppearanceConfig {
     /// Whether the window was maximized when last closed
     #[serde(default)]
     pub is_maximized: bool,
-    /// Whether the outline sidebar is visible
-    #[serde(default = "default_outline_visible")]
+    /// Whether the outline sidebar is visible (deprecated, use sidebar_visible)
+    #[serde(default)]
     pub outline_visible: bool,
     /// Width of the outline sidebar in pixels
     #[serde(default = "default_outline_width")]
@@ -100,8 +100,8 @@ pub struct AppearanceConfig {
     /// Whether to enable inertia (smooth) scrolling
     #[serde(default = "default_inertia_scroll")]
     pub inertia_scroll: bool,
-    /// Whether the explorer sidebar is visible
-    #[serde(default = "default_explorer_visible")]
+    /// Whether the explorer sidebar is visible (deprecated, use sidebar_visible)
+    #[serde(default)]
     pub explorer_visible: bool,
     /// Width of the explorer sidebar in pixels
     #[serde(default = "default_explorer_width")]
@@ -121,6 +121,27 @@ pub struct AppearanceConfig {
     /// Whether to automatically refresh documents when files change
     #[serde(default = "default_auto_refresh")]
     pub auto_refresh: bool,
+    /// Width of the unified sidebar in pixels
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+    /// Last active sidebar tab ("explorer" or "outline")
+    #[serde(default = "default_sidebar_tab")]
+    pub sidebar_tab: String,
+    /// Whether the unified sidebar is visible
+    #[serde(default = "default_sidebar_visible")]
+    pub sidebar_visible: bool,
+}
+
+fn default_sidebar_width() -> f32 {
+    200.0
+}
+
+fn default_sidebar_tab() -> String {
+    "explorer".to_string()
+}
+
+fn default_sidebar_visible() -> bool {
+    false
 }
 
 fn default_auto_refresh() -> bool {
@@ -143,10 +164,6 @@ fn default_window_height() -> f32 {
     768.0
 }
 
-fn default_outline_visible() -> bool {
-    false
-}
-
 fn default_outline_width() -> f32 {
     200.0
 }
@@ -165,10 +182,6 @@ fn default_mono_font_family() -> String {
 
 fn default_mono_font_size() -> f32 {
     13.0
-}
-
-fn default_explorer_visible() -> bool {
-    false
 }
 
 fn default_explorer_width() -> f32 {
@@ -199,7 +212,7 @@ impl Default for AppearanceConfig {
             window_width: default_window_width(),
             window_height: default_window_height(),
             is_maximized: false,
-            outline_visible: default_outline_visible(),
+            outline_visible: false,
             outline_width: default_outline_width(),
             font_family: default_font_family(),
             font_size: default_font_size(),
@@ -207,18 +220,34 @@ impl Default for AppearanceConfig {
             mono_font_size: default_mono_font_size(),
             show_fps: false,
             inertia_scroll: default_inertia_scroll(),
-            explorer_visible: default_explorer_visible(),
+            explorer_visible: false,
+            sidebar_visible: default_sidebar_visible(),
             explorer_width: default_explorer_width(),
             explorer_root_mode: ExplorerRootMode::default(),
             explorer_sort_mode: ExplorerSortMode::default(),
             project_root_markers: default_project_root_markers(),
             expanded_dirs: Vec::new(),
             auto_refresh: default_auto_refresh(),
+            sidebar_width: default_sidebar_width(),
+            sidebar_tab: default_sidebar_tab(),
         }
     }
 }
 
 impl AppearanceConfig {
+    /// Zoom font sizes by delta (positive for larger, negative for smaller).
+    /// Clamped to [8.0, 48.0] range.
+    pub fn zoom_font_size(&mut self, delta: f32) {
+        self.font_size = (self.font_size + delta).clamp(8.0, 48.0);
+        self.mono_font_size = (self.mono_font_size + delta).clamp(8.0, 48.0);
+    }
+
+    /// Reset font sizes to their default values.
+    pub fn reset_font_size(&mut self) {
+        self.font_size = default_font_size();
+        self.mono_font_size = default_mono_font_size();
+    }
+
     /// Apply font settings to the global theme
     pub fn apply_font_settings(&self, cx: &mut App) {
         let theme = Theme::global_mut(cx);
@@ -239,9 +268,29 @@ impl AppearanceConfig {
 pub struct AppConfig {
     #[serde(default)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    recent_files: Vec<PathBuf>,
 }
 
 impl AppConfig {
+    /// Add a path to the recent files list.
+    /// Inserts at the top, deduplicates, and limits to 15 entries.
+    pub fn add_recent_file(&mut self, path: PathBuf) {
+        self.recent_files.retain(|p| p != &path);
+        self.recent_files.insert(0, path);
+        self.recent_files.truncate(15);
+    }
+
+    /// Get the list of recent files.
+    pub fn recent_files(&self) -> &[PathBuf] {
+        &self.recent_files
+    }
+
+    /// Clear all recent files.
+    pub fn clear_recent_files(&mut self) {
+        self.recent_files.clear();
+    }
+
     pub fn config_path() -> PathBuf {
         let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         path.push("peekdown");

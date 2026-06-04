@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::{
     App, InteractiveElement as _, IntoElement, ListState, ParentElement as _, Pixels, SharedString,
     Styled as _, Window, div, px, relative,
@@ -21,6 +23,8 @@ pub struct HeadingItem {
 pub struct ParsedDocument {
     pub(crate) source: SharedString,
     pub(crate) blocks: Vec<BlockNode>,
+    /// Map from anchor slug to block index for heading navigation.
+    pub(crate) heading_map: HashMap<String, usize>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -41,6 +45,49 @@ impl NodeRenderOptions {
 }
 
 impl ParsedDocument {
+    /// Build the heading_map by walking all blocks and collecting heading IDs.
+    pub(crate) fn build_heading_map(&mut self) {
+        self.heading_map.clear();
+        let mut slug_counts: HashMap<String, usize> = HashMap::new();
+
+        for (index, block) in self.blocks.iter().enumerate() {
+            Self::collect_heading_ids(block, index, &mut self.heading_map, &mut slug_counts);
+        }
+    }
+
+    fn collect_heading_ids(
+        block: &BlockNode,
+        block_index: usize,
+        map: &mut HashMap<String, usize>,
+        slug_counts: &mut HashMap<String, usize>,
+    ) {
+        match block {
+            BlockNode::Heading { id, .. } => {
+                if let Some(slug) = id {
+                    if !slug.is_empty() {
+                        let count = slug_counts.entry(slug.to_string()).or_insert(0);
+                        let final_slug = if *count > 0 {
+                            format!("{}-{}", slug, *count)
+                        } else {
+                            slug.to_string()
+                        };
+                        *count += 1;
+                        map.insert(final_slug, block_index);
+                    }
+                }
+            }
+            BlockNode::Root { children, .. }
+            | BlockNode::Blockquote { children, .. }
+            | BlockNode::List { children, .. }
+            | BlockNode::ListItem { children, .. } => {
+                for child in children {
+                    Self::collect_heading_ids(child, block_index, map, slug_counts);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
         for block in self.blocks.iter() {
