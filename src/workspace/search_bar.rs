@@ -51,20 +51,22 @@ impl SearchState {
             return;
         }
 
-        // Binary search: block_spans are sorted by span.start (from document order).
-        // O(log n) instead of O(n) linear scan per match.
+        // Binary search by span.start (strict total order), then verify containment.
+        // block_spans are sorted by span.start (from document order), but there may be
+        // gaps between blocks (e.g. frontmatter, whitespace). The comparator must define
+        // a strict total order for binary_search_by to work correctly.
         let find_block = |byte_pos: usize| -> usize {
-            match block_spans.binary_search_by(|(_, span)| {
-                if byte_pos < span.start {
-                    std::cmp::Ordering::Less
-                } else if byte_pos >= span.end {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            }) {
-                Ok(idx) => block_spans[idx].0,
-                Err(_) => 0,
+            let search = block_spans.binary_search_by(|(_, span)| span.start.cmp(&byte_pos));
+            let idx = match search {
+                Ok(idx) => idx,                          // exact match on span.start
+                Err(idx) if idx > 0 => idx - 1,          // preceding span is the candidate
+                _ => return 0,                           // before any span
+            };
+            // Verify byte_pos is within the candidate span
+            if byte_pos < block_spans[idx].1.end {
+                block_spans[idx].0
+            } else {
+                0
             }
         };
 
@@ -126,28 +128,28 @@ impl SearchState {
                     }
                 }
             } else {
-                // Case-insensitive find (original logic)
-                let query_lower = query.to_lowercase();
-                let source_lower = source.to_lowercase();
-                let mut start = 0;
-                while start < source_lower.len() {
-                    let Some(pos) = source_lower[start..].find(&query_lower) else {
-                        break;
-                    };
-                    let absolute_pos = start + pos;
-                    let byte_range = absolute_pos..(absolute_pos + query_lower.len());
-                    let block_index = find_block(absolute_pos);
+                // Case-insensitive find: use regex with escaped literal + case_insensitive flag.
+                // Avoids to_lowercase() which can change byte length for Unicode chars
+                // (e.g. "ß" -> "ss"), breaking byte offsets into the original source.
+                let escaped = regex::escape(query);
+                let Ok(re) = RegexBuilder::new(&escaped)
+                    .case_insensitive(true)
+                    .nest_limit(50)
+                    .size_limit(1 << 20)
+                    .build()
+                else {
+                    return;
+                };
+                for mat in re.find_iter(source) {
                     if self.matches.len() >= MAX_MATCHES {
                         break;
                     }
+                    let byte_range = mat.start()..mat.end();
+                    let block_index = find_block(mat.start());
                     self.matches.push(SearchMatch {
                         block_index,
                         byte_range,
                     });
-                    start = absolute_pos + query_lower.len();
-                    while start < source_lower.len() && !source_lower.is_char_boundary(start) {
-                        start += 1;
-                    }
                 }
             }
         }
@@ -193,7 +195,7 @@ impl SearchState {
 /// Callback type for search events.
 pub type OnSearchNavigate = Box<dyn Fn(usize, &mut Window, &mut App) + 'static>;
 pub type OnSearchClose = Box<dyn Fn(&mut Window, &mut App) + 'static>;
-pub type OnSearchChange = Box<dyn Fn(&str, &mut App) + 'static>;
+pub type OnSearchChange = Box<dyn Fn(&str, bool, bool, &mut App) + 'static>;
 
 /// Search bar view.
 pub struct SearchBar {
@@ -217,7 +219,7 @@ impl SearchBar {
                 this.search_state.query = text.clone();
                 // Trigger on_change callback
                 if let Some(on_change) = &this.on_change {
-                    on_change(&text, cx);
+                    on_change(&text, this.search_state.is_regex, this.search_state.is_case_sensitive, cx);
                 }
                 cx.notify();
             }
@@ -243,7 +245,7 @@ impl SearchBar {
         self
     }
 
-    pub fn on_change(mut self, callback: impl Fn(&str, &mut App) + 'static) -> Self {
+    pub fn on_change(mut self, callback: impl Fn(&str, bool, bool, &mut App) + 'static) -> Self {
         self.on_change = Some(Box::new(callback));
         self
     }
@@ -311,6 +313,9 @@ impl Render for SearchBar {
             .id("search-bar")
             .track_focus(&self.focus_handle)
             .key_context("SearchBar")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     this.handle_close(window, cx);
@@ -355,7 +360,7 @@ impl Render for SearchBar {
                         this.search_state.is_regex = !this.search_state.is_regex;
                         if let Some(on_change) = &this.on_change {
                             let query = this.search_state.query.clone();
-                            on_change(&query, cx);
+                            on_change(&query, this.search_state.is_regex, this.search_state.is_case_sensitive, cx);
                         }
                         cx.notify();
                     }))
@@ -372,7 +377,7 @@ impl Render for SearchBar {
                         this.search_state.is_case_sensitive = !this.search_state.is_case_sensitive;
                         if let Some(on_change) = &this.on_change {
                             let query = this.search_state.query.clone();
-                            on_change(&query, cx);
+                            on_change(&query, this.search_state.is_regex, this.search_state.is_case_sensitive, cx);
                         }
                         cx.notify();
                     }))

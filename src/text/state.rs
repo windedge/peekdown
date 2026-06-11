@@ -88,6 +88,8 @@ pub struct TextViewState {
     pub(super) parsed_content: Arc<Mutex<ParsedContent>>,
     text: SharedString,
     search_query: Option<SharedString>,
+    search_is_regex: bool,
+    search_is_case_sensitive: bool,
     parsed_error: Option<SharedString>,
     /// Path to the source document, used for resolving relative image paths.
     document_path: Option<std::path::PathBuf>,
@@ -150,6 +152,8 @@ impl TextViewState {
             parsed_error: None,
             text: text.to_string().into(),
             search_query: None,
+            search_is_regex: false,
+            search_is_case_sensitive: false,
             document_path: doc_path.map(|p| p.to_path_buf()),
             tx,
             _parse_task,
@@ -289,12 +293,14 @@ impl TextViewState {
         self.parsed_content.lock().unwrap().document.block_spans()
     }
 
-    pub fn set_search_query(&mut self, query: &str, cx: &mut Context<Self>) {
+    pub fn set_search_query(&mut self, query: &str, is_regex: bool, case_sensitive: bool, cx: &mut Context<Self>) {
         if query.is_empty() {
             self.search_query = None;
         } else {
             self.search_query = Some(query.to_string().into());
         }
+        self.search_is_regex = is_regex;
+        self.search_is_case_sensitive = case_sensitive;
         cx.notify();
     }
 
@@ -511,6 +517,8 @@ impl Render for TextViewState {
         };
         let mut node_cx = node_cx;
         node_cx.search_query = self.search_query.clone();
+        node_cx.search_is_regex = self.search_is_regex;
+        node_cx.search_is_case_sensitive = self.search_is_case_sensitive;
         node_cx.code_block_actions = self.code_block_actions.clone();
         let content_max_width = self.text_view_style.content_max_width;
 

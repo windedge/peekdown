@@ -508,7 +508,7 @@ impl WorkspaceView {
         }
         let text_view_state = self.tabs[tab_index].view.read(cx).text_view_state().clone();
         text_view_state.update(cx, |state, cx| {
-            state.set_search_query("", cx);
+            state.set_search_query("", false, false, cx);
         });
     }
 
@@ -1550,10 +1550,13 @@ impl WorkspaceView {
                 })
                 .on_change({
                     let workspace = workspace.clone();
-                    move |query, cx| {
+                    move |query, is_regex, is_case_sensitive, cx| {
                         if let Some(ws) = workspace.upgrade() {
+                            // Flags are passed directly by SearchBar (which has &mut Self
+                            // access to its own state), avoiding any double-borrow on the
+                            // search_bar entity.
                             ws.update(cx, |ws, cx| {
-                                ws.update_search(query, cx);
+                                ws.update_search(query, is_regex, is_case_sensitive, cx);
                             });
                         }
                     }
@@ -1576,42 +1579,35 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn update_search(&mut self, query: &str, cx: &mut Context<Self>) {
+    fn update_search(&mut self, query: &str, is_regex: bool, is_case_sensitive: bool, cx: &mut Context<Self>) {
         if self.tabs.is_empty() {
             return;
         }
-
-        // Read search options from the search bar before creating state
-        let (is_regex, is_case_sensitive) = self
-            .search_bar
-            .as_ref()
-            .map(|sb| sb.read(cx).search_flags())
-            .unwrap_or((false, false));
 
         let tab = &self.tabs[self.active_tab_index];
         let source = tab.view.read(cx).source_text(cx);
         let block_spans = tab.view.read(cx).block_spans(cx);
 
-        let mut state = SearchState {
+        let mut search_state = SearchState {
             is_regex,
             is_case_sensitive,
             ..Default::default()
         };
-        state.search(source.as_ref(), query, &block_spans);
+        search_state.search(source.as_ref(), query, &block_spans);
         let query_text = query.to_string();
         let text_view_state = tab.view.read(cx).text_view_state().clone();
-        text_view_state.update(cx, |state, cx| {
-            state.set_search_query(&query_text, cx);
+        text_view_state.update(cx, |text_state, cx| {
+            text_state.set_search_query(&query_text, is_regex, is_case_sensitive, cx);
         });
 
         // Navigate to first match if any
-        let first_block = state.current().map(|m| m.block_index);
+        let first_block = search_state.current().map(|m| m.block_index);
 
         if let Some(search_bar) = self.search_bar.clone() {
             cx.defer(move |cx| {
                 search_bar
                     .update(cx, |bar, cx| {
-                        bar.update_state(state, cx);
+                        bar.update_state(search_state, cx);
                     });
             });
         }

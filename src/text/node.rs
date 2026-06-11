@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use regex::RegexBuilder;
+
 use gpui::{
     AnyElement, App, ClipboardItem, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half,
     HighlightStyle, InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement,
@@ -732,7 +734,7 @@ impl CodeBlock {
         let styles = self.styles.lock().unwrap();
         let code_highlights = match node_cx.search_query.as_ref() {
             Some(query) if !query.is_empty() => {
-                let ranges = search_ranges(self.code.as_ref(), query);
+                let ranges = search_ranges(self.code.as_ref(), query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
                 if ranges.is_empty() {
                     styles.clone()
                 } else {
@@ -810,6 +812,8 @@ pub(crate) struct NodeContext {
     pub(crate) offset: usize,
     pub(crate) link_refs: HashMap<SharedString, LinkMark>,
     pub(crate) search_query: Option<SharedString>,
+    pub(crate) search_is_regex: bool,
+    pub(crate) search_is_case_sensitive: bool,
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     /// The path of the source document, used for resolving relative image paths.
@@ -826,14 +830,24 @@ impl PartialEq for NodeContext {
     fn eq(&self, other: &Self) -> bool {
         self.link_refs == other.link_refs
             && self.search_query == other.search_query
+            && self.search_is_regex == other.search_is_regex
+            && self.search_is_case_sensitive == other.search_is_case_sensitive
             && self.style == other.style
         // Note: code_block_buttons is intentionally not compared (closures can't be compared)
     }
 }
 
-fn search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+fn search_ranges(text: &str, query: &str, is_regex: bool, case_sensitive: bool) -> Vec<Range<usize>> {
     if query.is_empty() || text.is_empty() {
         return vec![];
+    }
+
+    if is_regex {
+        return search_ranges_regex(text, query, case_sensitive);
+    }
+
+    if case_sensitive {
+        return search_ranges_case_sensitive(text, query);
     }
 
     // Fast path: ASCII-only case-insensitive search
@@ -924,6 +938,35 @@ fn search_ranges_ascii(text: &str, query: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+/// Regex-based search using the query as a regex pattern.
+fn search_ranges_regex(text: &str, query: &str, case_sensitive: bool) -> Vec<Range<usize>> {
+    let Ok(re) = RegexBuilder::new(query)
+        .case_insensitive(!case_sensitive)
+        .nest_limit(50)
+        .size_limit(1 << 20)
+        .build()
+    else {
+        return vec![];
+    };
+    re.find_iter(text).map(|m| m.start()..m.end()).collect()
+}
+
+/// Case-sensitive substring search.
+fn search_ranges_case_sensitive(text: &str, query: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(query) {
+        let abs_start = start + pos;
+        let abs_end = abs_start + query.len();
+        ranges.push(abs_start..abs_end);
+        start = abs_end;
+        while start < text.len() && !text.is_char_boundary(start) {
+            start += 1;
+        }
+    }
+    ranges
+}
+
 impl Paragraph {
     fn render(
         &self,
@@ -959,7 +1002,7 @@ impl Paragraph {
                         .unwrap()
                         .set_text(text.clone().into());
                     let inline_highlights = if let Some(query) = search_query {
-                        let ranges = search_ranges(&text, query);
+                        let ranges = search_ranges(&text, query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
                         if ranges.is_empty() {
                             highlights.clone()
                         } else {
@@ -1064,7 +1107,7 @@ impl Paragraph {
         if text.len() > 0 {
             // For the last node, we can move highlights instead of cloning
             let inline_highlights = if let Some(query) = search_query {
-                let ranges = search_ranges(&text, query);
+                let ranges = search_ranges(&text, query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
                 if ranges.is_empty() {
                     highlights  // Move instead of clone for last node
                 } else {
