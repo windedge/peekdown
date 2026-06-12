@@ -2,11 +2,11 @@
 
 **Peekdown** is a lightweight, cross-platform, native Markdown viewer built with Rust, designed specifically for developers who need to read documentation efficiently without bloating their system resources.
 
-Unlike Electron or Tauri-based solutions that consume hundreds of megabytes of RAM, Peekdown is native, fast, and keeps its memory footprint under 100MB, even with multiple documents open.
+Unlike Electron or Tauri-based solutions that consume hundreds of megabytes of RAM, Peekdown is native, fast, and keeps its memory footprint low, even with multiple documents open.
 
 ## 🚀 Features
 
-- **Extreme Performance**: Native Rust application with < 100MB memory usage.
+- **Extreme Performance**: Native Rust application with low memory usage.
 - **Fast Startup**: Cold start in under 1 second.
 - **Tabbed Interface**: Open and switch between multiple Markdown files seamlessly.
 - **Syntax Highlighting**: Beautiful code block highlighting for Rust, Python, JS, Go, and more.
@@ -48,11 +48,18 @@ cargo run --release
 
 - [x] Basic Window & GPUI Setup
 - [x] Markdown Rendering Core
-- [ ] Tab System
-- [ ] Syntax Highlighting
-- [ ] Outline Sidebar
-- [ ] Search Functionality
-- [ ] Windows Installer / Association
+- [x] Tab System
+- [x] Syntax Highlighting
+- [x] Outline Sidebar
+- [x] Search Functionality
+- [x] Recent Files List
+- [x] Mermaid Diagram Rendering
+- [x] Cross-Platform Support
+- [x] Windows File Association
+- [ ] Code Copy, Font Zoom & Quick Actions
+- [ ] Anchor Jump, Regex Search & Export
+
+For the full roadmap, see [docs/roadmap.md](docs/roadmap.md)
 
 ## 📄 License
 
