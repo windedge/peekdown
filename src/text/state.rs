@@ -350,13 +350,13 @@ impl TextViewState {
 
     /// Save bounds and unselect if bounds changed.
     pub(super) fn update_bounds(&mut self, bounds: Bounds<Pixels>) {
-        let width_changed = self.bounds.size.width != bounds.size.width;
+        let width_delta = (self.bounds.size.width - bounds.size.width).abs();
 
         if self.bounds.size != bounds.size {
             self.clear_selection();
         }
 
-        if width_changed {
+        if width_delta > px(5.0) {
             let block_count = self.block_count();
             self.list_state.reset(block_count);
         }
@@ -527,7 +527,7 @@ impl TextViewState {
         for (i, block) in parsed.document.blocks.iter().enumerate() {
             if let node::BlockNode::CodeBlock(cb) = block {
                 if cb.lang().as_ref().map(|s| s.as_str()) == Some("mermaid")
-                    && cb.diagram_svg_path.lock().unwrap().is_none()
+                    && cb.state.lock().unwrap().diagram_svg_path.is_none()
                     && !cb.is_rendering.load(Ordering::Relaxed)
                 {
                     cb.is_rendering.store(true, Ordering::Relaxed);
@@ -550,7 +550,7 @@ impl TextViewState {
                                     &parsed.document.blocks[block_idx]
                                 {
                                     if cb.is_rendering.load(Ordering::Relaxed) {
-                                        *cb.diagram_svg_path.lock().unwrap() =
+                                        cb.state.lock().unwrap().diagram_svg_path =
                                             Some(path);
                                         cb.is_rendering
                                             .store(false, Ordering::Relaxed);
@@ -591,27 +591,30 @@ impl TextViewState {
 impl Render for TextViewState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = cx.entity();
-        let (document, node_cx) = {
-            let content = self.parsed_content.lock().unwrap();
-            (content.document.clone(), content.node_cx.clone())
-        };
-        let mut node_cx = node_cx;
-        node_cx.search_query = self.search_query.clone();
-        node_cx.search_is_regex = self.search_is_regex;
-        node_cx.search_is_case_sensitive = self.search_is_case_sensitive;
-        node_cx.code_block_actions = self.code_block_actions.clone();
+        // Pre-capture fields that don't require locking
+        let search_query = self.search_query.clone();
+        let search_is_regex = self.search_is_regex;
+        let search_is_case_sensitive = self.search_is_case_sensitive;
+        let code_block_actions = self.code_block_actions.clone();
         let content_max_width = self.text_view_style.content_max_width;
-
-        // Capture settings for scroll handler
-        let list_state = self.list_state.clone();
         let scrollable = self.scrollable;
+        let list_state = self.list_state.clone();
+
+        // Hold the lock and borrow the document directly, avoiding full AST clone.
+        // Clone only node_cx (small) since we need to modify it with search/UI state.
+        let parsed = self.parsed_content.lock().unwrap();
+        let mut node_cx = parsed.node_cx.clone();
+        node_cx.search_query = search_query;
+        node_cx.search_is_regex = search_is_regex;
+        node_cx.search_is_case_sensitive = search_is_case_sensitive;
+        node_cx.code_block_actions = code_block_actions;
 
         v_flex()
             .size_full()
             .map(|this| match &mut self.parsed_error {
-                None => this.child(document.render_root(
-                    if self.scrollable {
-                        Some(self.list_state.clone())
+                None => this.child(parsed.document.render_root(
+                    if scrollable {
+                        Some(list_state.clone())
                     } else {
                         None
                     },

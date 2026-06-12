@@ -376,8 +376,6 @@ pub(crate) struct InlineNode {
     pub(crate) image: Option<ImageNode>,
     /// The text styles, each tuple contains the range of the text and the style.
     pub(crate) marks: Vec<(Range<usize>, TextMark)>,
-
-    state: Arc<Mutex<InlineState>>,
 }
 
 impl PartialEq for InlineNode {
@@ -392,7 +390,6 @@ impl InlineNode {
             text: text.into(),
             image: None,
             marks: vec![],
-            state: Arc::new(Mutex::new(InlineState::default())),
         }
     }
 
@@ -421,7 +418,12 @@ pub(crate) struct Paragraph {
     /// The key is the identifier, the value is the url.
     pub(super) link_refs: HashMap<SharedString, SharedString>,
 
+    /// State for the last (or only) text segment in this paragraph.
+    /// For paragraphs with images, intermediate segments use `segment_states`.
     pub(crate) state: Arc<Mutex<InlineState>>,
+    /// Additional segment states for paragraphs with images.
+    /// Each entry corresponds to a text segment before an image break.
+    pub(super) segment_states: Arc<Mutex<Vec<Arc<Mutex<InlineState>>>>>,
 }
 
 impl PartialEq for Paragraph {
@@ -439,19 +441,22 @@ impl Paragraph {
             children: vec![InlineNode::new(&text)],
             link_refs: HashMap::new(),
             state: Arc::new(Mutex::new(InlineState::default())),
+            segment_states: Arc::new(Mutex::new(vec![])),
         }
     }
 
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
 
-        for c in self.children.iter() {
-            let state = c.state.lock().unwrap();
+        let seg_states = self.segment_states.lock().unwrap();
+        for seg_state in seg_states.iter() {
+            let state = seg_state.lock().unwrap();
             if let Some(selection) = &state.selection {
                 let part_text = state.text.clone();
                 text.push_str(&part_text[selection.start..selection.end]);
             }
         }
+        drop(seg_states);
 
         let state = self.state.lock().unwrap();
         if let Some(selection) = &state.selection {
@@ -464,9 +469,11 @@ impl Paragraph {
 
     /// Clear all InlineState selections.
     pub(super) fn clear_selection(&self) {
-        for c in self.children.iter() {
-            c.state.lock().unwrap().selection = None;
+        let seg_states = self.segment_states.lock().unwrap();
+        for seg_state in seg_states.iter() {
+            seg_state.lock().unwrap().selection = None;
         }
+        drop(seg_states);
         self.state.lock().unwrap().selection = None;
     }
 }
@@ -595,6 +602,7 @@ impl Paragraph {
                 children: vec![],
                 link_refs: Default::default(),
                 state: Arc::new(Mutex::new(InlineState::default())),
+                segment_states: Arc::new(Mutex::new(vec![])),
             },
         )
     }
@@ -639,22 +647,34 @@ impl Paragraph {
 
     pub(crate) fn merge(&mut self, other: Self) {
         self.children.extend(other.children);
+        // Merge segment_states from the other paragraph
+        let mut other_segs = other.segment_states.lock().unwrap();
+        if !other_segs.is_empty() {
+            self.segment_states.lock().unwrap().append(&mut other_segs);
+        }
     }
+}
+
+/// Merged internal state for CodeBlock, stored behind a single `Arc<Mutex>`.
+#[derive(Debug, Clone)]
+pub(crate) struct CodeBlockState {
+    pub(crate) styles: Vec<(Range<usize>, HighlightStyle)>,
+    pub(crate) cached_theme: Option<String>,
+    /// Path to a rendered SVG file for Mermaid diagrams.
+    pub(crate) diagram_svg_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     code: SharedString,
     lang: Option<SharedString>,
-    styles: Arc<Mutex<Vec<(Range<usize>, HighlightStyle)>>>,
-    cached_theme: Arc<Mutex<Option<String>>>,
-    state: Arc<Mutex<InlineState>>,
+    /// Merged state: styles, cached_theme, diagram_svg_path.
+    pub(crate) state: Arc<Mutex<CodeBlockState>>,
+    /// Inline state kept separate because `Inline::new()` requires `Arc<Mutex<InlineState>>`.
+    pub(crate) inline_state: Arc<Mutex<InlineState>>,
     pub span: Option<Span>,
-
-    /// Path to a rendered SVG file for Mermaid diagrams.
-    /// `Some(path)` means rendering is complete and the file is ready.
-    pub(crate) diagram_svg_path: Arc<Mutex<Option<PathBuf>>>,
     /// Whether Mermaid rendering is currently in progress.
+    /// Kept as `Arc<AtomicBool>` for lock-free reads during rendering.
     pub(crate) is_rendering: Arc<AtomicBool>,
 }
 
@@ -680,24 +700,26 @@ impl CodeBlock {
         lang: Option<SharedString>,
         span: Option<impl Into<Span>>,
     ) -> Self {
-        let state = Arc::new(Mutex::new(InlineState::default()));
-        state.lock().unwrap().set_text(code.clone());
+        let inline_state = Arc::new(Mutex::new(InlineState::default()));
+        inline_state.lock().unwrap().set_text(code.clone());
 
         Self {
             code,
             lang,
-            styles: Arc::new(Mutex::new(vec![])),
-            cached_theme: Arc::new(Mutex::new(None)),
-            state,
+            state: Arc::new(Mutex::new(CodeBlockState {
+                styles: vec![],
+                cached_theme: None,
+                diagram_svg_path: None,
+            })),
+            inline_state,
             span: span.map(|s| s.into()),
-            diagram_svg_path: Arc::new(Mutex::new(None)),
             is_rendering: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
-        let state = self.state.lock().unwrap();
+        let state = self.inline_state.lock().unwrap();
         if let Some(selection) = &state.selection {
             let part_text = state.text.clone();
             text.push_str(&part_text[selection.start..selection.end]);
@@ -707,7 +729,7 @@ impl CodeBlock {
 
     /// Clear InlineState selection.
     pub(super) fn clear_selection(&self) {
-        self.state.lock().unwrap().selection = None;
+        self.inline_state.lock().unwrap().selection = None;
     }
 
     /// Ensure styles are computed for the current highlight theme.
@@ -715,18 +737,17 @@ impl CodeBlock {
     fn ensure_styles(&self, highlight_theme: &HighlightTheme) {
         let theme_key = format!("{:p}", highlight_theme as *const HighlightTheme);
 
-        let mut cached = self.cached_theme.lock().unwrap();
-        if cached.as_deref() == Some(&theme_key) && !self.styles.lock().unwrap().is_empty() {
+        let mut cs = self.state.lock().unwrap();
+        if cs.cached_theme.as_deref() == Some(&theme_key) && !cs.styles.is_empty() {
             return;
         }
 
-        let mut styles = self.styles.lock().unwrap();
         if let Some(lang) = &self.lang {
-            *styles = highlight_code(self.code.as_ref(), lang, highlight_theme);
+            cs.styles = highlight_code(self.code.as_ref(), lang, highlight_theme);
         } else {
-            styles.clear();
+            cs.styles.clear();
         }
-        *cached = Some(theme_key);
+        cs.cached_theme = Some(theme_key);
     }
 
     fn render(
@@ -739,21 +760,20 @@ impl CodeBlock {
         // Mermaid diagram rendering: show rendered image or placeholder
         if self.lang.as_ref().map(|s| s.as_str()) == Some("mermaid") {
             // Check if we have a rendered SVG file
-            if let Some(svg_path) = self.diagram_svg_path.lock().unwrap().as_ref() {
-                if svg_path.exists() {
-                    return div()
-                        .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
-                        .child(
-                            div()
-                                .id(("mermaid", options.ix))
-                                .child(
-                                    img(svg_path.clone())
-                                        .max_w(relative(1.0))
-                                        .object_fit(ObjectFit::Contain),
-                                ),
-                        )
-                        .into_any_element();
-                }
+            if self.state.lock().unwrap().diagram_svg_path.as_ref().map_or(false, |p| p.exists()) {
+                let svg_path = self.state.lock().unwrap().diagram_svg_path.clone().unwrap();
+                return div()
+                    .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
+                    .child(
+                        div()
+                            .id(("mermaid", options.ix))
+                            .child(
+                                img(svg_path)
+                                    .max_w(relative(1.0))
+                                    .object_fit(ObjectFit::Contain),
+                            ),
+                    )
+                    .into_any_element();
             }
 
             // Show placeholder while rendering
@@ -782,12 +802,12 @@ impl CodeBlock {
         self.ensure_styles(cx.theme().highlight_theme.as_ref());
 
         // Only clone and merge highlights if there's an active search query
-        let styles = self.styles.lock().unwrap();
+        let cs = self.state.lock().unwrap();
         let code_highlights = match node_cx.search_query.as_ref() {
             Some(query) if !query.is_empty() => {
                 let ranges = search_ranges(self.code.as_ref(), query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
                 if ranges.is_empty() {
-                    styles.clone()
+                    cs.styles.clone()
                 } else {
                     let search_style = HighlightStyle {
                         background_color: Some(cx.theme().selection.alpha(0.35)),
@@ -797,12 +817,12 @@ impl CodeBlock {
                         .into_iter()
                         .map(|range| (range, search_style))
                         .collect::<Vec<_>>();
-                    gpui::combine_highlights(styles.clone(), search_highlights).collect()
+                    gpui::combine_highlights(cs.styles.clone(), search_highlights).collect()
                 }
             }
-            _ => styles.clone(),
+            _ => cs.styles.clone(),
         };
-        drop(styles);
+        drop(cs);
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -818,7 +838,7 @@ impl CodeBlock {
                     .refine_style(&style.code_block)
                     .child(Inline::new(
                         "code",
-                        self.state.clone(),
+                        self.inline_state.clone(),
                         vec![],
                         code_highlights,
                     ))
@@ -1047,11 +1067,9 @@ impl Paragraph {
 
             if let Some(image) = &inline_node.image {
                 if text.len() > 0 {
-                    inline_node
-                        .state
-                        .lock()
-                        .unwrap()
-                        .set_text(text.clone().into());
+                    let seg_state = Arc::new(Mutex::new(InlineState::default()));
+                    seg_state.lock().unwrap().set_text(text.clone().into());
+                    self.segment_states.lock().unwrap().push(seg_state.clone());
                     let inline_highlights = if let Some(query) = search_query {
                         let ranges = search_ranges(&text, query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
                         if ranges.is_empty() {
@@ -1069,7 +1087,7 @@ impl Paragraph {
                     child_nodes.push(
                         Inline::new(
                             ix,
-                            inline_node.state.clone(),
+                            seg_state,
                             links.clone(),
                             inline_highlights,
                         )
@@ -1087,6 +1105,7 @@ impl Paragraph {
                         .id(ix)
                         .object_fit(ObjectFit::Contain)
                         .max_w(relative(1.))
+                        .max_h(px(2000.))
                         .when_some(image.width, |this, width| this.w(width))
                         .when_some(image.link.clone(), |this, link| {
                             let title = image.title();

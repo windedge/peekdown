@@ -3,7 +3,7 @@
 //! This module checks if `mmdc` (mermaid-cli) is available on the system and
 //! can render Mermaid diagram source code into SVG files for display.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::Result;
@@ -78,7 +78,34 @@ impl MermaidRenderer {
             std::fs::write(&path, svg.as_bytes())?;
         }
 
+        // Clean up old cache, keeping the most recent 100 SVG files
+        cleanup_old_cache(&dir, 100);
+
         Ok(path)
+    }
+}
+
+/// Clean up old cached SVG files, keeping only the most recent `max_files`.
+fn cleanup_old_cache(dir: &Path, max_files: usize) {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "svg"))
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            let modified = meta.modified().ok()?;
+            Some((e.path(), modified))
+        })
+        .collect();
+
+    if entries.len() > max_files {
+        // Sort by modification time, newest first
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        for (path, _) in entries.drain(max_files..) {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 

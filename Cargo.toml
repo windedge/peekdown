@@ -33,6 +33,7 @@ html5ever = "0.27"
 markup5ever_rcdom = "0.3.0"
 ropey = "1.6"
 regex = "1"
+lru = "0.12"
 tree-sitter-kotlin = { git = "https://github.com/fwcd/tree-sitter-kotlin", branch = "main" }
 ignore = "0.4"
 
