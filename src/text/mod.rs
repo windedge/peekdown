@@ -4,6 +4,7 @@ mod format;
 mod highlighter_cache;
 mod inline;
 mod languages;
+pub(crate) mod mermaid;
 mod node;
 pub(crate) mod selection;
 mod state;

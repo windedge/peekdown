@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use gpui::*;
 use gpui_component_assets::Assets;
@@ -8,6 +8,7 @@ mod services;
 mod state;
 mod text;
 mod workspace;
+#[cfg(target_os = "windows")]
 mod registry;
 mod ipc;
 mod file_watcher;
@@ -17,6 +18,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
+    #[cfg(target_os = "windows")]
     if args.len() > 1 && args[1] == "--register" {
         if let Err(e) = registry::register_file_association() {
             eprintln!("Failed to register file association: {:?}", e);

@@ -6,9 +6,10 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, InteractiveElement,
-    IntoElement, KeyBinding, ListOffset, ListState, ParentElement as _, Pixels, Point, Render, SharedString,
-    Size, Styled as _, Task, Window, prelude::FluentBuilder as _, px,
+    App, AppContext as _, AsyncApp, Bounds, ClipboardItem, Context, FocusHandle,
+    InteractiveElement, IntoElement, KeyBinding, ListOffset, ListState, ParentElement as _,
+    Pixels, Point, Render, SharedString, Size, Styled as _, Task, WeakEntity, Window,
+    prelude::FluentBuilder as _, px,
 };
 use smol::{Timer, stream::StreamExt as _};
 
@@ -125,6 +126,7 @@ impl TextViewState {
                             state.parsed_error = Some(err.clone());
                         }
                         state.clear_selection();
+                        state.render_mermaid_blocks(cx);
                         cx.notify();
                     });
                 }
@@ -505,6 +507,84 @@ impl TextViewState {
 
     pub(crate) fn is_selectable(&self) -> bool {
         self.selectable
+    }
+
+    /// Start rendering all mermaid code blocks in the document.
+    ///
+    /// Scans the parsed content for code blocks with the "mermaid" language tag
+    /// that haven't been rendered yet and spawns async tasks to render them.
+    /// Falls back to showing the source code if `mmdc` is not available.
+    fn render_mermaid_blocks(&mut self, cx: &mut Context<Self>) {
+        use std::sync::atomic::Ordering;
+
+        if !crate::text::mermaid::MermaidRenderer::is_available() {
+            return;
+        }
+
+        let mut mermaid_blocks: Vec<(usize, String)> = Vec::new();
+
+        let parsed = self.parsed_content.lock().unwrap();
+        for (i, block) in parsed.document.blocks.iter().enumerate() {
+            if let node::BlockNode::CodeBlock(cb) = block {
+                if cb.lang().as_ref().map(|s| s.as_str()) == Some("mermaid")
+                    && cb.diagram_svg_path.lock().unwrap().is_none()
+                    && !cb.is_rendering.load(Ordering::Relaxed)
+                {
+                    cb.is_rendering.store(true, Ordering::Relaxed);
+                    mermaid_blocks.push((i, cb.code().to_string()));
+                }
+            }
+        }
+        drop(parsed);
+
+        // Spawn async rendering tasks for each mermaid block
+        for (block_idx, source) in mermaid_blocks {
+            let this = cx.entity().downgrade();
+            cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+                match crate::text::mermaid::MermaidRenderer::render_to_file(&source).await {
+                    Ok(path) => {
+                        this.update(cx, |state, inner_cx| {
+                            let parsed = state.parsed_content.lock().unwrap();
+                            if block_idx < parsed.document.blocks.len() {
+                                if let node::BlockNode::CodeBlock(cb) =
+                                    &parsed.document.blocks[block_idx]
+                                {
+                                    if cb.is_rendering.load(Ordering::Relaxed) {
+                                        *cb.diagram_svg_path.lock().unwrap() =
+                                            Some(path);
+                                        cb.is_rendering
+                                            .store(false, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                            inner_cx.notify();
+                        })
+                        .ok();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Mermaid diagram rendering failed for block {}: {}",
+                            block_idx,
+                            e
+                        );
+                        // Reset rendering flag so the block shows source code
+                        this.update(cx, |state, _inner_cx| {
+                            let parsed = state.parsed_content.lock().unwrap();
+                            if block_idx < parsed.document.blocks.len() {
+                                if let node::BlockNode::CodeBlock(cb) =
+                                    &parsed.document.blocks[block_idx]
+                                {
+                                    cb.is_rendering
+                                        .store(false, Ordering::Relaxed);
+                                }
+                            }
+                        })
+                        .ok();
+                    }
+                }
+            })
+            .detach();
+        }
     }
 }
 

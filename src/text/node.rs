@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use regex::RegexBuilder;
@@ -647,6 +650,12 @@ pub struct CodeBlock {
     cached_theme: Arc<Mutex<Option<String>>>,
     state: Arc<Mutex<InlineState>>,
     pub span: Option<Span>,
+
+    /// Path to a rendered SVG file for Mermaid diagrams.
+    /// `Some(path)` means rendering is complete and the file is ready.
+    pub(crate) diagram_svg_path: Arc<Mutex<Option<PathBuf>>>,
+    /// Whether Mermaid rendering is currently in progress.
+    pub(crate) is_rendering: Arc<AtomicBool>,
 }
 
 impl PartialEq for CodeBlock {
@@ -681,6 +690,8 @@ impl CodeBlock {
             cached_theme: Arc::new(Mutex::new(None)),
             state,
             span: span.map(|s| s.into()),
+            diagram_svg_path: Arc::new(Mutex::new(None)),
+            is_rendering: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -725,6 +736,46 @@ impl CodeBlock {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        // Mermaid diagram rendering: show rendered image or placeholder
+        if self.lang.as_ref().map(|s| s.as_str()) == Some("mermaid") {
+            // Check if we have a rendered SVG file
+            if let Some(svg_path) = self.diagram_svg_path.lock().unwrap().as_ref() {
+                if svg_path.exists() {
+                    return div()
+                        .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
+                        .child(
+                            div()
+                                .id(("mermaid", options.ix))
+                                .child(
+                                    img(svg_path.clone())
+                                        .max_w(relative(1.0))
+                                        .object_fit(ObjectFit::Contain),
+                                ),
+                        )
+                        .into_any_element();
+                }
+            }
+
+            // Show placeholder while rendering
+            if self.is_rendering.load(Ordering::Relaxed) {
+                return div()
+                    .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
+                    .child(
+                        div()
+                            .id(("mermaid-placeholder", options.ix))
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().muted)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Rendering diagram..."),
+                    )
+                    .into_any_element();
+            }
+
+            // Not rendered yet and not rendering: fall through to show
+            // source code block (default display)
+        }
+
         let style = &node_cx.style;
 
         // Ensure styles are computed for current highlight theme

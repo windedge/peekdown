@@ -1,6 +1,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, StyledExt};
 use std::path::PathBuf;
 
@@ -106,17 +107,36 @@ fn render_recent_files_section(
         )
         .child(
             if recent_files.is_empty() {
+                // Use same scrollable wrapper for type consistency
                 div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .py_2()
-                    .child("No recent files")
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .gap_1()
+                    .max_h(px(400.))
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .py_2()
+                            .child("No recent files"),
+                    )
             } else {
                 let mut items: Vec<gpui::Div> = Vec::new();
                 for path in &recent_files {
                     items.push(render_recent_file_item(path.clone(), &theme, cx));
                 }
-                div().flex().flex_col().w_full().gap_1().children(items)
+                // Limit height and make scrollable to prevent the list from pushing
+                // the "Open File..." button out of view
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .gap_1()
+                    .max_h(px(400.))
+                    .overflow_y_scrollbar()
+                    .children(items)
             },
         )
 }
