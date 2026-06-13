@@ -1,66 +1,167 @@
 # Peekdown
 
-**Peekdown** is a lightweight, cross-platform, native Markdown viewer built with Rust, designed specifically for developers who need to read documentation efficiently without bloating their system resources.
+A lightweight, native Markdown viewer built with Rust. Peekdown is designed to open Markdown files instantly and provide a distraction-free reading experience on Windows.
 
-Unlike Electron or Tauri-based solutions that consume hundreds of megabytes of RAM, Peekdown is native, fast, and keeps its memory footprint low, even with multiple documents open.
+> **Note:** Peekdown is currently Windows-first. macOS and Linux support is planned for future releases.
 
-## 🚀 Features
+---
 
-- **Extreme Performance**: Native Rust application with low memory usage.
-- **Fast Startup**: Cold start in under 1 second.
-- **Tabbed Interface**: Open and switch between multiple Markdown files seamlessly.
-- **Syntax Highlighting**: Beautiful code block highlighting for Rust, Python, JS, Go, and more.
-- **Outline Navigation**: Auto-generated table of contents for quick navigation.
-- **In-Document Search**: Fast search with keyword highlighting.
-- **Standard Markdown Support**: Renders GFM (GitHub Flavored Markdown) including tables, task lists, and images.
+## Features
 
-## 🛠️ Technology Stack
+- **Fast cold startup** – open files in under a second.
+- **Single-instance app** – double-clicking a `.md` file opens it in the existing window as a new tab.
+- **Native GPUI rendering** – smooth GPU-accelerated UI powered by [GPUI](https://github.com/zed-industries/zed).
+- **GitHub Flavored Markdown** – tables, task lists, fenced code blocks, strikethrough, and more via `pulldown-cmark`.
+- **Syntax highlighting** – code blocks rendered with `syntect`.
+- **Mermaid diagram support** – render `mermaid` code blocks as flowcharts, sequence diagrams, and more.
+- **Embedded HTML support** – handles tags like `<details>`, `<img>`, `<kbd>`, etc.
+- **Outline sidebar** – jump between headings quickly.
+- **File explorer sidebar** – browse Markdown files in the current directory or project root.
+- **In-document search** – find text inside the current document.
+- **Auto-refresh** – watch files for changes and reload automatically.
+- **Appearance settings** – light / dark / system theme, custom fonts, layout mode, zoom, and more.
+- **Windows file association** – register `.md` files to open with Peekdown from Explorer.
 
-- **Language**: Rust 🦀
-- **GUI Framework**: [GPUI](https://github.com/zed-industries/gpui) (The high-performance UI framework powering Zed)
-- **Markdown Parser**: `pulldown-cmark`
-- **Syntax Highlighting**: `syntect`
-- **Async Runtime**: `smol`
+---
 
-## 📦 Installation
+## Tech Stack
 
-*(Installation instructions will be added once the first release is ready. Currently under active development.)*
+| Layer | Crate / Library |
+|-------|-----------------|
+| UI framework | GPUI + gpui-component |
+| Markdown parsing | pulldown-cmark |
+| Syntax highlighting | syntect |
+| Async runtime | smol |
+| Embedded HTML parsing | html5ever + markup5ever_rcdom |
+| File watching | notify |
+| IPC | interprocess |
+| Diagram rendering | mermaid-rs-renderer |
 
-### Build from Source
+---
 
-Requirements:
-- Rust (latest stable)
-- Cargo
+## Build & Run
+
+### Requirements
+
+- [Rust](https://rust-lang.org/) toolchain (latest stable recommended)
+- Windows (the current implementation uses Windows APIs for IPC, window activation, and file association)
+
+### Run in development
 
 ```bash
-git clone https://github.com/yourusername/peekdown.git
-cd peekdown
-cargo run --release
+cargo run
 ```
 
-## 🎯 Usage
+### Run with a Markdown file
 
-- **Open File**: Drag and drop files into the window, or use `Ctrl+O` (planned).
-- **Command Line**: `peekdown README.md`
-- **Tabs**: Click tabs to switch documents.
+```bash
+cargo run --release -- path/to/file.md
+```
 
-## 🗺️ Roadmap
+### Build release binary
 
-- [x] Basic Window & GPUI Setup
-- [x] Markdown Rendering Core
-- [x] Tab System
-- [x] Syntax Highlighting
-- [x] Outline Sidebar
-- [x] Search Functionality
-- [x] Recent Files List
-- [x] Mermaid Diagram Rendering
-- [x] Cross-Platform Support
-- [x] Windows File Association
-- [ ] Code Copy, Font Zoom & Quick Actions
-- [ ] Anchor Jump, Regex Search & Export
+```bash
+cargo build --release
+```
 
-For the full roadmap, see [docs/roadmap.md](docs/roadmap.md)
+The executable will be located at `target/release/peekdown.exe`.
 
-## 📄 License
+---
 
-MIT License
+## Register File Association (Windows)
+
+Run the following command as Administrator to make Peekdown the default handler for `.md` files:
+
+```bash
+peekdown.exe --register
+```
+
+Or, from the project directory:
+
+```bash
+cargo run --release -- --register
+```
+
+This creates the necessary registry entries under `HKEY_CURRENT_USER\Software\Classes`.
+
+---
+
+## Configuration
+
+Peekdown stores user settings in the platform config directory:
+
+- Windows: `%APPDATA%\peekdown\config.toml`
+- Linux: `~/.config/peekdown/config.toml`
+- macOS: `~/Library/Application Support/peekdown/config.toml`
+
+### Example `config.toml`
+
+```toml
+[appearance]
+theme = "auto"               # "light", "dark", or "auto"
+layout = "centered"          # "centered" or "full_width"
+scroll_speed = 1.0
+window_width = 1024.0
+window_height = 768.0
+font_family = ""
+font_size = 16.0
+mono_font_family = ""
+mono_font_size = 13.0
+inertia_scroll = true
+show_fps = false
+sidebar_visible = false
+auto_refresh = true
+```
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl + O` | Open file dialog |
+| `Ctrl + F` | Open search bar |
+| `Esc` | Close search |
+| `Ctrl + Tab` | Next tab |
+| `Ctrl + Shift + Tab` | Previous tab |
+| `Ctrl + W` | Close current tab |
+| `Ctrl + +` | Zoom in font |
+| `Ctrl + -` | Zoom out font |
+| `Ctrl + 0` | Reset font size |
+| `Ctrl + R` | Refresh current document |
+| `Home` | Scroll to top |
+| `End` | Scroll to bottom |
+
+> Exact keybindings may evolve; refer to the in-app menu for the current bindings.
+
+---
+
+## Development
+
+### Run tests
+
+```bash
+cargo test
+```
+
+### Run lints
+
+```bash
+cargo clippy -- -D warnings
+```
+
+---
+
+## Contributing
+
+Contributions are welcome. Please keep the following conventions:
+
+- Code comments and UI text in English.
+- Commit messages in English.
+- Use `cargo check` and `cargo clippy` to verify changes.
+
+---
+
+## License
+
+Peekdown is released under the [MIT License](LICENSE).
