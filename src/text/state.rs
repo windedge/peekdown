@@ -513,13 +513,9 @@ impl TextViewState {
     ///
     /// Scans the parsed content for code blocks with the "mermaid" language tag
     /// that haven't been rendered yet and spawns async tasks to render them.
-    /// Falls back to showing the source code if `mmdc` is not available.
+    /// Falls back to showing the source code if rendering fails.
     fn render_mermaid_blocks(&mut self, cx: &mut Context<Self>) {
         use std::sync::atomic::Ordering;
-
-        if !crate::text::mermaid::MermaidRenderer::is_available() {
-            return;
-        }
 
         let mut mermaid_blocks: Vec<(usize, String)> = Vec::new();
 

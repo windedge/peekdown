@@ -1,64 +1,31 @@
-//! Mermaid diagram rendering using external CLI.
+//! Mermaid diagram rendering using mermaid-rs-renderer library.
 //!
-//! This module checks if `mmdc` (mermaid-cli) is available on the system and
-//! can render Mermaid diagram source code into SVG files for display.
+//! Uses the pure Rust `mermaid-rs-renderer` crate to render Mermaid diagram
+//! source code into SVG files for display, without requiring Node.js or mmdc CLI.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use anyhow::Result;
-use smol::io::{AsyncReadExt, AsyncWriteExt};
-use smol::process::Command;
 
-/// Mermaid diagram renderer using the external `mmdc` CLI tool.
+/// Mermaid diagram renderer using the `mermaid-rs-renderer` library.
 pub struct MermaidRenderer;
 
 impl MermaidRenderer {
-    /// Check if mermaid-cli (`mmdc`) is available on the system.
+    /// Check if mermaid rendering is available.
     ///
-    /// Runs `mmdc --version` and returns `true` if the command succeeds.
+    /// Always returns `true` because rendering is built into the application.
     pub fn is_available() -> bool {
-        std::process::Command::new("mmdc")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        true
     }
 
     /// Render mermaid source code to an SVG string (async).
     ///
-    /// Uses `mmdc` with stdin/stdout piping: reads source from stdin,
-    /// produces SVG on stdout.
+    /// Uses `mermaid-rs-renderer` via `smol::unblock` to avoid blocking the UI thread.
     ///
     /// Returns the SVG content as a string on success.
     pub async fn render_to_svg(source: &str) -> Result<String> {
-        let mut child = Command::new("mmdc")
-            .args(["-i", "-", "-o", "-", "--svg"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        // Write source to stdin and close it to signal EOF
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(source.as_bytes()).await?;
-            drop(stdin);
-        }
-
-        // Read stdout (SVG content)
-        let mut svg = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            stdout.read_to_string(&mut svg).await?;
-        }
-
-        // Wait for process to finish and check exit status
-        let status = child.status().await?;
-        if !status.success() {
-            anyhow::bail!("mermaid-cli (mmdc) exited with status: {}", status);
-        }
-
+        let source = source.to_string();
+        let svg = smol::unblock(move || mermaid_rs_renderer::render(&source)).await?;
         Ok(svg)
     }
 
