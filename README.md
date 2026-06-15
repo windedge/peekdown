@@ -179,16 +179,6 @@ cargo clippy -- -D warnings
 
 ---
 
-## Contributing
-
-Contributions are welcome. Please keep the following conventions:
-
-- Code comments and UI text in English.
-- Commit messages in English.
-- Use `cargo check` and `cargo clippy` to verify changes.
-
----
-
 ## Known Limitations
 
 - **Windows-only for now** – Peekdown is currently developed and tested on Windows. macOS and Linux support is planned for future releases.
