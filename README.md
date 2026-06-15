@@ -37,6 +37,15 @@ A lightweight, native Markdown viewer built with Rust. Peekdown is designed to o
 
 ## Installation
 
+### Scoop (Windows)
+
+```bash
+scoop bucket add ladle https://github.com/windedge/ladle
+scoop install ladle/peekdown
+```
+
+### Manual
+
 ### Download prebuilt binary
 
 Grab the latest release from [GitHub Releases](https://github.com/windedge/peekdown/releases).
