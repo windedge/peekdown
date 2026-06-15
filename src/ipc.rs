@@ -49,7 +49,7 @@ pub fn send_message(message: IpcMessage) -> anyhow::Result<()> {
     };
     let name = name_str.to_fs_name::<GenericFilePath>()?;
 
-    let mut conn = Stream::connect(name)?;
+    let conn = Stream::connect(name)?;
     let mut writer = BufWriter::new(&conn);
     
     serde_json::to_writer(&mut writer, &message)?;

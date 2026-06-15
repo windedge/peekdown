@@ -116,6 +116,7 @@ impl BlockNode {
         matches!(self, Self::Break { .. })
     }
 
+    #[allow(dead_code)]
     pub(super) fn is_frontmatter(&self) -> bool {
         matches!(self, Self::Frontmatter(_))
     }
@@ -143,7 +144,7 @@ impl BlockNode {
             BlockNode::Frontmatter(fm) => fm.span,
             BlockNode::Divider { span, .. } => *span,
             BlockNode::Definition { span, .. } => *span,
-            BlockNode::Unknown { .. } => None,
+            BlockNode::Unknown => None,
         }
     }
 
@@ -178,7 +179,7 @@ impl BlockNode {
             | BlockNode::Break { .. }
             | BlockNode::Frontmatter(_)
             | BlockNode::Divider { .. }
-            | BlockNode::Unknown { .. } => {}
+            | BlockNode::Unknown => {}
         }
     }
 
@@ -270,7 +271,7 @@ impl BlockNode {
             BlockNode::Definition { .. }
             | BlockNode::Break { .. }
             | BlockNode::Divider { .. }
-            | BlockNode::Unknown { .. } => {}
+            | BlockNode::Unknown => {}
         }
 
         text
@@ -760,7 +761,7 @@ impl CodeBlock {
         // Mermaid diagram rendering: show rendered image or placeholder
         if self.lang.as_ref().map(|s| s.as_str()) == Some("mermaid") {
             // Check if we have a rendered SVG file
-            if self.state.lock().unwrap().diagram_svg_path.as_ref().map_or(false, |p| p.exists()) {
+            if self.state.lock().unwrap().diagram_svg_path.as_ref().is_some_and(|p| p.exists()) {
                 let svg_path = self.state.lock().unwrap().diagram_svg_path.clone().unwrap();
                 return div()
                     .when(!options.is_last, |this| this.pb(node_cx.style.paragraph_gap))
@@ -851,7 +852,7 @@ impl CodeBlock {
                                 .right_2()
                                 .bg(cx.theme().muted)
                                 .rounded(cx.theme().radius)
-                                .child(actions(&self, window, cx)),
+                                .child(actions(self, window, cx)),
                         )
                     }),
             )
@@ -994,7 +995,7 @@ fn search_ranges_ascii(text: &str, query: &str) -> Vec<Range<usize>> {
     while i <= text_bytes.len() - query_len {
         let mut matched = true;
         for j in 0..query_len {
-            if text_bytes[i + j].to_ascii_lowercase() != query_bytes[j].to_ascii_lowercase() {
+            if !text_bytes[i + j].eq_ignore_ascii_case(&query_bytes[j]) {
                 matched = false;
                 break;
             }
@@ -1066,7 +1067,7 @@ impl Paragraph {
             text.push_str(&inline_node.text);
 
             if let Some(image) = &inline_node.image {
-                if text.len() > 0 {
+                if !text.is_empty() {
                     let seg_state = Arc::new(Mutex::new(InlineState::default()));
                     seg_state.lock().unwrap().set_text(text.clone().into());
                     self.segment_states.lock().unwrap().push(seg_state.clone());
@@ -1155,11 +1156,10 @@ impl Paragraph {
                         });
 
                         // convert link references, replace link
-                        if let Some(identifier) = link_mark.identifier.as_ref() {
-                            if let Some(mark) = node_cx.link_refs.get(identifier) {
+                        if let Some(identifier) = link_mark.identifier.as_ref()
+                            && let Some(mark) = node_cx.link_refs.get(identifier) {
                                 link_mark = mark.clone();
                             }
-                        }
 
                         links.push((inner_range.clone(), link_mark));
                     }
@@ -1174,7 +1174,7 @@ impl Paragraph {
         }
 
         // Add the last text node
-        if text.len() > 0 {
+        if !text.is_empty() {
             // For the last node, we can move highlights instead of cloning
             let inline_highlights = if let Some(query) = search_query {
                 let ranges = search_ranges(&text, query, node_cx.search_is_regex, node_cx.search_is_case_sensitive);
@@ -1388,7 +1388,7 @@ impl BlockNode {
                     format!("[{}]: {}", identifier, url)
                 }
             }
-            BlockNode::Unknown { .. } => "".to_string(),
+            BlockNode::Unknown => "".to_string(),
         }
         .trim()
         .to_string()
@@ -1544,14 +1544,13 @@ impl BlockNode {
                                 );
 
                                 // merge content into last item.
-                                if last_not_list {
-                                    if let Some(item_item) = items.last_mut() {
+                                if last_not_list
+                                    && let Some(item_item) = items.last_mut() {
                                         item_item.extend(vec![
                                             div().overflow_hidden().child(text).into_any_element(),
                                         ]);
                                         continue;
                                     }
-                                }
 
                                 items.push(
                                     h_flex()
@@ -1743,7 +1742,7 @@ impl BlockNode {
         match self {
             BlockNode::Root { children, .. } => div()
                 .id(("div", ix))
-                .children(children.into_iter().enumerate().map(move |(ix, node)| {
+                .children(children.iter().enumerate().map(move |(ix, node)| {
                     node.render_block(NodeRenderOptions { ix, ..options }, node_cx, window, cx)
                 }))
                 .into_any_element(),
@@ -1795,7 +1794,7 @@ impl BlockNode {
                         .px_4()
                         .children({
                             let children_len = children.len();
-                            children.into_iter().enumerate().map(move |(index, c)| {
+                            children.iter().enumerate().map(move |(index, c)| {
                                 let is_last = index == children_len - 1;
                                 c.render_block(options.is_last(is_last), node_cx, window, cx)
                             })
@@ -1810,7 +1809,7 @@ impl BlockNode {
                 .children({
                     let mut items = Vec::with_capacity(children.len());
                     let mut item_index = 0;
-                    for (ix, item) in children.into_iter().enumerate() {
+                    for (ix, item) in children.iter().enumerate() {
                         let is_item = item.is_list_item();
 
                         items.push(Self::render_list_item(
@@ -1843,7 +1842,7 @@ impl BlockNode {
                 .child(div().id("divider").bg(cx.theme().border).h(px(2.)))
                 .into_any_element(),
             BlockNode::Break { .. } => div().id("break").into_any_element(),
-            BlockNode::Unknown { .. } | BlockNode::Definition { .. } => div().into_any_element(),
+            BlockNode::Unknown | BlockNode::Definition { .. } => div().into_any_element(),
             _ => {
                 if cfg!(debug_assertions) {
                     tracing::warn!("unknown implementation: {:?}", self);

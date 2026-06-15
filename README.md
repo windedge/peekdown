@@ -1,8 +1,11 @@
 # Peekdown
 
-A lightweight, native Markdown viewer built with Rust. Peekdown is designed to open Markdown files instantly and provide a distraction-free reading experience on Windows.
+![CI](https://github.com/windedge/peekdown/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-> **Note:** Peekdown is currently Windows-first. macOS and Linux support is planned for future releases.
+A lightweight, native Markdown viewer built with Rust. Peekdown is designed to open Markdown files instantly and provide a distraction-free reading experience.
+
+> **Note:** Peekdown currently supports Windows only. macOS and Linux support is planned.
 
 ---
 
@@ -21,6 +24,30 @@ A lightweight, native Markdown viewer built with Rust. Peekdown is designed to o
 - **Auto-refresh** – watch files for changes and reload automatically.
 - **Appearance settings** – light / dark / system theme, custom fonts, layout mode, zoom, and more.
 - **Windows file association** – register `.md` files to open with Peekdown from Explorer.
+
+---
+
+## Screenshot
+
+<img src="assets/screenshot.png" alt="Peekdown screenshot" width="800">
+
+> A screenshot has not been captured yet — this is a placeholder.
+
+---
+
+## Installation
+
+### Download prebuilt binary
+
+Grab the latest release from [GitHub Releases](https://github.com/windedge/peekdown/releases).
+
+### Build from source
+
+```bash
+cargo build --release
+```
+
+The executable will be located at `target/release/peekdown.exe`.
 
 ---
 
@@ -44,7 +71,7 @@ A lightweight, native Markdown viewer built with Rust. Peekdown is designed to o
 ### Requirements
 
 - [Rust](https://rust-lang.org/) toolchain (latest stable recommended)
-- Windows (the current implementation uses Windows APIs for IPC, window activation, and file association)
+- A Windows machine to build (the current implementation uses Windows APIs for IPC, window activation, and file association; cross-platform abstraction is planned)
 
 ### Run in development
 
@@ -159,6 +186,15 @@ Contributions are welcome. Please keep the following conventions:
 - Code comments and UI text in English.
 - Commit messages in English.
 - Use `cargo check` and `cargo clippy` to verify changes.
+
+---
+
+## Known Limitations
+
+- **Windows-only for now** – Peekdown is currently developed and tested on Windows. macOS and Linux support is planned for future releases.
+- **IPC is Windows-tuned** – The single-instance mechanism uses Windows named pipes. A Unix socket equivalent is pending cross-platform work.
+- **File association is Windows-specific** – The `--register` command creates Windows registry entries. No equivalent exists yet for macOS or Linux.
+- **Planned features not yet implemented** – See [`docs/roadmap.md`](docs/roadmap.md) for features such as anchor jump, PDF export, and cross-platform support that are on the roadmap but not yet available.
 
 ---
 

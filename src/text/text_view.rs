@@ -25,7 +25,7 @@ pub(crate) type CodeBlockActionsFn =
 /// ## Goals
 ///
 /// - Provide a rich text rendering component for such as Markdown or HTML,
-/// used to display rich text in GPUI application (e.g., Help messages, Release notes)
+///   used to display rich text in GPUI application (e.g., Help messages, Release notes)
 /// - Support Markdown GFM and HTML (Simple HTML like Safari Reader Mode) for showing most common used markups.
 /// - Support Heading, Paragraph, Bold, Italic, StrikeThrough, Code, Link, Image, Blockquote, List, Table, HorizontalRule, CodeBlock ...
 ///
@@ -56,6 +56,7 @@ impl Styled for TextView {
     }
 }
 
+#[allow(dead_code)]
 impl TextView {
     /// Create new TextView with managed state.
     pub fn new(state: &Entity<TextViewState>) -> Self {
@@ -150,7 +151,7 @@ impl TextView {
         E: IntoElement,
     {
         self.code_block_actions = Some(Arc::new(move |code_block, window, cx| {
-            f(&code_block, window, cx).into_any_element()
+            f(code_block, window, cx).into_any_element()
         }));
         self
     }

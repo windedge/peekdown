@@ -28,7 +28,7 @@ use super::{
 
 const UPDATE_DELAY: Duration = Duration::from_millis(50);
 
-const CONTEXT: &'static str = "TextView";
+const CONTEXT: &str = "TextView";
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys(vec![
         #[cfg(target_os = "macos")]
@@ -99,6 +99,7 @@ pub struct TextViewState {
     _receive_task: Task<()>,
 }
 
+#[allow(dead_code)]
 impl TextViewState {
     /// Create a Markdown TextViewState.
     ///
@@ -161,7 +162,7 @@ impl TextViewState {
             _parse_task,
             _receive_task,
         };
-        this.increment_update(&text, false, cx);
+        this.increment_update(text, false, cx);
         this
     }
 
@@ -521,15 +522,14 @@ impl TextViewState {
 
         let parsed = self.parsed_content.lock().unwrap();
         for (i, block) in parsed.document.blocks.iter().enumerate() {
-            if let node::BlockNode::CodeBlock(cb) = block {
-                if cb.lang().as_ref().map(|s| s.as_str()) == Some("mermaid")
+            if let node::BlockNode::CodeBlock(cb) = block
+                && cb.lang().as_ref().map(|s| s.as_str()) == Some("mermaid")
                     && cb.state.lock().unwrap().diagram_svg_path.is_none()
                     && !cb.is_rendering.load(Ordering::Relaxed)
                 {
                     cb.is_rendering.store(true, Ordering::Relaxed);
                     mermaid_blocks.push((i, cb.code().to_string()));
                 }
-            }
         }
         drop(parsed);
 
@@ -541,18 +541,15 @@ impl TextViewState {
                     Ok(path) => {
                         this.update(cx, |state, inner_cx| {
                             let parsed = state.parsed_content.lock().unwrap();
-                            if block_idx < parsed.document.blocks.len() {
-                                if let node::BlockNode::CodeBlock(cb) =
+                            if block_idx < parsed.document.blocks.len()
+                                && let node::BlockNode::CodeBlock(cb) =
                                     &parsed.document.blocks[block_idx]
-                                {
-                                    if cb.is_rendering.load(Ordering::Relaxed) {
+                                    && cb.is_rendering.load(Ordering::Relaxed) {
                                         cb.state.lock().unwrap().diagram_svg_path =
                                             Some(path);
                                         cb.is_rendering
                                             .store(false, Ordering::Relaxed);
                                     }
-                                }
-                            }
                             inner_cx.notify();
                         })
                         .ok();
@@ -566,14 +563,13 @@ impl TextViewState {
                         // Reset rendering flag so the block shows source code
                         this.update(cx, |state, _inner_cx| {
                             let parsed = state.parsed_content.lock().unwrap();
-                            if block_idx < parsed.document.blocks.len() {
-                                if let node::BlockNode::CodeBlock(cb) =
+                            if block_idx < parsed.document.blocks.len()
+                                && let node::BlockNode::CodeBlock(cb) =
                                     &parsed.document.blocks[block_idx]
                                 {
                                     cb.is_rendering
                                         .store(false, Ordering::Relaxed);
                                 }
-                            }
                         })
                         .ok();
                     }
@@ -656,8 +652,8 @@ impl Render for TextViewState {
                         state.update_bounds(bounds);
 
                         // Process inertia scroll animation
-                        if state.inertia_scroll.is_animating() {
-                            if let Some(distance) =
+                        if state.inertia_scroll.is_animating()
+                            && let Some(distance) =
                                 state.inertia_scroll.update(Instant::now(), state.scroll_speed)
                             {
                                 // Apply scroll distance (negative because positive delta = scroll up)
@@ -668,7 +664,6 @@ impl Render for TextViewState {
                                     window.request_animation_frame();
                                 }
                             }
-                        }
                     });
                 }
             })

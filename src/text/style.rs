@@ -22,6 +22,7 @@ pub struct TextViewStyle {
     pub code_block: StyleRefinement,
     /// Max width for content layout. When set, content is centered within this width.
     pub content_max_width: Option<Pixels>,
+    #[allow(dead_code)]
     pub is_dark: bool,
 }
 
@@ -48,6 +49,7 @@ impl Default for TextViewStyle {
     }
 }
 
+#[allow(dead_code)]
 impl TextViewStyle {
     /// Set paragraph gap, default is 1 rem.
     pub fn paragraph_gap(mut self, gap: Rems) -> Self {

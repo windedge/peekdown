@@ -89,11 +89,7 @@ fn char_type(c: char) -> CharType {
 impl CharType {
     fn is_connectable(&self, c: char) -> bool {
         let other_type = char_type(c);
-        match (self, other_type) {
-            (CharType::Word, CharType::Word) => true,
-            (CharType::Whitespace, CharType::Whitespace) => true,
-            _ => false,
-        }
+        matches!((self, other_type), (CharType::Word, CharType::Word) | (CharType::Whitespace, CharType::Whitespace))
     }
 }
 

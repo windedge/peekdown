@@ -2,6 +2,14 @@
 name = "peekdown"
 version = "0.1.0"
 edition = "2024"
+description = "A lightweight, native Markdown viewer built with Rust and GPUI"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/windedge/peekdown"
+homepage = "https://github.com/windedge/peekdown"
+authors = ["windedge"]
+keywords = ["markdown", "viewer", "gpui", "gui", "rust"]
+categories = ["gui", "visualization"]
 
 [dependencies]
 gpui = "0.2.2"

@@ -98,6 +98,7 @@ impl MarkdownView {
     }
 
     /// Get the file path of the document.
+    #[allow(dead_code)]
     pub fn file_path(&self, cx: &App) -> PathBuf {
         self.document.read(cx).path.clone()
     }

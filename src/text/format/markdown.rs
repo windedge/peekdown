@@ -29,14 +29,13 @@ fn resolve_image_url(url: &str, doc_path: Option<&Path>) -> (String, Option<Path
     }
 
     // Try to resolve relative path
-    if let Some(doc_path) = doc_path {
-        if let Some(doc_dir) = doc_path.parent() {
+    if let Some(doc_path) = doc_path
+        && let Some(doc_dir) = doc_path.parent() {
             let abs_path = doc_dir.join(url);
             if abs_path.exists() {
                 return (url.to_string(), Some(abs_path));
             }
         }
-    }
 
     (url.to_string(), None)
 }
@@ -48,7 +47,7 @@ pub(crate) fn parse(
 ) -> Result<ParsedDocument, SharedString> {
     let mut options = ParseOptions::gfm();
     options.constructs.frontmatter = true;
-    markdown::to_mdast(&source, &options)
+    markdown::to_mdast(source, &options)
         .map(|n| ast_to_document(source, n, cx))
         .map_err(|e| e.to_string().into())
 }
@@ -56,11 +55,8 @@ pub(crate) fn parse(
 fn parse_table_row(table: &mut Table, node: &mdast::TableRow, cx: &mut NodeContext) {
     let mut row = TableRow::default();
     node.children.iter().for_each(|c| {
-        match c {
-            Node::TableCell(cell) => {
-                parse_table_cell(&mut row, cell, cx);
-            }
-            _ => {}
+        if let Node::TableCell(cell) = c {
+            parse_table_cell(&mut row, cell, cx);
         };
     });
     table.children.push(row);
@@ -102,7 +98,7 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
         Node::Emphasis(val) => {
             let mut child_paragraph = Paragraph::default();
             for child in val.children.iter() {
-                text.push_str(&parse_paragraph(&mut child_paragraph, &child, cx));
+                text.push_str(&parse_paragraph(&mut child_paragraph, child, cx));
             }
             paragraph.push(
                 InlineNode::new(&text).marks(vec![(0..text.len(), TextMark::default().italic())]),
@@ -111,7 +107,7 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
         Node::Strong(val) => {
             let mut child_paragraph = Paragraph::default();
             for child in val.children.iter() {
-                text.push_str(&parse_paragraph(&mut child_paragraph, &child, cx));
+                text.push_str(&parse_paragraph(&mut child_paragraph, child, cx));
             }
             paragraph.push(
                 InlineNode::new(&text).marks(vec![(0..text.len(), TextMark::default().bold())]),
@@ -120,7 +116,7 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
         Node::Delete(val) => {
             let mut child_paragraph = Paragraph::default();
             for child in val.children.iter() {
-                text.push_str(&parse_paragraph(&mut child_paragraph, &child, cx));
+                text.push_str(&parse_paragraph(&mut child_paragraph, child, cx));
             }
             paragraph.push(
                 InlineNode::new(&text)
@@ -142,7 +138,7 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
 
             let mut child_paragraph = Paragraph::default();
             for child in val.children.iter() {
-                text.push_str(&parse_paragraph(&mut child_paragraph, &child, cx));
+                text.push_str(&parse_paragraph(&mut child_paragraph, child, cx));
             }
 
             // FIXME: GPUI InteractiveText does not support inline images yet.
@@ -434,13 +430,15 @@ fn ast_to_node(
             span: new_span(val.position, cx),
         },
         Node::Table(val) => {
-            let mut table = Table::default();
-            table.column_aligns = val
-                .align
-                .clone()
-                .into_iter()
-                .map(|align| align.into())
-                .collect();
+            let mut table = Table {
+                column_aligns: val
+                    .align
+                    .clone()
+                    .into_iter()
+                    .map(|align| align.into())
+                    .collect(),
+                ..Default::default()
+            };
             val.children.iter().for_each(|c| {
                 if let Node::TableRow(row) = c {
                     parse_table_row(&mut table, row, cx);

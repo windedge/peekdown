@@ -82,6 +82,7 @@ pub struct Frontmatter {
     pub entries: Vec<(String, Value)>,
 }
 
+#[allow(dead_code)]
 impl Frontmatter {
     /// Returns true if there are no entries.
     pub fn is_empty(&self) -> bool {

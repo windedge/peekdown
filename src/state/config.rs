@@ -316,12 +316,11 @@ impl AppConfig {
         let path = Self::config_path();
         let config = self.clone();
         std::thread::spawn(move || {
-            if let Some(parent) = path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
+            if let Some(parent) = path.parent()
+                && let Err(e) = fs::create_dir_all(parent) {
                     eprintln!("Failed to create config dir: {}", e);
                     return;
                 }
-            }
             match toml::to_string_pretty(&config) {
                 Ok(content) => {
                     if let Err(e) = fs::write(path, content) {

@@ -96,6 +96,7 @@ pub struct FileEntry {
     pub name: String,
     pub depth: usize,
     pub kind: EntryKind,
+    #[allow(dead_code)]
     pub modified_time: Option<std::time::SystemTime>,
 }
 
@@ -234,11 +235,13 @@ impl FileExplorerView {
     }
 
     /// Get root path.
+    #[allow(dead_code)]
     pub fn root_path(&self) -> Option<&PathBuf> {
         self.root_path.as_ref()
     }
 
     /// Get expanded directories.
+    #[allow(dead_code)]
     pub fn expanded_dirs(&self) -> &HashSet<PathBuf> {
         &self.expanded_dirs
     }
@@ -279,6 +282,7 @@ impl FileExplorerView {
     }
 
     /// Set expanded directories.
+    #[allow(dead_code)]
     pub fn set_expanded_dirs(&mut self, dirs: HashSet<PathBuf>, cx: &mut Context<Self>) {
         self.expanded_dirs = dirs;
         self.refresh_entries(cx);
@@ -347,11 +351,10 @@ impl FileExplorerView {
         }
 
         // Update the entry's expanded flag for UI rendering
-        if let Some(dir_index) = self.entries.iter().position(|e| e.path == path) {
-            if let EntryKind::Directory { expanded, .. } = &mut self.entries[dir_index].kind {
+        if let Some(dir_index) = self.entries.iter().position(|e| e.path == path)
+            && let EntryKind::Directory { expanded, .. } = &mut self.entries[dir_index].kind {
                 *expanded = !was_expanded;
             }
-        }
 
         if let Some(on_expanded_change) = &self.on_expanded_change {
             on_expanded_change(self.expanded_dirs.clone(), cx);
@@ -435,6 +438,7 @@ impl FileExplorerView {
     }
 
     /// Expand a directory (without toggling).
+    #[allow(dead_code)]
     pub fn expand_directory(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if !self.expanded_dirs.contains(&path) {
             self.expanded_dirs.insert(path);
@@ -448,6 +452,7 @@ impl FileExplorerView {
     }
 
     /// Check if currently resizing.
+    #[allow(dead_code)]
     pub fn is_resizing(&self) -> bool {
         self.is_resizing
     }
@@ -459,6 +464,7 @@ impl FileExplorerView {
     }
 
     /// Handle mouse move during resize (called from workspace).
+    #[allow(dead_code)]
     pub fn handle_resize_move(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
         if self.is_resizing {
             let delta = mouse_x - self.resize_start_x;
@@ -472,6 +478,7 @@ impl FileExplorerView {
     }
 
     /// End resize operation.
+    #[allow(dead_code)]
     pub fn end_resize(&mut self, cx: &mut Context<Self>) {
         self.is_resizing = false;
         cx.notify();
@@ -938,13 +945,13 @@ fn build_tree_lazy(
                 b_name.cmp(&a_name)
             }
             ExplorerSortMode::TimeDesc => match (b_time, a_time) {
-                (Some(bt), Some(at)) => bt.cmp(&at),
+                (Some(bt), Some(at)) => bt.cmp(at),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             },
             ExplorerSortMode::TimeAsc => match (a_time, b_time) {
-                (Some(at), Some(bt)) => at.cmp(&bt),
+                (Some(at), Some(bt)) => at.cmp(bt),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,

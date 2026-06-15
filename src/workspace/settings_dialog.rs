@@ -106,6 +106,7 @@ struct SettingsContent {
 }
 
 impl SettingsContent {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         selected_theme: Entity<AppThemeMode>,
         selected_layout: Entity<LayoutMode>,

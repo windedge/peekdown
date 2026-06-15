@@ -133,3 +133,6 @@ AGENTS.md
 CLAUDE.md
 GEMINI.md
 .claude/settings.local.json
+
+# Project planning docs — not for release
+docs/

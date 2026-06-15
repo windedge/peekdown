@@ -97,11 +97,13 @@ impl OutlineView {
     }
 
     /// Check if currently resizing
+    #[allow(dead_code)]
     pub fn is_resizing(&self) -> bool {
         self.is_resizing
     }
 
     /// Handle mouse move during resize (called from workspace)
+    #[allow(dead_code)]
     pub fn handle_resize_move(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
         if self.is_resizing {
             let delta = self.resize_start_x - mouse_x;
@@ -115,6 +117,7 @@ impl OutlineView {
     }
 
     /// End resize operation
+    #[allow(dead_code)]
     pub fn end_resize(&mut self, cx: &mut Context<Self>) {
         self.is_resizing = false;
         cx.notify();

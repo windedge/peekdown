@@ -199,7 +199,7 @@ pub fn register_languages() {
     // Register Kotlin with both "kotlin" and "kt" aliases
     let kotlin_config = LanguageConfig::new(
         "kotlin",
-        tree_sitter_kotlin::language().into(),
+        tree_sitter_kotlin::language(),
         vec![],
         KOTLIN_HIGHLIGHTS_QUERY,
         "", // injections query

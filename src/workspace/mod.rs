@@ -2,10 +2,10 @@
 
 /// Normalize a Windows UNC path (\\?\ prefix) to a regular path.
 fn normalize_unc_path(path: &str) -> String {
-    if path.starts_with("\\\\?\\") {
-        path[4..].to_string()
-    } else if path.starts_with("//?/") {
-        path[4..].to_string()
+    if let Some(stripped) = path.strip_prefix("\\\\?\\") {
+stripped.to_string()
+    } else if let Some(stripped) = path.strip_prefix("//?/") {
+stripped.to_string()
     } else {
         path.to_string()
     }
@@ -238,7 +238,7 @@ pub fn init(cx: &mut App, initial_files: Vec<PathBuf>, ipc_rx: Option<Receiver<I
             if let Some(rx) = ipc_rx {
                 let workspace_weak = workspace_view.downgrade();
                 cx.spawn(|cx: &mut AsyncApp| {
-                    let mut cx = cx.clone();
+                    let cx = cx.clone();
                     async move {
                         while let Ok(msg) = rx.recv().await {
                             tracing::info!("Received IPC message: {:?}", msg);
@@ -757,8 +757,6 @@ impl WorkspaceView {
             self.cleanup_unused_explorers(cx);
         }
         // Ensure the new active tab is scrolled into view
-        if !self.tabs.is_empty() {
-        }
         if self.search_bar.is_some() {
             // Clear search bar without restoring focus (tab is being closed)
             self.search_bar = None;
@@ -1246,12 +1244,11 @@ impl WorkspaceView {
         };
 
         let mut use_current_root = false;
-        if mode == ExplorerUpdateMode::PreserveRootIfContains {
-            if let Some(current_root) = self.current_explorer_root.clone() {
+        if mode == ExplorerUpdateMode::PreserveRootIfContains
+            && let Some(current_root) = self.current_explorer_root.clone() {
                 root = current_root;
                 use_current_root = true;
             }
-        }
 
         // Normalize to reduce path-mismatch between watcher and explorer map keys.
         let root = if use_current_root {
@@ -1441,11 +1438,10 @@ impl WorkspaceView {
 
 
         // Clear current_explorer_root if it was removed
-        if let Some(ref current) = self.current_explorer_root {
-            if !self.explorer_views.contains_key(current) {
+        if let Some(ref current) = self.current_explorer_root
+            && !self.explorer_views.contains_key(current) {
                 self.current_explorer_root = None;
             }
-        }
     }
 
     fn find_project_root(start: &std::path::Path, markers: &[String]) -> Option<PathBuf> {
@@ -1712,7 +1708,6 @@ impl WorkspaceView {
     }
 
     /// Refresh a specific tab by index.
-
     fn refresh_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
@@ -1976,7 +1971,7 @@ impl Render for WorkspaceView {
                     // because their individual resize handles are hidden).
                     let mouse_x = f32::from(event.position.x);
                     if let Some(ws) = workspace_for_move.upgrade() {
-                        let _ = ws.update(cx, |ws, cx| {
+                        ws.update(cx, |ws, cx| {
                             if !ws.sidebar_is_resizing {
                                 return;
                             }
@@ -2001,7 +1996,7 @@ impl Render for WorkspaceView {
                 })
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                     if let Some(ws) = workspace_for_up.upgrade() {
-                        let _ = ws.update(cx, |ws, cx| {
+                        ws.update(cx, |ws, cx| {
                             ws.sidebar_is_resizing = false;
                             let width = ws.sidebar_width;
                             config_for_up.update(cx, |config, _| {

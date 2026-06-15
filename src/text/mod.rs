@@ -28,6 +28,7 @@ pub(crate) fn init(cx: &mut App) {
 
 /// Create a new markdown text view with code location as id.
 #[track_caller]
+#[allow(dead_code)]
 pub fn markdown(source: impl Into<SharedString>) -> TextView {
     let id: ElementId = ElementId::CodeLocation(*std::panic::Location::caller());
     TextView::markdown(id, source)
@@ -35,12 +36,14 @@ pub fn markdown(source: impl Into<SharedString>) -> TextView {
 
 /// Create a new html text view with code location as id.
 #[track_caller]
+#[allow(dead_code)]
 pub fn html(source: impl Into<SharedString>) -> TextView {
     let id: ElementId = ElementId::CodeLocation(*std::panic::Location::caller());
     TextView::html(id, source)
 }
 
 #[derive(IntoElement, Clone)]
+#[allow(dead_code)]
 pub enum Text {
     String(SharedString),
     TextView(Box<TextView>),
@@ -70,6 +73,7 @@ impl From<TextView> for Text {
     }
 }
 
+#[allow(dead_code)]
 impl Text {
     /// Set the style for [`TextView`].
     ///

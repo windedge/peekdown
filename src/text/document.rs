@@ -63,8 +63,8 @@ impl ParsedDocument {
     ) {
         match block {
             BlockNode::Heading { id, .. } => {
-                if let Some(slug) = id {
-                    if !slug.is_empty() {
+                if let Some(slug) = id
+                    && !slug.is_empty() {
                         let count = slug_counts.entry(slug.to_string()).or_insert(0);
                         let final_slug = if *count > 0 {
                             format!("{}-{}", slug, *count)
@@ -74,7 +74,6 @@ impl ParsedDocument {
                         *count += 1;
                         map.insert(final_slug, block_index);
                     }
-                }
             }
             BlockNode::Root { children, .. }
             | BlockNode::Blockquote { children, .. }

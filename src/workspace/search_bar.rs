@@ -263,6 +263,7 @@ impl SearchBar {
     }
 
     /// Get the focus handle for focusing the search input.
+    #[allow(dead_code)]
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
     }
@@ -273,6 +274,7 @@ impl SearchBar {
     }
 
     /// Get current search mode flags.
+    #[allow(dead_code)]
     pub fn search_flags(&self) -> (bool, bool) {
         (self.search_state.is_regex, self.search_state.is_case_sensitive)
     }

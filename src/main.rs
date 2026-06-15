@@ -27,7 +27,7 @@ fn main() {
         return;
     }
 
-    let mut initial_files: Vec<std::path::PathBuf> = args.iter().skip(1).map(std::path::PathBuf::from).collect();
+    let initial_files: Vec<std::path::PathBuf> = args.iter().skip(1).map(std::path::PathBuf::from).collect();
 
     // Attempt IPC
     // Send OpenFiles or FocusWindow
@@ -37,7 +37,7 @@ fn main() {
         ipc::IpcMessage::OpenFiles(initial_files.clone())
     };
 
-    if let Ok(_) = ipc::send_message(msg) {
+    if ipc::send_message(msg).is_ok() {
         return;
     }
 

@@ -11,26 +11,26 @@ pub(super) fn list_item_prefix(ix: usize, ordered: bool, depth: usize) -> String
         }
 
         if depth == 1 {
-            return format!(
+            format!(
                 "{}. ",
                 NUMBERED_PREFIXES_1
                     .chars()
                     .nth(ix % NUMBERED_PREFIXES_1.len())
                     .unwrap()
-            );
+            )
         } else {
-            return format!(
+            format!(
                 "{}. ",
                 NUMBERED_PREFIXES_2
                     .chars()
                     .nth(ix % NUMBERED_PREFIXES_2.len())
                     .unwrap()
-            );
+            )
         }
     } else {
         let depth = depth.min(BULLETS.len() - 1);
         let bullet = BULLETS[depth];
-        return format!("{} ", bullet);
+        format!("{} ", bullet)
     }
 }
 

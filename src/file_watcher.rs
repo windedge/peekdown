@@ -245,8 +245,8 @@ impl FileWatchManager {
         Ok(())
     }
 
-    pub fn unwatch(&mut self, path: &PathBuf) -> anyhow::Result<()> {
-        let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    pub fn unwatch(&mut self, path: &Path) -> anyhow::Result<()> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if self.watched_roots.remove(&path) {
             if let Some(watcher) = &mut self.watcher {
@@ -389,7 +389,7 @@ fn deepest_matching_root<'a>(
     for root in roots {
         if path_starts_with_ci(path, root) {
             let depth = root.components().count();
-            if best.map_or(true, |(_, best_depth)| depth > best_depth) {
+            if best.is_none_or(|(_, best_depth)| depth > best_depth) {
                 best = Some((root, depth));
             }
         }

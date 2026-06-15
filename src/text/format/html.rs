@@ -32,14 +32,13 @@ fn resolve_image_url(url: &str, doc_path: Option<&Path>) -> (String, Option<Path
     }
 
     // Try to resolve relative path
-    if let Some(doc_path) = doc_path {
-        if let Some(doc_dir) = doc_path.parent() {
+    if let Some(doc_path) = doc_path
+        && let Some(doc_dir) = doc_path.parent() {
             let abs_path = doc_dir.join(url);
             if abs_path.exists() {
                 return (url.to_string(), Some(abs_path));
             }
         }
-    }
 
     (url.to_string(), None)
 }
@@ -88,7 +87,7 @@ pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument
         ..Default::default()
     };
 
-    let bytes = cleanup_html(&source);
+    let bytes = cleanup_html(source);
     let mut cursor = std::io::Cursor::new(bytes);
     // Ref
     // https://github.com/servo/html5ever/blob/main/rcdom/examples/print-rcdom.rs
@@ -193,10 +192,10 @@ fn attr_width_height(
     if width.is_none() || height.is_none() {
         let styles = style_attrs(attrs);
         if width.is_none() {
-            width = styles.get("width").and_then(|v| value_to_length(&v));
+            width = styles.get("width").and_then(|v| value_to_length(v));
         }
         if height.is_none() {
-            height = styles.get("height").and_then(|v| value_to_length(&v));
+            height = styles.get("height").and_then(|v| value_to_length(v));
         }
     }
 
@@ -256,11 +255,10 @@ fn trim_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
 
     for (i, c) in text.chars().enumerate() {
-        if c.is_whitespace() {
-            if i > 0 && out.ends_with(' ') {
+        if c.is_whitespace()
+            && i > 0 && out.ends_with(' ') {
                 continue;
             }
-        }
         out.push(c);
     }
 
@@ -292,14 +290,14 @@ fn parse_paragraph(
     match &node.data {
         NodeData::Text { contents } => {
             let part = &contents.borrow();
-            text.push_str(&part);
+            text.push_str(part);
             paragraph.push_str(&text);
         }
         NodeData::Element { name, attrs, .. } => match name.local {
             local_name!("em") | local_name!("i") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().italic()));
@@ -308,7 +306,7 @@ fn parse_paragraph(
             local_name!("strong") | local_name!("b") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().bold()));
@@ -317,7 +315,7 @@ fn parse_paragraph(
             local_name!("del") | local_name!("s") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().strikethrough()));
@@ -326,7 +324,7 @@ fn parse_paragraph(
             local_name!("code") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 marks.push((0..text.len(), TextMark::default().code()));
@@ -335,17 +333,17 @@ fn parse_paragraph(
             local_name!("a") => {
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
 
                 marks.push((
                     0..text.len(),
                     TextMark::default().link(LinkMark {
-                        url: attr_value(&attrs, local_name!("href"))
+                        url: attr_value(attrs, local_name!("href"))
                             .unwrap_or_default()
                             .into(),
-                        title: attr_value(&attrs, local_name!("title")).map(Into::into),
+                        title: attr_value(attrs, local_name!("title")).map(Into::into),
                         ..Default::default()
                     }),
                 ));
@@ -378,7 +376,7 @@ fn parse_paragraph(
                 // All unknown tags to as text
                 let mut child_paragraph = Paragraph::default();
                 for child in node.children.borrow().iter() {
-                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                    let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                     merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
                 }
                 paragraph.push(InlineNode::new(&text).marks(marks.clone()));
@@ -387,7 +385,7 @@ fn parse_paragraph(
         _ => {
             let mut child_paragraph = Paragraph::default();
             for child in node.children.borrow().iter() {
-                let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, &child, doc_path);
+                let (child_text, child_marks) = parse_paragraph(&mut child_paragraph, child, doc_path);
                 merge_child_text(&mut text, &mut marks, &child_text, &child_marks);
             }
             paragraph.push(InlineNode::new(&text).marks(marks.clone()));
@@ -405,7 +403,7 @@ fn parse_node(
     match node.data {
         NodeData::Text { ref contents } => {
             let text = contents.borrow().to_string();
-            if text.len() > 0 {
+            if !text.is_empty() {
                 paragraph.push_str(&text);
             }
 
@@ -463,7 +461,7 @@ fn parse_node(
                     span: None,
                     id,
                 };
-                if children.len() > 0 {
+                if !children.is_empty() {
                     children.push(heading);
 
                     Some(BlockNode::Root {
@@ -485,9 +483,9 @@ fn parse_node(
                     return None;
                 };
 
-                let alt = attr_value(&attrs, local_name!("alt"));
-                let title = attr_value(&attrs, local_name!("title"));
-                let (width, height) = attr_width_height(&attrs);
+                let alt = attr_value(attrs, local_name!("alt"));
+                let title = attr_value(attrs, local_name!("title"));
+                let (width, height) = attr_width_height(attrs);
 
                 let (url, local_path) = resolve_image_url(&src, cx.document_path.as_deref());
                 let mut paragraph = Paragraph::default();
@@ -501,7 +499,7 @@ fn parse_node(
                     height,
                 });
 
-                if children.len() > 0 {
+                if !children.is_empty() {
                     children.push(BlockNode::Paragraph(paragraph));
                     Some(BlockNode::Root {
                         children,
@@ -531,12 +529,11 @@ fn parse_node(
                     }
                     if child_paragraph.text_len() > 0 {
                         // If last child is paragraph, merge child
-                        if let Some(last_child) = children.last_mut() {
-                            if let BlockNode::Paragraph(last_paragraph) = last_child {
+                        if let Some(last_child) = children.last_mut()
+                            && let BlockNode::Paragraph(last_paragraph) = last_child {
                                 last_paragraph.merge(child_paragraph);
                                 continue;
                             }
-                        }
 
                         children.push(BlockNode::Paragraph(child_paragraph));
                     }
@@ -564,18 +561,18 @@ fn parse_node(
                                 || name.local == local_name!("thead") =>
                         {
                             for sub_child in child.children.borrow().iter() {
-                                parse_table_row(&mut table, &sub_child, doc_path);
+                                parse_table_row(&mut table, sub_child, doc_path);
                             }
                         }
                         _ => {
-                            parse_table_row(&mut table, &child, doc_path);
+                            parse_table_row(&mut table, child, doc_path);
                         }
                     }
                 }
                 consume_paragraph(&mut children, paragraph);
 
                 let table = BlockNode::Table(table);
-                if children.len() > 0 {
+                if !children.is_empty() {
                     children.push(table);
                     Some(BlockNode::Root {
                         children,

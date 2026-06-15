@@ -67,7 +67,7 @@ impl Inline {
     /// Get link at given mouse position.
     fn link_for_position(
         layout: &TextLayout,
-        links: &Vec<(Range<usize>, LinkMark)>,
+        links: &[(Range<usize>, LinkMark)],
         position: Point<Pixels>,
     ) -> Option<LinkMark> {
         let offset = layout.index_for_position(position).ok()?;
@@ -119,7 +119,7 @@ impl Inline {
         let mut selection: Option<Selection> = None;
         let mut clicked_char_index: Option<usize> = None;
         let mut offset = 0;
-        let mut chars = self.text.chars().peekable();
+        let chars = self.text.chars().peekable();
 
         // For Word/Line mode with point selection (start == end),
         // we need to find the character at the click position
@@ -127,18 +127,17 @@ impl Inline {
             && selection_bounds.size.height == px(0.);
         let click_point = selection_bounds.origin;
 
-        while let Some(c) = chars.next() {
+        for c in chars {
             let Some(pos) = text_layout.position_for_index(offset) else {
                 offset += c.len_utf8();
                 continue;
             };
 
             let mut char_width = line_height.half();
-            if let Some(next_pos) = text_layout.position_for_index(offset + 1) {
-                if next_pos.y == pos.y {
+            if let Some(next_pos) = text_layout.position_for_index(offset + 1)
+                && next_pos.y == pos.y {
                     char_width = next_pos.x - pos.x;
                 }
-            }
 
             // For point selection in Word/Line mode, find char at click position
             if is_point_selection && selection_mode != SelectionMode::Character {
@@ -324,8 +323,8 @@ impl Element for Inline {
         self.styled_text
             .prepaint(id, inspector_id, bounds, &mut (), window, cx);
 
-        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        hitbox
+        
+        window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
     fn paint(
@@ -353,15 +352,15 @@ impl Element for Inline {
         state.selection = selection;
 
         if is_selection || is_selectable {
-            window.set_cursor_style(CursorStyle::IBeam, &hitbox);
+            window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
 
         // Only check for link hover if there are links (performance optimization)
         let has_links = !self.links.is_empty();
         if has_links {
             let mouse_position = window.mouse_position();
-            if let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position) {
-                window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+            if Self::link_for_position(&text_layout, &self.links, mouse_position).is_some() {
+                window.set_cursor_style(CursorStyle::PointingHand, hitbox);
             }
         }
 
@@ -462,11 +461,11 @@ fn point_in_text_selection(
     let is_below = pos.y + line_height >= bottom;
 
     if is_above {
-        return pos.x + char_width.half() >= left;
+        pos.x + char_width.half() >= left
     } else if is_below {
-        return pos.x + char_width.half() <= right;
+        pos.x + char_width.half() <= right
     } else {
-        return true;
+        true
     }
 }
 

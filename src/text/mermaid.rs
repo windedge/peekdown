@@ -14,6 +14,7 @@ impl MermaidRenderer {
     /// Check if mermaid rendering is available.
     ///
     /// Always returns `true` because rendering is built into the application.
+    #[allow(dead_code)]
     pub fn is_available() -> bool {
         true
     }
@@ -59,7 +60,7 @@ fn cleanup_old_cache(dir: &Path, max_files: usize) {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "svg"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "svg"))
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
             let modified = meta.modified().ok()?;
@@ -69,7 +70,7 @@ fn cleanup_old_cache(dir: &Path, max_files: usize) {
 
     if entries.len() > max_files {
         // Sort by modification time, newest first
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         for (path, _) in entries.drain(max_files..) {
             let _ = std::fs::remove_file(&path);
         }
