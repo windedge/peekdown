@@ -21,7 +21,5 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            target/release/peekdown.exe
-            target/release/peekdown-${{ github.ref_name }}.zip
+          files: target/release/peekdown-${{ github.ref_name }}.zip
           generate_release_notes: true
