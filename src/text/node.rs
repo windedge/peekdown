@@ -1108,6 +1108,7 @@ impl Paragraph {
                         .max_w(relative(1.))
                         .max_h(px(2000.))
                         .when_some(image.width, |this, width| this.w(width))
+                        .when_some(image.height, |this, height| this.h(height))
                         .when_some(image.link.clone(), |this, link| {
                             let title = image.title();
                             this.cursor_pointer()
