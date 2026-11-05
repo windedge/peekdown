@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: go tool mygo build -platform windows/amd64
+      - name: Package the Scoop archive
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          $name = "peekdown-v$v-windows-x64"
+          Compress-Archive -Path build/windows-amd64/Peekdown.exe -DestinationPath "$name.zip"
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$name.zip.sha256", $hash)
+      - name: Attach the artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            peekdown-v*-windows-x64.zip
+            peekdown-v*-windows-x64.zip.sha256
+            build/windows-amd64/peekdown-setup-*-amd64.exe
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: go tool mygo build -platform darwin/universal
+      - name: Package the app
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent build/darwin-universal/Peekdown.app "peekdown-v$v-macos-universal.zip"
+      - name: Attach the artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            peekdown-v*-macos-universal.zip
+            build/darwin-universal/*.dmg

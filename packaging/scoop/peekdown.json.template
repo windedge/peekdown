@@ -1,0 +1,19 @@
+{
+  "version": "0.3.0",
+  "description": "A lightweight Markdown viewer, rewritten in Go with mygo native UI",
+  "homepage": "https://github.com/windedge/peekdown",
+  "license": "MIT",
+  "url": "https://github.com/windedge/peekdown/releases/download/v0.3.0/peekdown-v0.3.0-windows-x64.zip",
+  "hash": "<SHA256 of the zip>",
+  "bin": "Peekdown.exe",
+  "shortcuts": [
+    ["Peekdown.exe", "Peekdown"]
+  ],
+  "checkver": "github",
+  "autoupdate": {
+    "url": "https://github.com/windedge/peekdown/releases/download/v$version/peekdown-v$version-windows-x64.zip",
+    "hash": {
+      "url": "$url.sha256"
+    }
+  }
+}

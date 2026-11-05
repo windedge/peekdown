@@ -1,0 +1,29 @@
+{
+  "name": "Peekdown",
+  "slug": "peekdown",
+  "identifier": "com.windedge.peekdown",
+  "version": "0.3.0",
+  "copyright": "Copyright (c) 2026 windedge",
+  "publisher": "windedge",
+  "license": "MIT",
+  "out": "build",
+  "fileAssociations": [
+    {
+      "ext": [
+        "md",
+        "markdown"
+      ],
+      "name": "Markdown Document",
+      "mimeType": "text/markdown",
+      "role": "Viewer"
+    }
+  ],
+  "linux": {
+    "webview": false,
+    "comment": "A lightweight Markdown viewer",
+    "categories": [
+      "Utility"
+    ]
+  },
+  "icon": "assets/app_icon.png"
+}
