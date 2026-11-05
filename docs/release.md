@@ -68,3 +68,16 @@ go build -trimpath -tags mygo_noinspector -ldflags "-s -w -H=windowsgui -X githu
 ```
 
 原始基线数字见工单 #13 与 `research/perf-baseline` 分支的报告。
+
+## CI 可下载产物
+
+`main` 每次推送，`ci.yml` 的 package job 会上传两个 Actions artifact，用于在打 tag 前验证打包链路：
+
+- `peekdown-Windows`：`peekdown-windows-x64.zip` 与 `peekdown-setup-<version>-amd64.exe`。
+- `peekdown-macOS`：`peekdown-macos-universal.zip` 与 `peekdown-<version>.dmg`。
+
+`gh run download <run-id>` 可以取回它们。
+
+## 迁移注意
+
+Rust 旧仓库已改名为 `windedge/peekdown-rust`。`windedge/peekdown` 现在是新仓库，所以旧 Scoop 清单里指向 `windedge/peekdown/releases/download/v0.2.0/...` 的 URL 不再有效。发布 0.3.0 时把清单整体更新到新版本即可；如果需要继续提供 0.2.0，应把 URL 指向 `windedge/peekdown-rust`。
