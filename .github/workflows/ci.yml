@@ -47,3 +47,42 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+
+  package:
+    name: Package ${{ matrix.name }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go tool mygo build -platform ${{ matrix.name == 'Windows' && 'windows/amd64' || 'darwin/universal' }}
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          Compress-Archive -Path build/windows-amd64/Peekdown.exe -DestinationPath "peekdown-windows-x64.zip"
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --keepParent build/darwin-universal/Peekdown.app "peekdown-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peekdown-${{ matrix.name }}
+          path: |
+            peekdown-windows-x64.zip
+            peekdown-macos-universal.zip
+            build/windows-amd64/peekdown-setup-*-amd64.exe
+            build/darwin-universal/*.dmg
+          if-no-files-found: ignore
