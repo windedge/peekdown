@@ -4,15 +4,24 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
 )
 
 // FileName is the file the settings live in, inside the user data directory.
 const FileName = "settings.json"
+
+// currentVersion is the schema this build writes. A file of a newer version
+// is left alone rather than being overwritten with settings this build
+// cannot represent.
+const currentVersion = 1
 
 // Settings are the preferences the settings dialog edits. The JSON keys keep
 // the Rust implementation's names where the meaning is the same, so the file
@@ -78,10 +87,18 @@ func Load(path string) (Settings, error) {
 		return s, nil
 	}
 	if err != nil {
-		return s, err
+		return Default(), err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return s, nil
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
-		return Default(), fmt.Errorf("%s: %w", path, err)
+		bad := path + ".bad"
+		_ = os.Rename(path, bad)
+		return Default(), fmt.Errorf("%s: %w (the file was moved to %s)", path, err, bad)
+	}
+	if s.Version > currentVersion {
+		return Default(), fmt.Errorf("%s: settings version %d is newer than %d", path, s.Version, currentVersion)
 	}
 	return s, nil
 }
@@ -102,7 +119,17 @@ func Save(path string, s Settings) error {
 		return err
 	}
 	name := tmp.Name()
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
 	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		os.Remove(name)
 		return err
@@ -111,9 +138,25 @@ func Save(path string, s Settings) error {
 		os.Remove(name)
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := replace(name, path); err != nil {
 		os.Remove(name)
 		return err
 	}
 	return nil
+}
+
+// replace renames from to to. Windows refuses to replace a file that
+// antivirus software or an indexer has open, so it tries again for a while.
+func replace(from, to string) error {
+	var err error
+	for attempt := 1; attempt <= 10; attempt++ {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		if runtime.GOOS != "windows" || (!errors.Is(err, syscall.Errno(32)) && !errors.Is(err, syscall.Errno(5))) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * 50 * time.Millisecond)
+	}
+	return err
 }

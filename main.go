@@ -11,14 +11,15 @@ import (
 	"github.com/windedge/peekdown/internal/settings"
 )
 
-// app is the state the window shows. Files opened before the window exists,
-// from the command line for example, wait in pending.
+// app is the state the window shows. Its fields are only touched on the main
+// thread, as the mygo callbacks that call open, activate and adopt are.
 type app struct {
-	settings settings.Settings
-	active   string
-	pending  []string
-	win      *mygo.Window
-	ready    bool
+	active          string
+	pending         []string // files that arrived before the window existed
+	win             *mygo.Window
+	ready           bool
+	activatePending bool
+	addRecent       func(string) error
 }
 
 // view builds the window's interface from the app's state.
@@ -46,6 +47,9 @@ func (a *app) title() string {
 
 // open shows path in the window, recording it once the app is ready.
 func (a *app) open(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	a.active = path
 	if a.ready {
 		a.recordRecent(path)
@@ -54,25 +58,51 @@ func (a *app) open(path string) {
 	}
 	if a.win != nil {
 		a.win.SetTitle(a.title())
+		a.win.SetRepresentedFile(path)
 	}
 }
 
 // recordRecent adds path to the app's and the system's recent documents.
 func (a *app) recordRecent(path string) {
-	if err := mygo.App.AddRecentDocument(path); err != nil {
+	if a.addRecent == nil {
+		return
+	}
+	if err := a.addRecent(path); err != nil {
 		log.Printf("peekdown: recent documents: %v", err)
 	}
 }
 
-// windowReady adopts the window: it records the files opened before it
+// adopt takes the window: it records the files that arrived before it
 // existed, then shows the last of them.
-func (a *app) windowReady(w *mygo.Window) {
+func (a *app) adopt(w *mygo.Window) {
 	a.win, a.ready = w, true
 	for _, p := range a.pending {
 		a.recordRecent(p)
 	}
 	a.pending = nil
+	if w == nil {
+		return
+	}
 	w.SetTitle(a.title())
+	if a.active != "" {
+		w.SetRepresentedFile(a.active)
+	}
+	if a.activatePending {
+		a.activatePending = false
+		w.Restore()
+		w.Focus()
+	}
+}
+
+// activate brings the window to the front, or remembers to do so once the
+// window exists.
+func (a *app) activate() {
+	if a.win == nil {
+		a.activatePending = true
+		return
+	}
+	a.win.Restore()
+	a.win.Focus()
 }
 
 // themeSource maps the saved theme to mygo's appearance source.
@@ -91,12 +121,12 @@ func themeSource(theme string) mygo.ThemeSource {
 func loadSettings() settings.Settings {
 	dir, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
-		log.Printf("peekdown: settings: %v", err)
+		log.Printf("peekdown: settings: %v; using defaults", err)
 		return settings.Default()
 	}
 	s, err := settings.Load(filepath.Join(dir, settings.FileName))
 	if err != nil {
-		log.Printf("peekdown: settings: %v", err)
+		log.Printf("peekdown: settings: %v; using defaults", err)
 		return settings.Default()
 	}
 	return s
@@ -104,19 +134,16 @@ func loadSettings() settings.Settings {
 
 func main() {
 	mygo.App.SetName("Peekdown")
-	s := loadSettings()
-	mygo.Theme.SetSource(themeSource(s.Theme))
-
-	a := &app{settings: s}
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
+	s := loadSettings()
+	mygo.Theme.SetSource(themeSource(s.Theme))
+
+	a := &app{addRecent: mygo.App.AddRecentDocument}
 	mygo.App.OnOpenFile(a.open)
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
-		if a.win != nil {
-			a.win.Restore()
-			a.win.Focus()
-		}
+		a.activate()
 	})
 	mygo.App.WhenReady(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{
@@ -128,7 +155,7 @@ func main() {
 			StateKey:  "main",
 			Content:   ui.View(a.view),
 		})
-		a.windowReady(w)
+		a.adopt(w)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

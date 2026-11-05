@@ -75,6 +75,40 @@ func TestLoadInvalidJSONReturnsError(t *testing.T) {
 	if _, err := Load(path); err == nil {
 		t.Fatal("invalid JSON: want an error")
 	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("the corrupt file was not kept aside: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, Default()) {
+		t.Fatalf("second load: got %+v, want defaults", got)
+	}
+}
+
+func TestLoadEmptyFileReturnsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, Default()) {
+		t.Fatalf("empty file: got %+v, want defaults", got)
+	}
+}
+
+func TestLoadNewerVersionReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"version":99,"theme":"dark"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("a newer version: want an error")
+	}
 }
 
 func TestSaveReplacesTheFile(t *testing.T) {

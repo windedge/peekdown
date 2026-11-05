@@ -6,12 +6,12 @@
 
 ## Decision
 
-- **设置**：JSON 文件 `settings.json`，位于 `mygo.App.Path(mygo.PathUserData)`（Windows 是 `%AppData%\Peekdown`，Linux 是 `~/.config/Peekdown`，macOS 是 `~/Library/Application Support/Peekdown`）。字段名沿用 Rust 配置里含义相同的键，启动时读取一次，缺失文件用默认值；写入用临时文件加原子替换；未知键忽略。
+- **设置**：JSON 文件 `settings.json`，位于 `mygo.App.Path(mygo.PathUserData)`（Windows 是 `%AppData%\Peekdown`，Linux 是 `$XDG_CONFIG_HOME/Peekdown` 或 `~/.config/Peekdown`，macOS 是 `~/Library/Application Support/Peekdown`）。字段名沿用 Rust 配置里含义相同的键，启动时读取一次，缺失文件用默认值；写入用临时文件加原子替换（Windows 上对占用错误重试）；未知键忽略，保存时会被丢掉；`version` 高于本版本时拒绝读取，避免旧版本覆盖新设置；损坏的 JSON 会改名为 `settings.json.bad` 后回落到默认值。
 - **不迁移**：不读取、不解析、不导入旧 `config.toml`，也不删除它。旧用户从默认设置开始。
 - **窗口状态**：`WindowOptions.StateKey: "main"`，位置、大小、最大化与全屏由 mygo 写入 `PathUserData/window-state.json`，多显示器与 DPI 由框架处理。旧配置里的 `window_x`、`window_y`、`window_width`、`window_height`、`is_maximized` 不再读取。
-- **最近文件**：用 `mygo.App.AddRecentDocument` 与 `RecentDocuments`，上限 10，存 `PathUserData/recent-documents.json`，并同步到系统最近列表（Windows jump list、macOS Dock、Linux xbel）。旧配置顶层的 `recent_files` 不再读取。
+- **最近文件**：用 `mygo.App.AddRecentDocument` 与 `RecentDocuments`，上限 10，存 `PathUserData/recent-documents.json`，并同步到系统最近列表（Windows jump list、macOS Dock、Linux xbel）。Rust 版把最近文件存在 `config.toml` 里，上限 15（`src/state/config.rs`）；Go 版不再读取那一份。
 - **单实例**：`App.RequestSingleInstanceLock` 取代命名管道。第二实例把命令行交给首实例后退出；首实例的 `OnOpenFile` 收到文件，`OnSecondInstance` 负责 `Restore` 与 `Focus`，Windows 的前台授权由 mygo 处理。
-- **打开文件**：`App.OnOpenFile` 接收启动参数、第二实例转发的文件与 macOS Dock 拖入的文件。相对路径由 mygo 按工作目录解析成绝对路径。
+- **打开文件**：`App.OnOpenFile` 接收启动参数、第二实例转发的文件与 macOS Dock 拖入的文件。相对路径由 mygo 按工作目录解析成绝对路径。可接受的扩展名来自 `mygo.json` 的 `fileAssociations`，由 `mygo build` 与 `mygo dev` 注入链接参数；手工 `go build` 需要自己加 `-X github.com/egoist/mygo.packageFileExtensions=md,markdown`，否则文件参数会被忽略。
 - **文件关联**：由 NSIS 安装包与 macOS 应用包注册。删除 `--register`，应用运行时不再写注册表；Scoop 安装的 zip 不注册关联。
 - **标题**：有文件时 `{绝对路径} - Peekdown`，否则 `Peekdown`。
 - **外观**：`theme` 的 `auto`、`light`、`dark` 映射到 `mygo.ThemeSystem`、`ThemeLight`、`ThemeDark`。
