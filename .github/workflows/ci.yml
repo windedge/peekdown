@@ -36,11 +36,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install the Linux GUI libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-0t64 || sudo apt-get install -y libgtk-3-0
       - name: Build
         run: go build ./...
       - name: Vet
@@ -50,6 +45,7 @@ jobs:
 
   package:
     name: Package ${{ matrix.name }}
+    needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -57,8 +53,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows, os: windows-latest }
-          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest, platform: windows/amd64 }
+          - { name: macOS, os: macos-latest, platform: darwin/universal }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -66,23 +62,31 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Build
-        run: go tool mygo build -platform ${{ matrix.name == 'Windows' && 'windows/amd64' || 'darwin/universal' }}
+        run: go tool mygo build -platform ${{ matrix.platform }}
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}"
-          Compress-Archive -Path build/windows-amd64/Peekdown.exe -DestinationPath "peekdown-windows-x64.zip"
+          $v = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          if (-not (Test-Path build/windows-amd64/Peekdown.exe)) { throw "no executable" }
+          $installer = Get-ChildItem build/windows-amd64/peekdown-setup-*-amd64.exe
+          if (-not $installer) { throw "no installer" }
+          Copy-Item $installer.FullName .
+          Compress-Archive -Path build/windows-amd64/Peekdown.exe -DestinationPath "peekdown-v$v-windows-x64.zip"
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --keepParent build/darwin-universal/Peekdown.app "peekdown-macos-universal.zip"
+          v=$(python3 -c "import json; print(json.load(open('mygo.json'))['version'])")
+          dmg=$(ls build/darwin-universal/*.dmg)
+          if [ -z "$dmg" ]; then echo "no disk image" >&2; exit 1; fi
+          cp "$dmg" .
+          ditto -c -k --keepParent build/darwin-universal/Peekdown.app "peekdown-v$v-macos-universal.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: peekdown-${{ matrix.name }}
           path: |
-            peekdown-windows-x64.zip
-            peekdown-macos-universal.zip
-            build/windows-amd64/peekdown-setup-*-amd64.exe
-            build/darwin-universal/*.dmg
-          if-no-files-found: ignore
+            peekdown-v*-windows-x64.zip
+            peekdown-v*-macos-universal.zip
+            peekdown-setup-*-amd64.exe
+            peekdown-*.dmg
+          if-no-files-found: error

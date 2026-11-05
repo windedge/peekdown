@@ -5,7 +5,9 @@
   "license": "MIT",
   "url": "https://github.com/windedge/peekdown/releases/download/v0.3.0/peekdown-v0.3.0-windows-x64.zip",
   "hash": "<SHA256 of the zip>",
-  "bin": "Peekdown.exe",
+  "bin": [
+    ["Peekdown.exe", "peekdown"]
+  ],
   "shortcuts": [
     ["Peekdown.exe", "Peekdown"]
   ],

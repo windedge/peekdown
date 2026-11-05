@@ -38,9 +38,9 @@ Prints the result as JSON instead of a table.
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [string]$AppArgs = "",
-    [int]$Runs = 10,
-    [int]$Warmup = 2,
-    [int]$TimeoutSec = 30,
+    [ValidateRange(1, 1000)][int]$Runs = 10,
+    [ValidateRange(0, 100)][int]$Warmup = 2,
+    [ValidateRange(1, 600)][int]$TimeoutSec = 30,
     [switch]$Json
 )
 $ErrorActionPreference = "Stop"

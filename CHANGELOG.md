@@ -17,14 +17,12 @@ The Go rewrite on mygo's native UI. The reading features of the Rust implementat
 - CI on Windows, macOS and Linux, and a release workflow that attaches the Windows archive, installer, and macOS app and disk image to a `v*` tag.
 - Scoop manifest template and release notes.
 
-## Earlier releases
-
 The entries below describe the Rust implementation, kept for history.
 
-### [0.2.0] - 2026-07-21
+## [0.2.0] - 2026-07-21
 
 Fixed window state restoration when closing while maximized, copying only the selected text, scroll memory and idle CPU regressions, Mermaid memory use, diagram layout, outline flicker, and scroll position when diagrams finish rendering.
 
-### [0.1.0] - 2026-06-14
+## [0.1.0] - 2026-06-14
 
 First release of the Rust implementation: fast startup, tabs, GFM rendering, syntax highlighting, Mermaid diagrams, embedded HTML, frontmatter, outline and file explorer sidebars, in-document search, appearance settings, file watching, single-instance IPC, Windows file association, welcome screen, and TOML configuration.

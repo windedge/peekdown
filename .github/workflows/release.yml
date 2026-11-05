@@ -9,8 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches mygo.json
+        run: |
+          v=$(python3 -c "import json; print(json.load(open('mygo.json'))['version'])")
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match mygo.json version $v"
+            exit 1
+          fi
+
   windows:
     name: Windows
+    needs: version
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -23,24 +37,30 @@ jobs:
         run: go test ./...
       - name: Build
         run: go tool mygo build -platform windows/amd64
-      - name: Package the Scoop archive
+      - name: Package
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}".TrimStart("v")
+          $v = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          if (-not (Test-Path build/windows-amd64/Peekdown.exe)) { throw "no executable" }
+          $installer = Get-ChildItem build/windows-amd64/peekdown-setup-*-amd64.exe
+          if (-not $installer) { throw "no installer" }
+          Copy-Item $installer.FullName .
           $name = "peekdown-v$v-windows-x64"
           Compress-Archive -Path build/windows-amd64/Peekdown.exe -DestinationPath "$name.zip"
           $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
           [IO.File]::WriteAllText("$name.zip.sha256", $hash)
-      - name: Attach the artifacts
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: windows
+          path: |
             peekdown-v*-windows-x64.zip
             peekdown-v*-windows-x64.zip.sha256
-            build/windows-amd64/peekdown-setup-*-amd64.exe
+            peekdown-setup-*-amd64.exe
+          if-no-files-found: error
 
   macos:
     name: macOS
+    needs: version
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -53,13 +73,32 @@ jobs:
         run: go test ./...
       - name: Build
         run: go tool mygo build -platform darwin/universal
-      - name: Package the app
+      - name: Package
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v=$(python3 -c "import json; print(json.load(open('mygo.json'))['version'])")
+          dmg=$(ls build/darwin-universal/*.dmg)
+          if [ -z "$dmg" ]; then echo "no disk image" >&2; exit 1; fi
+          cp "$dmg" .
           ditto -c -k --keepParent build/darwin-universal/Peekdown.app "peekdown-v$v-macos-universal.zip"
-      - name: Attach the artifacts
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: macos
+          path: |
             peekdown-v*-macos-universal.zip
-            build/darwin-universal/*.dmg
+            peekdown-*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          overwrite_files: true

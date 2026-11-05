@@ -1,3 +1,6 @@
+#Requires -Version 7
+if (-not $IsWindows) { throw "the perf scripts use Win32: run them on Windows" }
+
 # Shared Win32 helpers for the perf scripts: the first window of a process,
 # its private working set, its descendants, and starting and stopping an app
 # tree. Dot-source it: . "$PSScriptRoot/PerfCommon.ps1"

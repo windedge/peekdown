@@ -21,6 +21,7 @@
   "linux": {
     "webview": false,
     "comment": "A lightweight Markdown viewer",
+    "maintainer": "windedge <windedge@users.noreply.github.com>",
     "categories": [
       "Utility"
     ]

@@ -2,7 +2,7 @@
 
 A lightweight, native Markdown viewer. This is the Go rewrite on [mygo](https://github.com/egoist/mygo)'s native UI: a single Go binary, no webview, no frontend build.
 
-> Status: scaffolding. The reading features are being ported from the Rust implementation, [windedge/peekdown-rust](https://github.com/windedge/peekdown-rust). Work is tracked in the [rewrite map](https://github.com/windedge/peekdown/issues/1).
+> Status: scaffolding. The reading features are being ported from the Rust implementation, [windedge/peekdown-rust](https://github.com/windedge/peekdown-rust). Work is tracked in the [rewrite map](https://github.com/windedge/peekdown/issues/1). The Windows installer already registers the `.md` and `.markdown` associations; opening a file from the system arrives with the document view.
 
 ## Features
 
@@ -45,16 +45,18 @@ Builds land in `build/<os>-<arch>/`:
 - macOS: `Peekdown.app` and `peekdown-<version>.dmg`.
 - Linux: `peekdown`, the Debian package, and the archive.
 
-Release builds use:
+Release builds on Windows use:
 
 ```sh
 go build -trimpath -tags mygo_noinspector \
   -ldflags "-s -w -H=windowsgui -X github.com/egoist/mygo.production=1"
 ```
 
+On macOS and Linux, leave out `-H=windowsgui`. `go tool mygo build` applies these flags itself.
+
 ## Configuration
 
-The app reads `%APPDATA%\peekdown\config.toml` on Windows, `~/.config/peekdown/config.toml` on Linux, and `~/Library/Application Support/peekdown/config.toml` on macOS. The file format is being carried over from the Rust implementation.
+Planned: the app will read `%APPDATA%\peekdown\config.toml` on Windows, `~/.config/peekdown/config.toml` on Linux, and `~/Library/Application Support/peekdown/config.toml` on macOS, carrying the file format over from the Rust implementation. The current scaffold does not read it yet.
 
 ## Release
 

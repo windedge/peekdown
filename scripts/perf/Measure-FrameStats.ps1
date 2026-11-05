@@ -41,7 +41,9 @@ $ErrorActionPreference = "Stop"
 
 # The path a frame was drawn by is in parentheses, which hold parentheses of
 # their own when the GPU renderer says what it drew: take all of it.
-$re = [regex]'mygo: frame (\d+) took ([0-9.]+) ms: build ([0-9.]+)(?: \((\d+) passes?\))?, layout ([0-9.]+), paint ([0-9.]+), present ([0-9.]+) \((.*)\), other ([0-9.]+); meanwhile the process made about ([0-9]+) allocations, ([0-9.]+) KB, ([0-9]+) text layouts'
+# After build comes the path it was drawn by in parentheses, or "(N passes)" or
+# "(painted again)": take all of it, or frames drawn again would be dropped.
+$re = [regex]'mygo: frame (\d+) took ([0-9.]+) ms: build ([0-9.]+)(?: \(([^)]*)\))?, layout ([0-9.]+), paint ([0-9.]+), present ([0-9.]+) \((.*)\), other ([0-9.]+); meanwhile the process made about ([0-9]+) allocations, ([0-9.]+) KB, ([0-9]+) text layouts'
 $total = New-Object System.Collections.Generic.List[double]
 $build = New-Object System.Collections.Generic.List[double]
 $layout = New-Object System.Collections.Generic.List[double]

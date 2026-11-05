@@ -7,7 +7,7 @@
 - `mygo.json` 的 `version`（构建时写入可执行文件，并为安装包、磁盘镜像命名）。
 - `CHANGELOG.md` 的 `## [<version>]` 小节。
 
-发布新版本：改这两处，提交，打 tag `v<version>`，推送 tag。`release.yml` 只在 `v*.*.*` tag 上运行。
+发布新版本：改这两处（把 `Unreleased` 改成发布日期），提交，打 tag `v<version>`，推送 tag。`release.yml` 只在 `v*.*.*` tag 上运行，并会校验 tag 与 `mygo.json` 的版本一致。
 
 ## 本地构建
 
@@ -26,14 +26,14 @@ go tool mygo build -platform darwin/universal
 
 Windows 安装包由 NSIS 生成。Windows 上 `mygo build` 会自动下载 NSIS 到 `%LOCALAPPDATA%\mygo`；macOS 和 Linux 需要先 `brew install makensis` 或 `apt install nsis`，没有时跳过安装包。`-skip-installer` 可以强制跳过。
 
-release 构建统一使用：
+release 构建在 Windows 上统一使用：
 
 ```sh
 go build -trimpath -tags mygo_noinspector \
   -ldflags "-s -w -H=windowsgui -X github.com/egoist/mygo.production=1"
 ```
 
-`go tool mygo build` 内部已经使用等价的生产参数。
+macOS 与 Linux 去掉 `-H=windowsgui`；`-X github.com/egoist/mygo.production=1` 与 `mygo_noinspector` 保持。`go tool mygo build` 内部会按平台应用等价参数，所以优先用它。升级 mygo：`go get github.com/egoist/mygo@<commit>`，再 `go mod tidy`。
 
 ## CI 与发布产物
 
@@ -52,9 +52,11 @@ Scoop 清单在 `windedge/ladle-bucket` 仓库的 `bucket/peekdown.json`。原�
 
 模板在 `packaging/scoop/peekdown.json.template`。发布后：
 
-1. 从 Release 取 zip 的 SHA256，或直接运行 `scoop checkver -u peekdown` 让它自动填。
+1. 在 bucket 仓库里运行 `bin/checkver.ps1 peekdown -u` 更新版本、URL 与 hash。
 2. 把清单提交到 `windedge/ladle-bucket`。
 3. 用户可以 `scoop bucket add ladle https://github.com/windedge/ladle-bucket` 后 `scoop install ladle/peekdown`。
+
+Scoop 安装的是 zip，不会注册 `.md` 关联；需要文件关联的用户应使用 NSIS 安装包。
 
 ## 性能验收
 
@@ -73,8 +75,8 @@ go build -trimpath -tags mygo_noinspector -ldflags "-s -w -H=windowsgui -X githu
 
 `main` 每次推送，`ci.yml` 的 package job 会上传两个 Actions artifact，用于在打 tag 前验证打包链路：
 
-- `peekdown-Windows`：`peekdown-windows-x64.zip` 与 `peekdown-setup-<version>-amd64.exe`。
-- `peekdown-macOS`：`peekdown-macos-universal.zip` 与 `peekdown-<version>.dmg`。
+- `peekdown-Windows`：`peekdown-v<version>-windows-x64.zip` 与 `peekdown-setup-<version>-amd64.exe`。
+- `peekdown-macOS`：`peekdown-v<version>-macos-universal.zip` 与 `peekdown-<version>.dmg`。
 
 `gh run download <run-id>` 可以取回它们。
 

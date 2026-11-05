@@ -14,7 +14,9 @@ app whose view scrolls nothing draws no frames: point the test at a document
 tall enough to fill the seconds of the run.
 
 Wheel input comes from the system, not from the app's automation, so any
-build works. Where a scripted scroll has to be exact, drive the app with
+build works. It moves the pointer to the window's center and restores it
+afterwards; the wheel goes to the window under the pointer, which Windows
+10 and later does by default. Where a scripted scroll has to be exact, drive the app with
 mygo-automation instead, in a build made with -tags e2e and the automation
 plugin, and parse the same log.
 
@@ -65,6 +67,7 @@ public static class PerfInput {
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
@@ -105,6 +108,16 @@ public static class PerfInput {
         return SetCursorPos(p.X, p.Y);
     }
 
+    // CursorPosition saves where the pointer is, for RestoreCursor.
+    public static int[] CursorPosition() {
+        POINT p;
+        GetCursorPos(out p);
+        return new[] { p.X, p.Y };
+    }
+
+    // RestoreCursor puts the pointer back after CenterOnWindow moved it.
+    public static void RestoreCursor(int[] at) { SetCursorPos(at[0], at[1]); }
+
     // Wheel sends notches of 120 units, negative for down.
     public static void Wheel(int notches) { mouse_event(MOUSEEVENTF_WHEEL, 0, 0, -120 * notches, UIntPtr.Zero); }
 }
@@ -115,6 +128,7 @@ if (-not $LogPath) {
     $LogPath = Join-Path $env:TEMP ("mygo-frames-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 }
 $path = (Resolve-Path -LiteralPath $Exe).Path
+$cursor = [PerfInput]::CursorPosition()
 $p = Start-AppTree -Exe $path -AppArgs $AppArgs -ExtraEnv @{ MYGO_FRAME_STATS = "all" } -LogPath $LogPath
 $title = ""
 $ms = [PerfWin32]::WaitFirstWindow($p.Id, 30000, [ref]$title)
@@ -125,6 +139,7 @@ if ($ms -lt 0) {
 Start-Sleep -Milliseconds 800
 $hwnd = [PerfInput]::FindWindow($p.Id)
 if ($hwnd -eq [IntPtr]::Zero -or -not [PerfInput]::CenterOnWindow($hwnd)) {
+    [PerfInput]::RestoreCursor($cursor)
     Stop-AppTree -Process $p
     throw "could not put the pointer over the window"
 }
@@ -135,6 +150,7 @@ while ((Get-Date) -lt $deadline) {
     [PerfInput]::Wheel(1)
     Start-Sleep -Milliseconds $interval
 }
+[PerfInput]::RestoreCursor($cursor)
 Stop-AppTree -Process $p
 Start-Sleep -Milliseconds 300
 & "$PSScriptRoot/Measure-FrameStats.ps1" -Path $LogPath -BudgetMs $BudgetMs -DurationSeconds $Seconds
