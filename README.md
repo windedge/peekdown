@@ -56,7 +56,9 @@ On macOS and Linux, leave out `-H=windowsgui`. `go tool mygo build` applies thes
 
 ## Configuration
 
-Planned: the app will read `%APPDATA%\peekdown\config.toml` on Windows, `~/.config/peekdown/config.toml` on Linux, and `~/Library/Application Support/peekdown/config.toml` on macOS, carrying the file format over from the Rust implementation. The current scaffold does not read it yet.
+Settings live in `settings.json` in the app's user data directory: `%AppData%\Peekdown\settings.json` on Windows, `~/.config/Peekdown/settings.json` on Linux, and `~/Library/Application Support/Peekdown/settings.json` on macOS. The Rust version's `config.toml` is not read or migrated.
+
+Window position, size and maximized state are kept by mygo next to it, and recent documents by the system and mygo's own list of ten. File associations come from the installer or the macOS app bundle; there is no `--register` flag.
 
 ## Release
 

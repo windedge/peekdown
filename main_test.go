@@ -7,8 +7,9 @@ import (
 )
 
 // The window's view builds without a window, as the native template does.
-func TestView(t *testing.T) {
-	tt := ui.NewTester(view, 640, 400)
+func TestEmptyView(t *testing.T) {
+	a := &app{}
+	tt := ui.NewTester(a.view, 640, 400)
 	if !tt.HasText("Peekdown") {
 		t.Fatalf("texts %q: want the app name", tt.Texts())
 	}
