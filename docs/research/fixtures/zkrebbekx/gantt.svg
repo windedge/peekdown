@@ -1,0 +1,8 @@
+<svg role="img" xmlns="http://www.w3.org/2000/svg" width="762" height="80" viewBox="0 0 762 80" font-family="sans-serif" font-size="14">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <text x="186" y="32" fill="#333333">2024-01-01</text>
+  <text x="746" y="32" fill="#333333" text-anchor="end">2024-01-31</text>
+  <line x1="186" y1="38" x2="746" y2="38" stroke="#9370DB"/>
+  <text x="16" y="55.9" fill="#333333">task1</text>
+  <rect x="186" y="41" width="560" height="20" rx="3" fill="#5B8FF9" stroke="#9370DB"/>
+</svg>

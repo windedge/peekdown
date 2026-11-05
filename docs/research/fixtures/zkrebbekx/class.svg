@@ -1,0 +1,9 @@
+<svg role="img" xmlns="http://www.w3.org/2000/svg" width="128.64" height="76" viewBox="0 0 128.64 76" font-family="sans-serif" font-size="14">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <g transform="translate(16,16)">
+    <rect x="0" y="0" width="96.64" height="44" fill="#ECECFF" stroke="#9370DB"/>
+    <text x="48.32" y="14" fill="#333333" text-anchor="middle" font-weight="bold">动物</text>
+    <line x1="0" y1="24" x2="96.64" y2="24" stroke="#9370DB"/>
+    <text x="10" y="41" fill="#333333">+String 名称</text>
+  </g>
+</svg>
