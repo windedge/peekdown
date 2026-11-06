@@ -4,7 +4,10 @@
 package view
 
 import (
+	"cmp"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -24,9 +27,18 @@ type State struct {
 	Selection selectionRange
 	// Caret blinks at the selection's caret while the view has the focus.
 	Focused bool
-	// Dragging reports a pointer drag selecting text.
-	Dragging  bool
-	dragStart bool
+
+	// dragging marks a press that selects text: the element that took the
+	// press gets the pointer's moves and its release wherever they go.
+	dragging bool
+	// press is where the drag began.
+	press selection.Point
+
+	// rowHandles bind each block's row as it builds, so the handler's
+	// hit reads the committed frame's rectangles out of band, after the
+	// frame and across scrolls; ctx is the frame's context they take.
+	rowHandles map[int]*ui.Handle
+	ctx        *ui.Context
 
 	// Matches are the search's matches, in document order; Current is the
 	// one the user is on, -1 for none. A match addresses a run of a block's
@@ -86,23 +98,165 @@ func (st *State) SetSelection(anchor, caret selection.Point) {
 // ClearSelection collapses the selection.
 func (st *State) ClearSelection() { st.Selection.set = false }
 
-// clearState resets what the view caches per frame.
-func (st *State) clearState() {
-	if st.Current < 0 || st.Current >= len(st.Matches) {
-		st.Current = -1
+// Handler returns the input handler for the document area. Wire it to the
+// element that wraps the view (ScrollView's list or a Box around it): the
+// element pressed takes the moves and the release wherever they go, so one
+// handler covers every block. It returns false for events it does not
+// take, scrolling among them. The events' position is relative to the
+// element wired, which is to wrap the list without padding of its own.
+func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
+	return func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			if ev.Button != 0 {
+				return false
+			}
+			// A press above the window's top comes clamped below zero
+			// (the engine keeps the element hit), as the first row.
+			p, ok := st.pointAt(m, ev, true)
+			if !ok {
+				return false
+			}
+			st.press = p
+			st.dragging = true
+			switch {
+			case ev.Clicks == 2:
+				s := selection.SelectWord(p, runText(m, p.Block))
+				st.SetSelection(s.Anchor, s.Caret)
+			case ev.Clicks >= 3:
+				s := selection.SelectLine(p, runText(m, p.Block))
+				st.SetSelection(s.Anchor, s.Caret)
+			default:
+				st.SetSelection(p, p)
+			}
+			return true
+		case ui.InputPointerMove:
+			if !st.dragging {
+				return false
+			}
+			p, ok := st.pointAt(m, ev, false)
+			if !ok {
+				return false
+			}
+			st.SetSelection(st.press, p)
+			return true
+		case ui.InputPointerUp:
+			if !st.dragging || ev.Button != 0 {
+				return false
+			}
+			st.dragging = false
+			return true
+		}
+		return false
 	}
 }
 
+// pointAt returns the document point under the handler's event and
+// whether the view has rows to hit: the rows' handles give each block's
+// rectangle of the committed frame, in window coordinates, the block's
+// shaped text the rune. The event's position is the handler element's,
+// the list's; the list's own rectangle turns it into a window point.
+// Above or below the rows the point clamps to the nearest visible row's
+// ends; a press clamps from above the window too, whose point the engine
+// passes on below zero.
+func (st *State) pointAt(m *doc.Model, ev ui.InputEvent, press bool) (selection.Point, bool) {
+	if st.ctx == nil || len(st.rowHandles) == 0 {
+		return selection.Point{}, false
+	}
+	listRect := st.List.Handle.Bounds(st.ctx)
+	type hit struct {
+		block int
+		rect  ui.Rect
+	}
+	rows := make([]hit, 0, len(st.rowHandles))
+	for block, handle := range st.rowHandles {
+		rect := handle.Bounds(st.ctx)
+		if rect.W <= 0 && rect.H <= 0 {
+			continue
+		}
+		rows = append(rows, hit{block, rect})
+	}
+	if len(rows) == 0 {
+		return selection.Point{}, false
+	}
+	slices.SortFunc(rows, func(a, b hit) int { return cmp.Compare(a.rect.Y, b.rect.Y) })
+	x, y := listRect.X+ev.X, listRect.Y+ev.Y
+	first, last := rows[0], rows[len(rows)-1]
+	if y < first.rect.Y || press && y < 0 {
+		return selection.Point{Block: first.block}, true
+	}
+	if y >= last.rect.Y+last.rect.H {
+		return selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true
+	}
+	for _, row := range rows {
+		if y < row.rect.Y+row.rect.H {
+			return selection.Point{Block: row.block, Offset: st.offsetAt(m, row.block, row.rect, listRect, x, y)}, true
+		}
+	}
+	return selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true
+}
+
+// offsetAt returns the rune offset of the window point in a row's block:
+// the shaped run text maps the point into the text, past its ends to
+// them.
+func (st *State) offsetAt(m *doc.Model, block int, rect, listRect ui.Rect, x, y float32) int {
+	text := runText(m, block)
+	width := rect.W
+	if width <= 0 {
+		width = 10000
+	}
+	layout := st.layout(block, text, width)
+	if layout == nil {
+		return 0
+	}
+	u16 := layout.IndexAt(ui.Point{X: x - rect.X, Y: y - rect.Y})
+	return runeOffset(text, u16)
+}
+
+// runeOffset converts a UTF-16 offset in text to a rune offset, which is
+// what the selection addresses.
+func runeOffset(text string, u16 int) int {
+	return utf8.RuneCountInString(text[:ui.UTF16ByteOffset(text, u16)])
+}
+
+func runeLen(text string) int { return len([]rune(text)) }
+
 // ScrollView builds the whole document: a virtual list of the blocks. The
-// list keeps its own scroll place; use State.List to scroll it.
+// list keeps its own scroll place; use State.List to scroll it. Each row
+// binds its block's handle, which the Handler the caller wires reads.
 func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	ui.List(c, &st.List, m.Len(), func(r int) {
-		Render(c, m, st, m.RowBlock(r).Index)
+		st.Row(c, m, r)
 	}).Grow(1)
 	if st.AnchorOf == nil {
 		st.AnchorOf = anchorsOf(m)
 	}
 	st.scrollPendingAnchor(m)
+}
+
+// Row builds the row of the r-th top-level block, binding the block's
+// handle to it for the pointer's hit, then renders the block. ScrollView
+// calls it; a caller that builds its own list calls it from its row
+// callback the same way, so Handler's hit sees the rows. The handle is
+// the block's across frames, so its Bounds answers between them. The
+// column wrapper keeps the row semantics the list's row box gave the
+// block: children stretch across.
+func (st *State) Row(c *ui.Context, m *doc.Model, r int) {
+	block := m.RowBlock(r).Index
+	st.ctx = c
+	if st.rowHandles == nil {
+		st.rowHandles = map[int]*ui.Handle{}
+	}
+	handle := st.rowHandles[block]
+	if handle == nil {
+		handle = &ui.Handle{}
+		st.rowHandles[block] = handle
+	}
+	row := ui.Column(c)
+	row.Bind(handle)
+	row.Children(func() {
+		Render(c, m, st, block)
+	})
 }
 
 // anchorsOf maps each heading block to its anchor, from the model's.
@@ -201,7 +355,6 @@ func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, head
 	if heading {
 		el.Role(ui.RoleHeading).Level(m.Block(i).Level)
 	}
-	st.applyOverlays(el.ID(), i, m)
 }
 
 // spans walks block i's inlines into styled spans, drawing the selection
@@ -409,10 +562,6 @@ func sortCuts(cuts []cut) {
 		}
 	}
 }
-
-// applyOverlays is a placeholder for hooks per block element; the view
-// keeps it so callers can wrap rows later.
-func (st *State) applyOverlays(id uint64, i int, m *doc.Model) {}
 
 // images builds a row of pictures for the images of block i.
 func (st *State) images(c *ui.Context, i int, images []doc.Image) {
@@ -645,59 +794,29 @@ func runText(m *doc.Model, block int) string {
 	return m.Plain(block)
 }
 
-// layout shapes block i's text at the pointer's width, caching by block and
-// width.
-func (st *State) layout(block int, m *doc.Model) *ui.TextLayout {
+// layout shapes a block's text at a row's width, caching by block and
+// width: the selection addresses runes, so the text it shapes is the run
+// table's.
+func (st *State) layout(block int, text string, width float32) *ui.TextLayout {
 	if st.layouts == nil {
 		st.layouts = map[int]*textLayout{}
 	}
-	entry := st.layouts[block]
-	width := float32(10000)
-	if entry != nil && entry.width == width {
+	if entry := st.layouts[block]; entry != nil && entry.width == width {
 		return entry.layout
 	}
-	font := ui.Font{Size: 15}
-	layout := ui.ShapeText(runText(m, block), font, width)
+	layout := ui.ShapeText(text, ui.Font{Size: 15}, width)
 	st.layouts[block] = &textLayout{layout: layout, width: width}
 	return layout
 }
 
-// Press starts a drag in block i's text: it collapses the selection to the
-// point under the pointer.
-func (st *State) Press(m *doc.Model, block int, ev ui.InputEvent) {
-	st.Dragging = true
-	p := st.pointAt(m, block, ev)
-	st.SetSelection(p, p)
+// HasCaret reports a caret: a selection set, a drag or a click among
+// them, whether it selects anything or not.
+func (st *State) HasCaret() bool { return st.Selection.set }
+
+// HasSelection reports a selection to draw or copy: a non-empty one.
+func (st *State) HasSelection() bool {
+	return st.Selection.set && st.Selection.start != st.Selection.end
 }
-
-// Drag extends the drag to the pointer's event, over block i's text.
-func (st *State) Drag(m *doc.Model, block int, ev ui.InputEvent) {
-	if !st.Dragging {
-		return
-	}
-	p := st.pointAt(m, block, ev)
-	st.Selection.end = p
-	if st.Selection.end.Before(st.Selection.start) {
-		st.Selection.start, st.Selection.end = st.Selection.end, st.Selection.start
-	}
-	st.Selection.set = true
-}
-
-// pointAt returns the point under the pointer in block i's text: the
-// pointer's Y picks the line, its X the rune within it.
-func (st *State) pointAt(m *doc.Model, block int, ev ui.InputEvent) selection.Point {
-	layout := st.layout(block, m)
-	if layout == nil {
-		return selection.Point{Block: block}
-	}
-	return selection.Point{Block: block, Offset: layout.IndexAt(ui.Point{X: ev.X, Y: ev.Y})}
-}
-
-// Dragging reports a pointer drag selecting text.
-func (st *State) IsDragging() bool { return st.Dragging }
-
-// HasSelection reports a selection to draw or copy.
-func (st *State) HasSelection() bool { return st.Selection.set }
 
 // SelectionText returns the selected text of the document.
 func (st *State) SelectionText(m *doc.Model) string {
