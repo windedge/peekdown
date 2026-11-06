@@ -336,6 +336,44 @@ func TestWindowTitle(t *testing.T) {
 	}
 }
 
+func TestTabCloseButtonDoesNotSwitch(t *testing.T) {
+	s, dir := newShell(t)
+	tt := s.render(t)
+	s.OpenPaths([]string{filepath.Join(dir, "a.md"), filepath.Join(dir, "b.md")})
+	tt.Frame()
+	if err := tt.Click("Close a.md"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Frame()
+	if len(s.Tabs) != 1 || filepath.Base(s.Tabs[0].Path) != "b.md" {
+		t.Fatalf("close left %d tabs: %+v", len(s.Tabs), s.Tabs)
+	}
+	if s.Active != 0 || filepath.Base(s.ActiveTab().Path) != "b.md" {
+		t.Fatalf("active = %d %v, want the untouched b.md", s.Active, s.ActiveTab())
+	}
+}
+
+// TestIconButtonsLabeled keeps the decorative buttons reachable by their
+// labels, since the icons carry no text of their own.
+func TestIconButtonsLabeled(t *testing.T) {
+	s, dir := newShell(t)
+	tt := s.render(t)
+	s.OpenFile(filepath.Join(dir, "a.md"))
+	s.Sidebar.Visible = true
+	tt.Frame()
+	for _, label := range []string{"Close sidebar", "Files", "Outline", "Settings"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatalf("%q is not the input target: %v", label, err)
+		}
+		tt.Frame()
+		tt.Frame()
+	}
+	if !s.SettingsOpen {
+		t.Fatal("settings button did not open the dialog")
+	}
+}
+
 func TestZoomClamps(t *testing.T) {
 	s, _ := newShell(t)
 	for i := 0; i < 40; i++ {

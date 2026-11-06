@@ -784,15 +784,20 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 // tableColumnWidths measures a table's cells to size each column to its
 // widest cell, one shared width per column, so rows line up instead of
 // stretching to share the row. A cell measures its plain text at the
-// table's 14 with 20 for the padding, capped at 300; a table without
-// text takes the default 80.
+// table's 14 with 20 for the padding, capped at 300; a header cell measures
+// bold, as it renders at weight 600, and a table without text takes the
+// default 80.
 func tableColumnWidths(m *doc.Model, table int) []float32 {
 	widths := []float32{}
-	for _, row := range m.TableRows(table) {
+	for r, row := range m.TableRows(table) {
+		weight := 400
+		if r == 0 {
+			weight = 600
+		}
 		for k, cell := range m.TableCells(row) {
 			w := float32(80)
 			if text := m.Plain(cell); text != "" {
-				tw, _ := ui.ShapeText(text, ui.Font{Size: 14}, 10000).Size()
+				tw, _ := ui.ShapeText(text, ui.Font{Size: 14, Weight: weight}, 10000).Size()
 				w = tw + 20
 			}
 			w = min(w, 300)

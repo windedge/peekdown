@@ -377,6 +377,21 @@ func TestTableColumnsConsistent(t *testing.T) {
 	}
 }
 
+// TestTableHeaderWidthFitsBold checks the header width leaves room for
+// the bold weight its cells render at, so "Name" does not wrap.
+func TestTableHeaderWidthFitsBold(t *testing.T) {
+	m := doc.New("| Name | Value |\n|---|---|\n| a | b |\n")
+	widths := tableColumnWidths(m, m.Blocks()[0].Index)
+	bold, _ := ui.ShapeText("Name", ui.Font{Size: 14, Weight: 600}, 10000).Size()
+	regular, _ := ui.ShapeText("Name", ui.Font{Size: 14, Weight: 400}, 10000).Size()
+	if bold > regular && widths[0] <= regular+20 {
+		t.Fatalf("width %v: header measured regular (bold %v, regular %v)", widths[0], bold, regular)
+	}
+	if widths[0] < bold+20 {
+		t.Fatalf("width %v does not fit the bold header %v", widths[0], bold+20)
+	}
+}
+
 func TestAnchorScrollRequestBeforeLayout(t *testing.T) {
 	m := doc.New("# Top\n\nMiddle.\n\n# Bottom\n\nEnd.\n")
 	var state State

@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/egoist/mygo/ui"
@@ -30,11 +31,7 @@ func (s *Shell) tabBar(c *ui.Context) {
 					tab.Children(func() {
 						ui.Row(c).Gap(6).Children(func() {
 							ui.Text(c, filepath.Base(s.Tabs[i].Path)).FontSize(13)
-							if ui.Button(c, "").Width(16).Height(16).Children(func() {
-								ui.Icon(c, closeIcon).Size(10, 10)
-							}).Clicked() {
-								closeAt = i
-							}
+							iconButton(c, fmt.Sprintf("close-%s", path), closeIcon, "Close "+filepath.Base(path), 18, 10, func() { closeAt = i })
 						})
 					})
 					tab.Tooltip(s.Tabs[i].Path)

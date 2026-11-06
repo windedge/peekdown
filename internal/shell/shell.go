@@ -309,22 +309,10 @@ func (s *Shell) welcome(c *ui.Context) {
 func (s *Shell) statusBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Height(26).Padding(2, 6).Gap(6).Background(t.Surface).Children(func() {
-		if ui.Button(c, "").Width(24).Height(20).Children(func() {
-			ui.Icon(c, folderIcon).Size(14, 14)
-		}).Clicked() {
-			s.SetSidebarTab(0)
-		}
-		if ui.Button(c, "").Width(24).Height(20).Children(func() {
-			ui.Icon(c, chevronDownIcon).Size(14, 14)
-		}).Clicked() {
-			s.SetSidebarTab(1)
-		}
+		iconButton(c, "status-files", folderIcon, "Files", 24, 14, func() { s.SetSidebarTab(0) })
+		iconButton(c, "status-outline", chevronDownIcon, "Outline", 24, 14, func() { s.SetSidebarTab(1) })
 		ui.Box(c).Grow(1)
-		if ui.Button(c, "").Width(24).Height(20).Children(func() {
-			ui.Icon(c, gearIcon).Size(14, 14)
-		}).Clicked() {
-			s.OpenSettings()
-		}
+		iconButton(c, "status-settings", gearIcon, "Settings", 24, 14, func() { s.OpenSettings() })
 		ui.Text(c, fmt.Sprintf("%d FPS", 0)).FontSize(11).TextColor(t.TextMuted) // TODO: real frame rate counter
 	})
 }

@@ -15,11 +15,7 @@ func (s *Shell) sidebar(c *ui.Context) {
 		ui.Row(c).Padding(6, 6).Gap(6).Children(func() {
 			ui.Segmented(c, &s.Sidebar.Tab, "Files", "Outline")
 			ui.Box(c).Grow(1)
-			if ui.Button(c, "").Width(20).Height(20).Children(func() {
-				ui.Icon(c, closeIcon).Size(10, 10)
-			}).Clicked() {
-				s.Sidebar.Visible = false
-			}
+			iconButton(c, "close-sidebar", closeIcon, "Close sidebar", 24, 12, func() { s.Sidebar.Visible = false })
 		})
 		if s.Sidebar.Tab == 0 {
 			s.filesPane(c)
