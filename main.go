@@ -35,6 +35,7 @@ func (a *app) open(path string) {
 	if a.win != nil {
 		a.win.SetTitle(a.title())
 		a.win.SetRepresentedFile(path)
+		a.win.Invalidate()
 	}
 }
 

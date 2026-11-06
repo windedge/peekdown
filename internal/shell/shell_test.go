@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -252,6 +253,38 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
+	s, _ := newShell(t)
+	s.Save = func(settings.Settings) error { return errors.New("disk full") }
+	tt := s.renderSize(t, 800, 1000)
+	s.OpenSettings()
+	tt.Frame()
+
+	if err := tt.Click("Save"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !s.SettingsOpen {
+		t.Fatal("dialog closed after a failed save")
+	}
+	if !tt.HasText("disk full") {
+		t.Fatalf("texts %q: want the save error", tt.Texts())
+	}
+}
+
+func TestApplyKeepsSidebarVisibility(t *testing.T) {
+	s, _ := newShell(t)
+	s.Sidebar.Visible = true
+	saved := s.Saved
+	saved.SidebarVisible = false
+	if err := s.Apply(saved); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Sidebar.Visible {
+		t.Fatal("apply hid a visible sidebar")
+	}
+}
+
 func TestWelcomeShowsRecent(t *testing.T) {
 	s, dir := newShell(t)
 	a := filepath.Join(dir, "a.md")
@@ -290,11 +323,12 @@ func TestWindowTitle(t *testing.T) {
 	if s.Title() != "Peekdown" {
 		t.Fatalf("title = %q", s.Title())
 	}
-	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
+	path := filepath.Join(dir, "a.md")
+	if err := s.OpenFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if s.Title() != "a.md - Peekdown" {
-		t.Fatalf("title = %q", s.Title())
+	if want := path + " - Peekdown"; s.Title() != want {
+		t.Fatalf("title = %q, want %q", s.Title(), want)
 	}
 	s.CloseAll()
 	if s.Title() != "Peekdown" {

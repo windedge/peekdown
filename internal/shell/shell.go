@@ -37,6 +37,7 @@ type Shell struct {
 	Draft        settings.Settings
 	Saved        settings.Settings
 	Zoom         float64
+	saveErr      string
 
 	// Injected dependencies.
 	Load        func() settings.Settings
@@ -54,7 +55,6 @@ type Shell struct {
 	draftLayout      int
 	draftExplorer    int
 	markersText      string
-	markersLoaded    bool
 	lastActiveOnOpen int
 }
 
@@ -67,7 +67,6 @@ func New() *Shell {
 	s.Active = -1
 	s.Sidebar.Width = 200
 	s.Sidebar.Visible = true
-	s.markersLoaded = false
 	return s
 }
 
@@ -145,9 +144,19 @@ func (s *Shell) ActiveTab() *Tab {
 // Title is the window title.
 func (s *Shell) Title() string {
 	if t := s.ActiveTab(); t != nil {
-		return filepath.Base(t.Path) + " - Peekdown"
+		return t.Path + " - Peekdown"
 	}
 	return "Peekdown"
+}
+
+// tabIndex returns the index of the first tab with path, or -1.
+func (s *Shell) tabIndex(path string) int {
+	for i := range s.Tabs {
+		if s.Tabs[i].Path == path {
+			return i
+		}
+	}
+	return -1
 }
 
 // ToggleSidebar flips sidebar visibility.
@@ -203,12 +212,10 @@ func (s *Shell) Apply(t settings.Settings) error {
 		s.SetSidebarWidth(float32(t.SidebarWidth))
 	}
 	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
-	s.Sidebar.Visible = t.SidebarVisible
 	if s.SetTheme != nil {
 		s.SetTheme(themeSource(t.Theme))
 	}
 	s.markersText = strings.Join(t.ProjectRootMarkers, ", ")
-	s.markersLoaded = true
 	if s.Save != nil {
 		return s.Save(t)
 	}
@@ -221,7 +228,6 @@ func (s *Shell) OpenSettings() {
 	s.draftLayout = layoutIndex(s.Draft.Layout)
 	s.draftExplorer = explorerIndex(s.Draft.ExplorerRootMode)
 	s.markersText = strings.Join(s.Draft.ProjectRootMarkers, ", ")
-	s.markersLoaded = true
 	s.SettingsOpen = true
 }
 
@@ -319,7 +325,7 @@ func (s *Shell) statusBar(c *ui.Context) {
 		}).Clicked() {
 			s.OpenSettings()
 		}
-		ui.Text(c, fmt.Sprintf("%d FPS", 0)).FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, fmt.Sprintf("%d FPS", 0)).FontSize(11).TextColor(t.TextMuted) // TODO: real frame rate counter
 	})
 }
 

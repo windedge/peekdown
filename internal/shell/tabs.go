@@ -15,12 +15,13 @@ func (s *Shell) tabBar(c *ui.Context) {
 			parts.List.Gap(0).Children(func() {
 				// Close requests are collected so the loop keeps iterating over the original slice.
 				closeAt := -1
-				closeOthers := -1
-				closeAll := false
-				reveal := -1
+				reveal := false
 
+				// The menu's Chosen fires on a later frame, so actions re-locate the tab by
+				// path instead of trusting the index captured now.
 				for i := range s.Tabs {
 					i := i
+					path := s.Tabs[i].Path
 					tab := parts.Tab(i)
 					if i == s.Active {
 						tab.Background(t.Surface).Radius(4)
@@ -39,33 +40,32 @@ func (s *Shell) tabBar(c *ui.Context) {
 					tab.Tooltip(s.Tabs[i].Path)
 					tab.ContextMenu(func(m *ui.Menu) {
 						if m.Item("Reveal in Sidebar").Chosen() {
-							reveal = i
+							reveal = true
 						}
 						if m.Item("Copy File Path").Chosen() {
-							c.WriteClipboard(s.Tabs[i].Path)
+							c.WriteClipboard(path)
 						}
 						m.Separator()
 						if m.Item("Close Tab").Chosen() {
-							closeAt = i
+							if idx := s.tabIndex(path); idx >= 0 {
+								s.CloseTab(idx)
+							}
 						}
 						if m.Item("Close Other Tabs").Chosen() {
-							closeOthers = i
+							if idx := s.tabIndex(path); idx >= 0 {
+								s.CloseOthers(idx)
+							}
 						}
 						if m.Item("Close All Tabs").Chosen() {
-							closeAll = true
+							s.CloseAll()
 						}
 					})
 				}
 
-				if reveal >= 0 {
+				if reveal {
 					s.SetSidebarTab(0)
 				}
-				switch {
-				case closeAll:
-					s.CloseAll()
-				case closeOthers >= 0:
-					s.CloseOthers(closeOthers)
-				case closeAt >= 0:
+				if closeAt >= 0 {
 					s.CloseTab(closeAt)
 				}
 			})

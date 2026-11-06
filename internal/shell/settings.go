@@ -26,10 +26,6 @@ func (s *Shell) settingsDialog(c *ui.Context) {
 			s.Draft.ExplorerRootMode = explorerName(s.draftExplorer)
 
 			ui.Text(c, "Project Root Markers")
-			if !s.markersLoaded {
-				s.markersText = strings.Join(s.Draft.ProjectRootMarkers, ", ")
-				s.markersLoaded = true
-			}
 			ui.TextInput(c, &s.markersText)
 
 			ui.Text(c, "Scroll Speed")
@@ -44,24 +40,32 @@ func (s *Shell) settingsDialog(c *ui.Context) {
 			ui.Text(c, "Code Font")
 			ui.NumberInput(c, &s.Draft.MonoFontSize, 10, 18, 1)
 
+			if s.saveErr != "" {
+				ui.Text(c, s.saveErr).FontSize(12).TextColor(c.Theme().Danger)
+			}
+
 			ui.Row(c).Gap(8).Children(func() {
 				ui.Box(c).Grow(1)
 				if ui.Button(c, "Cancel").Clicked() {
 					s.SettingsOpen = false
+					s.saveErr = ""
 					s.Draft = s.Saved
 				}
 				if ui.PrimaryButton(c, "Save").Clicked() {
-					draft := s.Draft
-					draft.ProjectRootMarkers = splitMarkers(s.markersText)
-					_ = s.Apply(draft)
-					s.SettingsOpen = false
+					s.Draft.ProjectRootMarkers = splitMarkers(s.markersText)
+					if err := s.Apply(s.Draft); err != nil {
+						s.saveErr = err.Error()
+					} else {
+						s.SettingsOpen = false
+						s.saveErr = ""
+					}
 				}
 			})
 		})
 	})
 	if m.Dismissed() {
 		s.Draft = s.Saved
-		s.markersLoaded = false
+		s.saveErr = ""
 	}
 }
 

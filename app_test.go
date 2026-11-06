@@ -39,7 +39,7 @@ func TestTitle(t *testing.T) {
 	}
 	path := writeDoc(t, t.TempDir(), "readme.md", "# Hi\n")
 	a.open(path)
-	if got, want := a.title(), "readme.md - Peekdown"; got != want {
+	if got, want := a.title(), path+" - Peekdown"; got != want {
 		t.Fatalf("title: got %q, want %q", got, want)
 	}
 }
@@ -65,7 +65,7 @@ func TestOpenMissingFileKeepsTheTabs(t *testing.T) {
 	if got := len(a.shell.Tabs); got != 1 {
 		t.Fatalf("tabs = %d, want 1", got)
 	}
-	if got := a.title(); got != "readme.md - Peekdown" {
+	if got := a.title(); got != path+" - Peekdown" {
 		t.Fatalf("title = %q", got)
 	}
 }
