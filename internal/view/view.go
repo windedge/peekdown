@@ -166,6 +166,8 @@ func (st *State) invalidateStale(m *doc.Model) {
 	if v := m.Version(); v != st.docVersion {
 		st.layouts = nil
 		st.Selection.set = false
+		st.Matches = nil
+		st.Current = -1
 		st.docVersion = v
 	}
 }
@@ -326,9 +328,10 @@ const (
 
 // style is the base style of a run of spans.
 type style struct {
-	size   float32
-	weight int
-	color  ui.Color
+	size      float32
+	weight    int
+	color     ui.Color
+	underline bool
 }
 
 func (st *State) heading(c *ui.Context, m *doc.Model, i, level int) {
@@ -403,15 +406,22 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 			return
 		}
 		base := s
-		base.color = t.Text
+		if base.color == (ui.Color{}) {
+			base.color = t.Text
+		}
+		if link {
+			// A link reads as ui.Link does, the accent color underlined;
+			// full link interaction is later work.
+			base.color = t.Accent
+			base.underline = true
+		}
 		if mark {
 			base.color = t.TextMuted
 			base.size = s.size * 0.95
 		}
-		spans = append(spans, ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color})
+		spans = append(spans, ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color, Underline: base.underline})
 	})
-	spans = st.overlay(c, i, spans, s)
-	return spans
+	return st.overlay(c, m, i, spans, s)
 }
 
 // walk flattens inlines to runs of text in style s, marking code and
@@ -434,16 +444,16 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 		case parser.Code:
 			fn(n.Text, true, false, "")
 		case parser.Emphasis:
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color}, fn)
+			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, fn)
 		case parser.Strong:
-			walk(in[k+1:n.Next], style{s.size, 700, s.color}, fn)
+			walk(in[k+1:n.Next], style{s.size, 700, s.color, s.underline}, fn)
 		case parser.Link:
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color}, func(text string, code, link bool, dest string) {
+			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, true, n.Dest)
 			})
 		case parser.Image:
 			// Its description stands for it within the text.
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color}, func(text string, code, link bool, dest string) {
+			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, false, "")
 			})
 		case parser.HTML, parser.Math:
@@ -459,17 +469,25 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 
 // overlay splits a block's spans where the selection and the matches cut
 // its text, coloring the covered runs. The spans carry the text of the
-// block joined, which the overlays address by rune.
-func (st *State) overlay(c *ui.Context, i int, spans []ui.Span, s style) []ui.Span {
+// block joined, which the overlays address by rune. The block i handed
+// in is the leaf the row draws, often a cell or a quote's paragraph; the
+// overlays address top-level runs, so RunAt maps the leaf into its run
+// and the cuts shift by the leaf's offset there.
+func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span, s style) []ui.Span {
 	var cuts []cut
+	// The cuts come in run coordinates; the leaf draws only its slice.
+	leaf, off := i, 0
+	if run, at := m.RunAt(i); run != nil {
+		leaf, off = run.Block, at
+	}
 	if st.Selection.set {
 		start, end := st.Selection.start, st.Selection.end
-		if start.Block == end.Block && start.Block == i && start.Offset < end.Offset {
+		if start.Block == end.Block && start.Block == leaf && start.Offset < end.Offset {
 			cuts = append(cuts, cut{start.Offset, end.Offset, cutSelection})
 		}
 	}
 	for k, match := range st.Matches {
-		if match.Block != i {
+		if match.Block != leaf {
 			continue
 		}
 		kind := cutMatch
@@ -481,7 +499,20 @@ func (st *State) overlay(c *ui.Context, i int, spans []ui.Span, s style) []ui.Sp
 	if len(cuts) == 0 {
 		return spans
 	}
-	return splitSpans(spans, cuts, c.Theme())
+	// Shift the run coordinates into the leaf's; splitSpans clamps a
+	// cut that reaches past the leaf's ends to them.
+	shifted := cuts[:0]
+	for _, c := range cuts {
+		c.from -= off
+		c.to -= off
+		if c.to > 0 {
+			shifted = append(shifted, c)
+		}
+	}
+	if len(shifted) == 0 {
+		return spans
+	}
+	return splitSpans(spans, shifted, c.Theme())
 }
 
 // cut is a run of a block's text to color.
@@ -579,24 +610,54 @@ func (s segment) color(t *ui.Theme) (ui.Color, ui.Color) {
 	}
 }
 
-// mergeCuts sorts the cuts and drops overlaps, first match wins.
-func mergeCuts(cuts []cut, total int) []segment {
-	sortCuts(cuts)
-	var out []segment
-	for _, c := range cuts {
-		if c.to <= total && (len(out) == 0 || out[len(out)-1].to <= c.from) {
-			out = append(out, segment{c.from, c.to, c.kind})
-		}
+// cutPriority ranks the overlays when they overlap: the current match
+// over the selection, the selection over the other matches.
+func cutPriority(k cutKind) int {
+	switch k {
+	case cutCurrent:
+		return 3
+	case cutSelection:
+		return 2
+	default:
+		return 1
 	}
-	return out
 }
 
-func sortCuts(cuts []cut) {
-	for i := 1; i < len(cuts); i++ {
-		for j := i; j > 0 && cuts[j].from < cuts[j-1].from; j-- {
-			cuts[j], cuts[j-1] = cuts[j-1], cuts[j]
+// mergeCuts sorts the cuts by priority and clips the overlaps: where
+// cuts cover the same runes the higher-priority one wins and the lower
+// keeps only what the higher leaves, so a selection over the current
+// match still shows the match around it.
+func mergeCuts(cuts []cut, total int) []segment {
+	slices.SortStableFunc(cuts, func(a, b cut) int {
+		if p := cutPriority(b.kind) - cutPriority(a.kind); p != 0 {
+			return p
+		}
+		return cmp.Compare(a.from, b.from)
+	})
+	var out []segment
+	for _, c := range cuts {
+		c.from = max(c.from, 0)
+		c.to = min(c.to, total)
+		if c.from >= c.to {
+			continue
+		}
+		// The segments already taken outrank c; carve them out of it.
+		at := c.from
+		for _, s := range out {
+			if s.to <= at || s.from >= c.to {
+				continue
+			}
+			if s.from > at {
+				out = append(out, segment{at, s.from, c.kind})
+			}
+			at = max(at, s.to)
+		}
+		if at < c.to {
+			out = append(out, segment{at, c.to, c.kind})
 		}
 	}
+	slices.SortFunc(out, func(a, b segment) int { return cmp.Compare(a.from, b.from) })
+	return out
 }
 
 // images builds a row of pictures for the images of block i.

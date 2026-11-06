@@ -380,3 +380,82 @@ func TestAnchorScrollRequestBeforeLayout(t *testing.T) {
 		t.Fatal("anchor consumed")
 	}
 }
+
+// TestMergeCutsPriority checks the overlap rule: the current match wins
+// over the selection, the selection over a plain match, and the loser
+// keeps the runes the winner does not cover instead of vanishing.
+func TestMergeCutsPriority(t *testing.T) {
+	theme := ui.LightTheme()
+	out := mergeCuts([]cut{{0, 10, cutMatch}, {2, 4, cutCurrent}}, 10)
+	want := []segment{{0, 2, cutMatch}, {2, 4, cutCurrent}, {4, 10, cutMatch}}
+	if len(out) != len(want) {
+		t.Fatalf("segments %v, want %v", out, want)
+	}
+	for k, s := range out {
+		if s != want[k] {
+			t.Fatalf("segment %d = %v, want %v", k, s, want[k])
+		}
+	}
+	out = mergeCuts([]cut{{0, 10, cutSelection}, {0, 5, cutCurrent}}, 10)
+	want = []segment{{0, 5, cutCurrent}, {5, 10, cutSelection}}
+	if len(out) != len(want) {
+		t.Fatalf("segments %v, want %v", out, want)
+	}
+	for k, s := range out {
+		if s != want[k] {
+			t.Fatalf("segment %d = %v, want %v", k, s, want[k])
+		}
+	}
+	_ = theme
+}
+
+// TestQuoteTextMuted checks the quote's paragraphs draw in the muted
+// color: spans used to overwrite the style's color with the plain text
+// color, swallowing what the quote passed in.
+func TestQuoteTextMuted(t *testing.T) {
+	m := doc.New("> quoted wisdom\n")
+	quote := m.Blocks()[0]
+	leaf := m.QuoteBlocks(quote.Index)[0]
+	var got []ui.Span
+	_ = ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		t := c.Theme()
+		var st State
+		got = st.spans(c, m, leaf, style{color: t.TextMuted})
+	}, 400, 300)
+	if len(got) == 0 {
+		t.Fatal("no spans")
+	}
+	theme := ui.LightTheme()
+	for _, sp := range got {
+		if sp.Color == theme.Text {
+			t.Fatalf("span %q draws in Text, want TextMuted", sp.Text)
+		}
+		if sp.Color != theme.TextMuted {
+			t.Fatalf("span %q color %v, want %v", sp.Text, sp.Color, theme.TextMuted)
+		}
+	}
+}
+
+// TestLinkSpanStyled checks the link's text draws as a link does: the
+// accent color, underlined.
+func TestLinkSpanStyled(t *testing.T) {
+	m := doc.New("a [link](x) here\n")
+	b := m.Blocks()[0]
+	var got []ui.Span
+	_ = ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		var st State
+		got = st.spans(c, m, b.Index, style{})
+	}, 400, 300)
+	theme := ui.LightTheme()
+	for _, sp := range got {
+		if sp.Text == "link" {
+			if !sp.Underline || sp.Color != theme.Accent {
+				t.Fatalf("link span %v: want Underline and Accent %v", sp, theme.Accent)
+			}
+			return
+		}
+	}
+	t.Fatalf("no span %q in %v", "link", got)
+}
