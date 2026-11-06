@@ -142,14 +142,24 @@ func TestScrollViewScrolls(t *testing.T) {
 		c.DisableAnimations()
 		ScrollView(c, m, &state)
 	}, 400, 300)
-	before := len(tt.Texts())
+	tt.Frame()
+	// The list's row numbers do not depend on the fonts' metrics, the
+	// heights the rows measure do, so the test reads the place, not the
+	// texts: the first frame shows the top, scrolling to the end shows
+	// the last row there.
+	first, _ := state.List.Visible()
+	if first != 0 {
+		t.Fatalf("first row %d of a fresh view, want 0", first)
+	}
+	last := m.Len() - 1
 	state.List.ScrollToEnd()
 	tt.Frame()
-	after := len(tt.Texts())
-	if after <= before {
-		t.Fatalf("texts before %d, after %d: the end did not build more rows", before, after)
+	if got, end := state.List.Visible(); got <= first && end <= last {
+		t.Fatalf("visible rows %d..%d after the end: the view did not scroll down", got, end)
 	}
-	_ = m
+	if !state.List.AtEnd() {
+		t.Fatalf("the end is out of view after ScrollToEnd")
+	}
 }
 
 func TestScrollViewAnchor(t *testing.T) {
