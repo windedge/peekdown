@@ -15,8 +15,15 @@ The Go rewrite on mygo's native UI. The reading features of the Rust implementat
 - Native window and a view tested without a window through mygo's headless tester.
 - App metadata for `Peekdown`: identifier `com.windedge.peekdown`, version `0.3.0`, and the `.md` / `.markdown` file associations.
 - In-document search (`Ctrl+F`): plain text and regular expressions, a case toggle, a hit counter, `Enter` / `F3` and `Shift+Enter` / `Shift+F3` navigation, `Esc` to close, and the first 10000 matches at most.
+- Drag & drop: dropping Markdown files on the window opens them as tabs, other files are skipped.
+- Image loading: relative images resolve against the document's directory and draw once loaded, the description showing until then.
+- The layout setting applies: centered caps the reading column at 900 DIPs, full width follows the window; the saved sidebar tab is restored at startup.
 - CI on Windows, macOS and Linux, and a release workflow that attaches the Windows archive, installer, and macOS app and disk image to a `v*` tag.
 - Scoop manifest template and release notes.
+
+### Fixed
+
+- A wrapped list item's bullet or number stayed beside the item's middle lines instead of its first line.
 
 The entries below describe the Rust implementation, kept for history.
 

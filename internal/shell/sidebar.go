@@ -41,7 +41,7 @@ func (s *Shell) filesPane(c *ui.Context) {
 		}
 		ui.Text(c, filepath.Base(dir)).FontSize(11).TextColor(t.TextMuted)
 		for _, e := range entries {
-			if e.IsDir() || !isMarkdown(e.Name()) {
+			if e.IsDir() || !IsMarkdown(e.Name()) {
 				continue
 			}
 			name := e.Name()
@@ -80,11 +80,21 @@ func (s *Shell) outlinePane(c *ui.Context) {
 	})
 }
 
-func isMarkdown(name string) bool {
+// MarkdownExtensions is the extension set IsMarkdown accepts, for the
+// host's open dialog filters to agree with it.
+func MarkdownExtensions() []string {
+	return []string{"md", "markdown", "mdown", "mkd"}
+}
+
+// IsMarkdown reports whether name looks like a Markdown document, by
+// its extension: the open dialog, the file pane and the drop filter
+// agree on the set.
+func IsMarkdown(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".md", ".markdown", ".mdown", ".mkd":
-		return true
+	for _, e := range MarkdownExtensions() {
+		if ext == "."+e {
+			return true
+		}
 	}
 	return false
 }

@@ -333,10 +333,7 @@ func TestLayoutCacheInvalidatedBySet(t *testing.T) {
 	var state State
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		list := ui.List(c, &state.List, m.Len(), func(r int) {
-			state.Row(c, m, r)
-		}).Grow(1)
-		list.HandleInput(state.Handler(m))
+		ScrollView(c, m, &state)
 	}, 400, 300)
 	tt.Frame()
 	x, y := findText(t, tt, "Alpha", false)
@@ -383,10 +380,7 @@ func TestLayoutUsesHeadingSize(t *testing.T) {
 	var state State
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		list := ui.List(c, &state.List, m.Len(), func(r int) {
-			state.Row(c, m, r)
-		}).Grow(1)
-		list.HandleInput(state.Handler(m))
+		ScrollView(c, m, &state)
 	}, 400, 300)
 	tt.Frame()
 	x, y := findText(t, tt, "Title", false)
@@ -535,4 +529,79 @@ func TestLinkSpanStyled(t *testing.T) {
 		}
 	}
 	t.Fatalf("no span %q in %v", "link", got)
+}
+
+// rectOf finds the box the tester draws the whole text in. The tester
+// matches a whole label, and bullets share one text, so this takes the
+// first hit and the caller counts on its order.
+func rectOf(t *testing.T, tt *ui.Tester, want string) ui.Rect {
+	t.Helper()
+	for _, label := range tt.Texts() {
+		if strings.Contains(label, want) {
+			if r, ok := tt.Find(label); ok {
+				return r
+			}
+		}
+	}
+	t.Fatalf("texts %v: %q not found", tt.Texts(), want)
+	return ui.Rect{}
+}
+
+// TestNestedListBulletStaysOnFirstLine checks the bullet of a wrapped
+// list item keeps its place on the item's first line: the row centers
+// across itself by default, which stood a wrapped item's bullet beside
+// the item's middle lines, not beside its first.
+func TestNestedListBulletStaysOnFirstLine(t *testing.T) {
+	src := "- a first bullet long enough to wrap when the window is narrow\n- short one\n  - nested item\n"
+	m := doc.New(src)
+	var state State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		ScrollView(c, m, &state)
+	}, 320, 300)
+	tt.Frame()
+	wrapped := rectOf(t, tt, "a first bullet")
+	bullet := rectOf(t, tt, "•")
+	if bullet.Y != wrapped.Y {
+		t.Fatalf("bullet at y %v, the wrapped item's first line at %v: the bullet fell off the first line", bullet.Y, wrapped.Y)
+	}
+	// The bullet box overlaps the item's first line, not below it.
+	if bullet.Y+bullet.H > wrapped.Y+wrapped.H {
+		t.Fatalf("bullet %v reaches past the item's first line %v", bullet, wrapped)
+	}
+	// A short item keeps its bullet beside it as one line.
+	_, tt2, state2 := render(t, "- short one\n")
+	_ = state2
+	short := rectOf(t, tt2, "short one")
+	shortBullet := rectOf(t, tt2, "•")
+	if shortBullet.Y != short.Y {
+		t.Fatalf("short item's bullet at y %v, its text at %v", shortBullet.Y, short.Y)
+	}
+}
+
+// TestOrderedListItemsCompact checks wrapped and plain items of an
+// ordered list keep one spacing: a wrapped item grows its row, the rows
+// below still sit one line height plus the list's gap away from the
+// line their text ends on.
+func TestOrderedListItemsCompact(t *testing.T) {
+	src := "1. an ordered item long enough to wrap when the window is narrow\n2. second one\n"
+	m := doc.New(src)
+	var state State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		ScrollView(c, m, &state)
+	}, 320, 300)
+	tt.Frame()
+	first := rectOf(t, tt, "an ordered item")
+	firstNumber := rectOf(t, tt, "1.")
+	second := rectOf(t, tt, "second one")
+	if firstNumber.Y != first.Y {
+		t.Fatalf("number 1. at y %v, the wrapped item's first line at %v", firstNumber.Y, first.Y)
+	}
+	// A line is about 19 DIPs, the list's gap 2: the second item starts
+	// right under the first's last line, not a blank line lower.
+	line := first.H / 2
+	if gap := second.Y - (first.Y + first.H); gap > line {
+		t.Fatalf("second item starts %v under the first (first %v, second %v): too far", gap, first, second)
+	}
 }

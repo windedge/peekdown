@@ -110,10 +110,9 @@ func (st *State) SetSelection(anchor, caret selection.Point) {
 // ClearSelection collapses the selection.
 func (st *State) ClearSelection() { st.Selection.set = false }
 
-// Handler returns the input handler for the document area. Wire it to the
-// element that wraps the view (ScrollView's list or a Box around it): the
-// element pressed takes the moves and the release wherever they go, so one
-// handler covers every block. It returns false for events it does not
+// Handler returns the input handler for the document area. ScrollView
+// wires it to its list already; a caller that builds its own list may
+// attach it there. It returns false for events it does not
 // take, scrolling among them. The events' position is relative to the
 // element wired, which is to wrap the list without padding of its own.
 func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
@@ -256,17 +255,21 @@ func runeOffset(text string, u16 int) int {
 func runeLen(text string) int { return len([]rune(text)) }
 
 // ScrollView builds the whole document: a virtual list of the blocks. The
-// list keeps its own scroll place; use State.List to scroll it. Each row
-// binds its block's handle, which the Handler the caller wires reads.
-// The model's search state is the authority here: it syncs the view's
-// copy each frame, so SetSearch and ClearSearch on the model show up
-// without further wiring.
+// list keeps its own scroll place; use State.List to scroll it, and the
+// Handler is wired to the list here, so dragging over the view selects
+// text while the wheel and the keys still scroll. Each row binds its
+// block's handle, which the handler's hit reads. The model's search
+// state is the authority here: it syncs the view's copy each frame, so
+// SetSearch and ClearSearch on the model show up without further wiring.
 func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.Matches = m.Matches
 	st.Current = m.Current
-	ui.List(c, &st.List, m.Len(), func(r int) {
+	list := ui.List(c, &st.List, m.Len(), func(r int) {
 		st.Row(c, m, r)
 	}).Grow(1)
+	// The handler takes the pointer for the drag selection and returns
+	// false for the rest, the wheel among it, so the list keeps scrolling.
+	list.HandleInput(st.Handler(m))
 	if st.AnchorOf == nil {
 		st.AnchorOf = anchorsOf(m)
 	}
@@ -895,7 +898,7 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 				number++
 				width = 28
 			}
-			row := ui.Row(c).Gap(4).AlignSelf(ui.Stretch).MinWidth(0)
+			row := ui.Row(c).Gap(4).AlignSelf(ui.Stretch).MinWidth(0).AlignItems(ui.Baseline)
 			row.Children(func() {
 				ui.Text(c, marker).Width(width).TextColor(t.TextMuted).TextAlign(ui.End)
 				content := ui.Column(c).Gap(2).Grow(1).MinWidth(0)

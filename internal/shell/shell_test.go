@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -270,6 +271,40 @@ func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
 	}
 	if !tt.HasText("disk full") {
 		t.Fatalf("texts %q: want the save error", tt.Texts())
+	}
+}
+
+// TestRestoreFromSettings walks the startup restore: the saved sidebar
+// width, tab and visibility land on the shell, the draft follows the
+// saved values, and the theme reaches the host. An unknown tab name
+// falls back to the explorer, a hidden sidebar stays hidden.
+func TestRestoreFromSettings(t *testing.T) {
+	s := New()
+	var theme string
+	s.SetTheme = func(source mygo.ThemeSource) { theme = string(source) }
+	var saved settings.Settings
+	saved.Theme = "dark"
+	saved.SidebarWidth = 333
+	saved.SidebarTab = "outline"
+	saved.SidebarVisible = true
+
+	s.RestoreFromSettings(saved)
+	if s.Sidebar.Width != 333 || s.Sidebar.Tab != 1 || !s.Sidebar.Visible {
+		t.Fatalf("sidebar after restore: %+v", s.Sidebar)
+	}
+	if !reflect.DeepEqual(s.Draft, saved) || !reflect.DeepEqual(s.Saved, saved) {
+		t.Fatalf("draft = %+v, saved = %+v, want the restored %+v", s.Draft, s.Saved, saved)
+	}
+	if theme != "dark" {
+		t.Fatalf("theme = %q, want dark", theme)
+	}
+
+	saved.SidebarTab = "nonsense"
+	saved.SidebarVisible = false
+	s2 := New()
+	s2.RestoreFromSettings(saved)
+	if s2.Sidebar.Tab != 0 || s2.Sidebar.Visible {
+		t.Fatalf("fallback restore: tab %d visible %v, want the explorer hidden", s2.Sidebar.Tab, s2.Sidebar.Visible)
 	}
 }
 

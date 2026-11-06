@@ -32,11 +32,20 @@ func (a *app) open(path string) {
 		log.Printf("peekdown: open %s: %v", path, err)
 		return
 	}
-	if a.win != nil {
-		a.win.SetTitle(a.title())
-		a.win.SetRepresentedFile(path)
-		a.win.Invalidate()
+	a.showOpen()
+}
+
+// showOpen mirrors the shell's tab state on the window: the title, the
+// represented file, a repaint.
+func (a *app) showOpen() {
+	if a.win == nil {
+		return
 	}
+	a.win.SetTitle(a.title())
+	if t := a.shell.ActiveTab(); t != nil {
+		a.win.SetRepresentedFile(t.Path)
+	}
+	a.win.Invalidate()
 }
 
 // adopt takes the window and replays a pending activation.
@@ -45,15 +54,34 @@ func (a *app) adopt(w *mygo.Window) {
 	if w == nil {
 		return
 	}
-	w.SetTitle(a.title())
-	if t := a.shell.ActiveTab(); t != nil {
-		w.SetRepresentedFile(t.Path)
-	}
+	a.showOpen()
+	// Files dropped on the window open as tabs, the markdown ones only.
+	w.OnFileDrop(func(e *mygo.FileDropEvent) {
+		a.dropOpen(e.Paths)
+	})
 	if a.activatePending {
 		a.activatePending = false
 		w.Restore()
 		w.Focus()
 	}
+}
+
+// dropOpen opens the markdown paths of a drop and mirrors the new tab
+// on the window.
+func (a *app) dropOpen(paths []string) {
+	a.shell.OpenDrop(paths)
+	a.showOpen()
+}
+
+// openSecondInstance opens the markdown paths a second instance handed
+// over, then brings the window up.
+func (a *app) openSecondInstance(args []string) {
+	for _, p := range args {
+		if shell.IsMarkdown(p) {
+			a.open(p)
+		}
+	}
+	a.activate()
 }
 
 // activate brings the window to the front, or remembers to do so once the
@@ -65,6 +93,15 @@ func (a *app) activate() {
 	}
 	a.win.Restore()
 	a.win.Focus()
+}
+
+// OnTitleChange mirrors the shell's title on the window as the tabs
+// change; before the window exists there is nothing to mirror.
+func (a *app) OnTitleChange(title string) {
+	if a.win != nil {
+		a.win.SetTitle(title)
+		a.win.Invalidate()
+	}
 }
 
 // themeSource maps the saved theme to mygo's appearance source.
@@ -113,17 +150,10 @@ func newShell(a *app) *shell.Shell {
 		return mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Title:    "Open Markdown",
 			Multiple: true,
-			Filters: []mygo.FileFilter{
-				{Name: "Markdown", Extensions: []string{"md", "markdown"}},
-			},
+			Filters:  []mygo.FileFilter{{Name: "Markdown", Extensions: shell.MarkdownExtensions()}},
 		})
 	}
-	s.OnTitleChange = func(title string) {
-		if a.win != nil {
-			a.win.SetTitle(title)
-			a.win.Invalidate()
-		}
-	}
+	s.OnTitleChange = a.OnTitleChange
 	return s
 }
 
@@ -133,17 +163,14 @@ func main() {
 		return
 	}
 
-	s := newShell(&app{})
-	s.Saved = s.Load()
-	s.Draft = s.Saved
-	s.SetSidebarWidth(float32(s.Saved.SidebarWidth))
-	s.Sidebar.Visible = s.Saved.SidebarVisible
-	s.SetTheme(themeSource(s.Saved.Theme))
+	a := &app{}
+	s := newShell(a)
+	a.shell = s
+	s.RestoreFromSettings(s.Load())
 
-	a := &app{shell: s}
 	mygo.App.OnOpenFile(a.open)
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
-		a.activate()
+		a.openSecondInstance(args)
 	})
 	mygo.App.WhenReady(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{

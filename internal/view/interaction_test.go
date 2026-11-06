@@ -76,10 +76,7 @@ func TestPointerDragSelectsAcrossBlocks(t *testing.T) {
 	var state State
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		list := ui.List(c, &state.List, m.Len(), func(r int) {
-			state.Row(c, m, r)
-		}).Grow(1)
-		list.HandleInput(state.Handler(m))
+		ScrollView(c, m, &state)
 	}, 400, 300)
 
 	x0, y0 := findText(t, tt, "First", false)
@@ -102,10 +99,7 @@ func TestClickCollapsesTheSelection(t *testing.T) {
 	var state State
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		list := ui.List(c, &state.List, m.Len(), func(r int) {
-			state.Row(c, m, r)
-		}).Grow(1)
-		list.HandleInput(state.Handler(m))
+		ScrollView(c, m, &state)
 	}, 400, 300)
 
 	x0, y0 := findText(t, tt, "One", false)
@@ -127,10 +121,7 @@ func TestDoubleClickSelectsAWord(t *testing.T) {
 	var state State
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		list := ui.List(c, &state.List, m.Len(), func(r int) {
-			state.Row(c, m, r)
-		}).Grow(1)
-		list.HandleInput(state.Handler(m))
+		ScrollView(c, m, &state)
 	}, 400, 200)
 
 	// Over the glyphs of the second word: the box the text is drawn in
@@ -197,13 +188,10 @@ func TestMatchHelpers(t *testing.T) {
 	}
 }
 
-// dragWire is the test's wiring of the view: the single Handler on the
-// list that wraps the rows, the way the app wires it.
+// dragWire builds the view the way the app does: ScrollView, which
+// wires the handler to its list itself.
 func dragWire(c *ui.Context, m *doc.Model, state *State) {
-	list := ui.List(c, &state.List, m.Len(), func(r int) {
-		state.Row(c, m, r)
-	}).Grow(1)
-	list.HandleInput(state.Handler(m))
+	ScrollView(c, m, state)
 }
 
 func TestWheelScrollStillWorks(t *testing.T) {

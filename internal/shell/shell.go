@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/windedge/peekdown/internal/doc"
 	"github.com/windedge/peekdown/internal/settings"
@@ -43,7 +44,7 @@ type Shell struct {
 	SearchOpen bool
 	search     searchBar
 
-	// Injected dependencies.
+	// Load reads the user's settings; nil leaves the defaults.
 	Load          func() settings.Settings
 	Save          func(settings.Settings) error
 	SetTheme      func(mygo.ThemeSource)
@@ -99,6 +100,16 @@ func (s *Shell) OpenFile(path string) error {
 func (s *Shell) OpenPaths(paths []string) {
 	for _, p := range paths {
 		_ = s.OpenFile(p)
+	}
+}
+
+// OpenDrop opens the markdown files of a drop, skipping the rest: a
+// window's file drop names directories and other files too.
+func (s *Shell) OpenDrop(paths []string) {
+	for _, p := range paths {
+		if IsMarkdown(p) {
+			_ = s.OpenFile(p)
+		}
 	}
 }
 
@@ -189,6 +200,12 @@ func (s *Shell) SetSidebarTab(i int) {
 	s.Sidebar.Visible = true
 }
 
+// SidebarTabIndex maps a saved sidebar tab name to the segment index:
+// an unknown name is the explorer.
+func SidebarTabIndex(tab string) int {
+	return sidebarTabIndex(tab)
+}
+
 // SetSidebarWidth clamps the sidebar width to a usable range.
 func (s *Shell) SetSidebarWidth(w float32) {
 	const minW, maxW float32 = 120, 400
@@ -199,6 +216,20 @@ func (s *Shell) SetSidebarWidth(w float32) {
 		w = maxW
 	}
 	s.Sidebar.Width = w
+}
+
+// RestoreFromSettings puts the saved settings on the shell at startup:
+// the draft, the sidebar's width, tab and visibility, and the theme. It
+// does not persist; the host mirrors the theme on the window.
+func (s *Shell) RestoreFromSettings(t settings.Settings) {
+	s.Saved = t
+	s.Draft = t
+	s.SetSidebarWidth(float32(t.SidebarWidth))
+	s.Sidebar.Visible = t.SidebarVisible
+	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
+	if s.SetTheme != nil {
+		s.SetTheme(themeSource(t.Theme))
+	}
 }
 
 // ZoomIn increases the content zoom.
@@ -286,10 +317,22 @@ func (s *Shell) Content(c *ui.Context) {
 		})
 		return
 	}
+	// The images resolve against the document's directory, and a tab
+	// opened elsewhere drops its loader here, so every frame tops it up.
+	if tab.State.LoadImage == nil {
+		tab.State.LoadImage = markdown.FileImages(filepath.Dir(tab.Path))
+	}
 	ui.Box(c).Fill().Padding(16, 24).Children(func() {
-		// Mirrors the Rust reader: the column is capped at 900 DIPs and
-		// centered, the padding keeps the text off the window edges.
-		ui.Column(c).MaxWidth(900).AlignSelf(ui.Center).Grow(1).Children(func() {
+		// Mirrors the Rust reader: centered caps the column at 900 DIPs,
+		// full_width lets it follow the window; the padding keeps the
+		// text off the window edges either way.
+		col := ui.Column(c).Grow(1)
+		if s.Saved.Layout == "full_width" {
+			col.AlignSelf(ui.Stretch)
+		} else {
+			col.MaxWidth(900).AlignSelf(ui.Center)
+		}
+		col.Children(func() {
 			view.ScrollView(c, tab.Model, &tab.State)
 		})
 	})
