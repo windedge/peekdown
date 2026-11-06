@@ -64,7 +64,12 @@ type State struct {
 	imageCache map[string]ui.ImageSource
 
 	// layouts cache the shaped text of the blocks the pointer has hit.
-	layouts map[int]*textLayout
+	layouts map[layoutKey]*textLayout
+
+	// docVersion is the model's Version when the caches were built: a
+	// new document leaves them stale, so the handler drops them and the
+	// selection, as the Rust version does.
+	docVersion uint64
 
 	// Theme of the view's code: the window's by default.
 	CodeTheme *editor.Theme
@@ -111,6 +116,7 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			if ev.Button != 0 {
 				return false
 			}
+			st.invalidateStale(m)
 			// A press above the window's top comes clamped below zero
 			// (the engine keeps the element hit), as the first row.
 			p, ok := st.pointAt(m, ev, true)
@@ -148,6 +154,19 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			return true
 		}
 		return false
+	}
+}
+
+// invalidateStale drops the layout cache and the selection when the
+// model was scanned again: block indices keep their meaning but name
+// other text, so the old selection points nowhere and the shaped text
+// lies about the new one. The version covers every Set and every fresh
+// parse.
+func (st *State) invalidateStale(m *doc.Model) {
+	if v := m.Version(); v != st.docVersion {
+		st.layouts = nil
+		st.Selection.set = false
+		st.docVersion = v
 	}
 }
 
@@ -205,7 +224,13 @@ func (st *State) offsetAt(m *doc.Model, block int, rect, listRect ui.Rect, x, y 
 	if width <= 0 {
 		width = 10000
 	}
-	layout := st.layout(block, text, width)
+	// A heading shapes at its level's size, the body at 15; rows move
+	// between the two as the document edits, so the size rides the key.
+	size := float32(15)
+	if m.Block(block).Kind == parser.Heading {
+		size = headingSize(m.Block(block).Level)
+	}
+	layout := st.layout(block, text, width, size)
 	if layout == nil {
 		return 0
 	}
@@ -316,21 +341,32 @@ func (st *State) paragraph(c *ui.Context, m *doc.Model, i int, s style) {
 	st.richParagraph(c, m, i, s, false)
 }
 
-func headingStyle(c *ui.Context, level int) (float32, ui.Color) {
+// headingSize is the font size of a heading's level, the same numbers
+// headingStyle colors with, without a context: the pointer's hit shaping
+// reads it out of band.
+func headingSize(level int) float32 {
 	switch level {
 	case 1:
-		return 28, c.Theme().Text
+		return 28
 	case 2:
-		return 22, c.Theme().Text
+		return 22
 	case 3:
-		return 18, c.Theme().Text
+		return 18
 	case 4:
-		return 16, c.Theme().Text
+		return 16
 	case 5:
-		return 15, c.Theme().Text
+		return 15
 	default:
-		return 14, c.Theme().TextMuted
+		return 14
 	}
+}
+
+func headingStyle(c *ui.Context, level int) (float32, ui.Color) {
+	size := headingSize(level)
+	if level > 5 || level <= 0 {
+		return size, c.Theme().TextMuted
+	}
+	return size, c.Theme().Text
 }
 
 // richParagraph builds block i's text as styled spans, heading when it is
@@ -658,6 +694,7 @@ func splitLines(s string) []string {
 // table builds a Markdown table as a grid of rows.
 func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 	t := c.Theme()
+	widths := tableColumnWidths(m, i)
 	grid := ui.Column(c).Border(1, t.Border).Radius(4).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
 	grid.Children(func() {
 		first := true
@@ -667,18 +704,44 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 				r.Background(t.Surface)
 			}
 			r.Children(func() {
-				for _, cell := range m.TableCells(row) {
+				for k, cell := range m.TableCells(row) {
 					s := style{}
 					if first {
 						s.weight = 600
 					}
 					spans := st.spans(c, m, cell, s)
-					ui.RichText(c, spans...).FontSize(14).Padding(6, 10).Grow(1).MinWidth(0)
+					ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10).Children(func() {
+						ui.RichText(c, spans...).FontSize(14).MinWidth(0)
+					})
 				}
 			})
 			first = false
 		}
 	})
+}
+
+// tableColumnWidths measures a table's cells to size each column to its
+// widest cell, one shared width per column, so rows line up instead of
+// stretching to share the row. A cell measures its plain text at the
+// table's 14 with 20 for the padding, capped at 300; a table without
+// text takes the default 80.
+func tableColumnWidths(m *doc.Model, table int) []float32 {
+	widths := []float32{}
+	for _, row := range m.TableRows(table) {
+		for k, cell := range m.TableCells(row) {
+			w := float32(80)
+			if text := m.Plain(cell); text != "" {
+				tw, _ := ui.ShapeText(text, ui.Font{Size: 14}, 10000).Size()
+				w = tw + 20
+			}
+			w = min(w, 300)
+			for len(widths) <= k {
+				widths = append(widths, 0)
+			}
+			widths[k] = max(widths[k], w)
+		}
+	}
+	return widths
 }
 
 // quote builds a block quote with its bar.
@@ -784,7 +847,17 @@ func (st *State) scrollPendingAnchor(m *doc.Model) {
 	}
 }
 
-// textLayout is a shaped block of text with the width it was shaped at.
+// layoutKey is a layout cache's key: the block, the width and the font
+// size the text was shaped at. The size is in the key because a heading
+// reshapes at its own size, not the body's, and rows move between them
+// as the document edits.
+type layoutKey struct {
+	block int
+	width float32
+	size  float32
+}
+
+// textLayout is a shaped block of text with the key it was shaped at.
 type textLayout struct {
 	layout *ui.TextLayout
 	width  float32
@@ -799,18 +872,19 @@ func runText(m *doc.Model, block int) string {
 	return m.Plain(block)
 }
 
-// layout shapes a block's text at a row's width, caching by block and
-// width: the selection addresses runes, so the text it shapes is the run
-// table's.
-func (st *State) layout(block int, text string, width float32) *ui.TextLayout {
+// layout shapes a block's text at a row's width and font size, caching
+// by block, width and size: the selection addresses runes, so the text
+// it shapes is the run table's.
+func (st *State) layout(block int, text string, width, size float32) *ui.TextLayout {
 	if st.layouts == nil {
-		st.layouts = map[int]*textLayout{}
+		st.layouts = map[layoutKey]*textLayout{}
 	}
-	if entry := st.layouts[block]; entry != nil && entry.width == width {
+	key := layoutKey{block: block, width: width, size: size}
+	if entry := st.layouts[key]; entry != nil && entry.width == width {
 		return entry.layout
 	}
-	layout := ui.ShapeText(text, ui.Font{Size: 15}, width)
-	st.layouts[block] = &textLayout{layout: layout, width: width}
+	layout := ui.ShapeText(text, ui.Font{Size: size}, width)
+	st.layouts[key] = &textLayout{layout: layout, width: width}
 	return layout
 }
 

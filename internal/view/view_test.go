@@ -262,6 +262,111 @@ func TestCodeBlockTokenColors(t *testing.T) {
 	}
 }
 
+// TestLayoutCacheInvalidatedBySet renders doc A, fills the layout cache
+// through a pointer hit, then Sets doc B: the handler's press sees the
+// version and drops the cache and the selection, which named blocks of
+// the older document.
+func TestLayoutCacheInvalidatedBySet(t *testing.T) {
+	m := doc.New("Alpha beta gamma.")
+	var state State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		list := ui.List(c, &state.List, m.Len(), func(r int) {
+			state.Row(c, m, r)
+		}).Grow(1)
+		list.HandleInput(state.Handler(m))
+	}, 400, 300)
+	tt.Frame()
+	x, y := findText(t, tt, "Alpha", false)
+	tt.Press(x, y)
+	tt.Release(x, y)
+	if len(state.layouts) == 0 || !state.Selection.set {
+		t.Fatalf("layouts %v, selection %v: the hit filled neither", state.layouts, state.Selection.set)
+	}
+	old := state.layouts[layoutKey{block: m.Blocks()[0].Index, width: 400, size: 15}]
+	m.Set("Completely different text here.")
+	// The next press drops the stale cache and the old selection, then
+	// refills the cache from the new document in the same event.
+	state.Handler(m)(ui.InputEvent{Kind: ui.InputPointerDown, Button: 0})
+	for key, e := range state.layouts {
+		if e == old {
+			t.Fatalf("stale entry %v survived the new document", key)
+		}
+	}
+	if p := state.Selection.start; state.Selection.set && p.Block != m.Blocks()[0].Index {
+		t.Fatalf("selection %+v points outside the new document", state.Selection)
+	}
+	// The refilled entry shapes the new text: a layout carries no text,
+	// so compare the width it reports against a fresh shaping.
+	var entry *textLayout
+	for key, e := range state.layouts {
+		if key.block == m.Blocks()[0].Index {
+			entry = e
+		}
+	}
+	if entry == nil {
+		t.Fatalf("no entry for block %d in %v", m.Blocks()[0].Index, state.layouts)
+	}
+	w, _ := ui.ShapeText(m.Plain(m.Blocks()[0].Index), ui.Font{Size: 15}, 10000).Size()
+	if cw, _ := entry.layout.Size(); cw != w {
+		t.Fatalf("cached layout width %v, want %v for the new text", cw, w)
+	}
+}
+
+// TestLayoutUsesHeadingSize checks the cache keys by font size: a
+// heading's shaped layout takes its level's size, a paragraph's the
+// body's 15, so hit testing reshapes at what the row draws.
+func TestLayoutUsesHeadingSize(t *testing.T) {
+	m := doc.New("# Title\n\nBody text here.\n")
+	var state State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		list := ui.List(c, &state.List, m.Len(), func(r int) {
+			state.Row(c, m, r)
+		}).Grow(1)
+		list.HandleInput(state.Handler(m))
+	}, 400, 300)
+	tt.Frame()
+	x, y := findText(t, tt, "Title", false)
+	tt.Press(x, y)
+	tt.Release(x, y)
+	x2, y2 := findText(t, tt, "Body", false)
+	tt.Press(x2, y2)
+	tt.Release(x2, y2)
+	b1, b2 := m.Blocks()[0].Index, m.Blocks()[1].Index
+	var heading, body *textLayout
+	for key, e := range state.layouts {
+		switch {
+		case key.block == b1 && key.size == 28:
+			heading = e
+		case key.block == b2 && key.size == 15:
+			body = e
+		}
+	}
+	if heading == nil || body == nil {
+		t.Fatalf("layouts %v: want a heading entry at 28 and a body entry at 15", state.layouts)
+	}
+}
+
+// TestTableColumnsConsistent sizes a table whose second column is much
+// longer: per-column widths, each capped at 300, so every row reads the
+// same widths.
+func TestTableColumnsConsistent(t *testing.T) {
+	m := doc.New("| a | bbbb... |\n|---|---|\n| 1 | 2 |\n")
+	widths := tableColumnWidths(m, m.Blocks()[0].Index)
+	if len(widths) != 2 {
+		t.Fatalf("%d widths, want 2", len(widths))
+	}
+	if widths[1] <= widths[0] {
+		t.Fatalf("widths %v: the long column is not wider", widths)
+	}
+	for k, w := range widths {
+		if w > 300 {
+			t.Fatalf("width %d = %v, over the cap", k, w)
+		}
+	}
+}
+
 func TestAnchorScrollRequestBeforeLayout(t *testing.T) {
 	m := doc.New("# Top\n\nMiddle.\n\n# Bottom\n\nEnd.\n")
 	var state State

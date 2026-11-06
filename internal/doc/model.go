@@ -21,6 +21,7 @@ type Model struct {
 	images   map[int][]Image
 	rows     []Block
 	runs     []Run
+	version  uint64
 }
 
 // Block is a top-level block of the document.
@@ -88,6 +89,11 @@ const root = 0
 
 // Len returns the number of top-level blocks.
 func (m *Model) Len() int { return len(m.rows) }
+
+// Version bumps every scan, so every Set and every fresh parse: the view
+// keys its caches and its selection on it, dropping what the older
+// document left.
+func (m *Model) Version() uint64 { return m.version }
 
 // Blocks returns the top-level blocks in document order.
 func (m *Model) Blocks() []Block { return m.rows }
@@ -225,6 +231,7 @@ func (m *Model) QuoteBlocks(i int) []int {
 // scan rebuilds what the model caches of the document: the headings with
 // their anchors and the blocks that are only images.
 func (m *Model) scan() {
+	m.version++
 	m.headings = nil
 	m.anchors = nil
 	m.images = nil
