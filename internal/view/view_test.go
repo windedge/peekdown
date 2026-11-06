@@ -205,6 +205,63 @@ func TestAnchorOfModel(t *testing.T) {
 	}
 }
 
+func TestSplitSpansKeepsStyle(t *testing.T) {
+	spans := []ui.Span{
+		{Text: "Big ", Size: 28, Weight: 700},
+		{Text: "and bold", Size: 28, Weight: 700},
+	}
+	theme := ui.LightTheme()
+	out := splitSpans(spans, []cut{{0, 2, cutSelection}}, theme)
+	if len(out) <= len(spans) {
+		t.Fatalf("%d spans after the cut, want more than %d", len(out), len(spans))
+	}
+	if out[0].Background != theme.Selection {
+		t.Fatalf("first span's background %v, want the selection's %v", out[0].Background, theme.Selection)
+	}
+	for i, sp := range out {
+		if sp.Weight != 700 || sp.Size != 28 {
+			t.Fatalf("span %d (%q): Weight %d, Size %v", i, sp.Text, sp.Weight, sp.Size)
+		}
+	}
+	var text strings.Builder
+	for _, sp := range out {
+		text.WriteString(sp.Text)
+	}
+	if text.String() != "Big and bold" {
+		t.Fatalf("texts %q", text.String())
+	}
+}
+
+func TestCodeBlockTokenColors(t *testing.T) {
+	lang := editor.LanguageNamed("go")
+	if lang == nil || lang.Tokenizer == nil {
+		t.Skip("no go tokenizer")
+	}
+	toks, _ := lang.Tokenizer.Tokenize("// hello", 0, nil)
+	if len(toks) == 0 {
+		t.Fatal("no tokens")
+	}
+	ct := editor.DefaultTheme(ui.LightTheme())
+	base := ui.LightTheme().Text
+	spans := codeSpans("// hello", toks, ct, base)
+	if len(spans) == 0 {
+		t.Fatal("no spans")
+	}
+	want := ct.TokenColor(editor.TokenComment)
+	var found bool
+	for _, sp := range spans {
+		if sp.Text == "" {
+			t.Fatalf("empty span among %v", spans)
+		}
+		if sp.Text == "// hello" && sp.Color == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no span %q in %v with the comment color %v", "// hello", spans, want)
+	}
+}
+
 func TestAnchorScrollRequestBeforeLayout(t *testing.T) {
 	m := doc.New("# Top\n\nMiddle.\n\n# Bottom\n\nEnd.\n")
 	var state State

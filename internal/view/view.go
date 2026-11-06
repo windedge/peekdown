@@ -470,15 +470,15 @@ func splitSpans(spans []ui.Span, cuts []cut, t *ui.Theme) []ui.Span {
 	}
 	// Flatten to one text with a style per span boundary, then re-emit.
 	type piece struct {
-		text  []rune
-		color ui.Color
+		sp    ui.Span
+		runes []rune
 	}
 	pieces := make([]piece, 0, len(spans))
 	at := 0
 	bounds := []int{0}
 	for _, sp := range spans {
 		r := []rune(sp.Text)
-		pieces = append(pieces, piece{r, sp.Color})
+		pieces = append(pieces, piece{sp, r})
 		at += len(r)
 		bounds = append(bounds, at)
 	}
@@ -500,7 +500,7 @@ func splitSpans(spans []ui.Span, cuts []cut, t *ui.Theme) []ui.Span {
 		from, to := bounds[pi], bounds[pi+1]
 		for start := from; start < to; {
 			end := to
-			color := p.color
+			color := p.sp.Color
 			background := ui.Color{}
 			for _, seg := range segments {
 				if seg.to <= start || seg.from >= to {
@@ -514,10 +514,10 @@ func splitSpans(spans []ui.Span, cuts []cut, t *ui.Theme) []ui.Span {
 				color, background = seg.color(t)
 				break
 			}
-			sp := ui.Span{Text: string(p.text[start-from : end-from]), Color: color}
+			sp := p.sp
+			sp.Text = string(p.runes[start-from : end-from])
 			if background != (ui.Color{}) {
-				sp.Background = background
-				sp.Radius = 3
+				sp.Color, sp.Background, sp.Radius = color, background, 3
 			}
 			out = append(out, sp)
 			start = end
@@ -615,24 +615,11 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
 	box.Children(func() {
 		for _, line := range lines {
-			spans := []ui.Span{}
 			var toks []editor.Token
 			if lang != nil && lang.Tokenizer != nil {
 				toks, _ = lang.Tokenizer.Tokenize(line, 0, nil)
 			}
-			at := 0
-			for _, tok := range toks {
-				end := min(tok.End, len(line))
-				if end > at {
-					spans = append(spans, ui.Span{Text: line[at:end], Color: t.Text})
-					at = end
-				}
-				spans = append(spans, ui.Span{Text: line[at:end], Color: ct.TokenColor(tok.Kind)})
-				at = end
-			}
-			if at < len(line) {
-				spans = append(spans, ui.Span{Text: line[at:], Color: t.Text})
-			}
+			spans := codeSpans(line, toks, ct, t.Text)
 			if len(spans) == 0 {
 				spans = append(spans, ui.Span{Text: " "})
 			}
@@ -640,6 +627,24 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 			el.NoWrap()
 		}
 	})
+}
+
+// codeSpans splits one line of code into spans, one per token, colored
+// by the code theme; a run the tokens leave takes the base color.
+func codeSpans(line string, toks []editor.Token, ct *editor.Theme, base ui.Color) []ui.Span {
+	spans := []ui.Span{}
+	at := 0
+	for _, tok := range toks {
+		start, end := max(at, 0), min(tok.End, len(line))
+		if end > start {
+			spans = append(spans, ui.Span{Text: line[start:end], Color: ct.TokenColor(tok.Kind)})
+		}
+		at = end
+	}
+	if at < len(line) {
+		spans = append(spans, ui.Span{Text: line[at:], Color: base})
+	}
+	return spans
 }
 
 func splitLines(s string) []string {
