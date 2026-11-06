@@ -92,21 +92,25 @@ func TestHeadings(t *testing.T) {
 }
 
 func TestSlug(t *testing.T) {
+	// The Rust rules: lowercase, each whitespace rune to one dash (no
+	// collapsing), keep Unicode letters, digits and dashes, trim dashes.
 	cases := map[string]string{
 		"Hello World":     "hello-world",
-		"Hello  World!":   "hello-world",
+		"Hello  World!":   "hello--world",
 		"  trim me  ":     "trim-me",
 		"C++ and C#":      "c-and-c",
-		"Ünïcode Tïtle":   "ncode-ttle",
+		"Ünïcode Tïtle":   "ünïcode-tïtle",
 		"foo_bar":         "foobar",
-		"A -- B":          "a-b",
-		"Tabs\tHere":      "tabshere",
+		"A -- B":          "a----b",
+		"Tabs\tHere":      "tabs-here",
 		"already-slug":    "already-slug",
 		"CAPS and MiXeD":  "caps-and-mixed",
 		"trailing dash -": "trailing-dash",
 		"!!!":             "",
-		"日本語タイトル":         "",
+		"日本語タイトル":         "日本語タイトル",
 		"one/two:three":   "onetwothree",
+		"one  two":        "one--two",
+		"one-two":         "one-two",
 	}
 	for in, want := range cases {
 		if got := Slug(in); got != want {
@@ -123,6 +127,26 @@ func TestSlugDeduplicates(t *testing.T) {
 		got = append(got, m.Anchor(h.BlockIndex))
 	}
 	want := []string{"a", "a-1", "a-2", "a-3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("anchors %v, want %v", got, want)
+	}
+}
+
+func TestSlugDedupesAgainstLiteralSuffixes(t *testing.T) {
+	// GitHub numbering: walk slug-1, slug-2, ... to the first free
+	// anchor, whether the collision is a repeat or a literal slug.
+	// # a        -> a
+	// ## a-1     -> a-1
+	// ### a      -> a taken, a-1 taken, a-2 free
+	// #### a-1   -> a-1 taken, a-1-1 free
+	// #### a     -> a, a-1, a-2 taken, a-3 free
+	m := New("# a\n## a-1\n### a\n#### a-1\n#### a\n")
+	hs := m.Headings()
+	got := []string{}
+	for _, h := range hs {
+		got = append(got, m.Anchor(h.BlockIndex))
+	}
+	want := []string{"a", "a-1", "a-2", "a-1-1", "a-3"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("anchors %v, want %v", got, want)
 	}

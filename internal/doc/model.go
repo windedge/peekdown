@@ -4,7 +4,9 @@
 package doc
 
 import (
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/egoist/mygo/ui/markdown/parser"
 )
@@ -228,7 +230,7 @@ func (m *Model) scan() {
 	m.images = nil
 	m.rows = nil
 	m.runs = nil
-	seen := map[string]int{}
+	seen := map[string]bool{}
 	for i := range m.doc.Children(root) {
 		m.rows = append(m.rows, m.blockAt(i))
 		b := m.doc.Block(i)
@@ -237,16 +239,16 @@ func (m *Model) scan() {
 			text := strings.TrimSpace(parser.PlainText(m.doc.Inlines(i)))
 			m.headings = append(m.headings, Heading{Level: b.Level, Text: text, BlockIndex: i})
 			slug := Slug(text)
-			n := seen[slug]
-			seen[slug] = n + 1
+			cand, n := slug, 0
+			for seen[cand] {
+				n++
+				cand = slug + "-" + strconv.Itoa(n)
+			}
+			seen[cand] = true
 			if m.anchors == nil {
 				m.anchors = map[int]string{}
 			}
-			if n == 0 {
-				m.anchors[i] = slug
-			} else {
-				m.anchors[i] = slug + "-" + itoa(n)
-			}
+			m.anchors[i] = cand
 		case parser.Paragraph:
 			if images := topLevelImages(m.doc.Inlines(i)); len(images) > 0 {
 				if m.images == nil {
@@ -281,42 +283,17 @@ func topLevelImages(in []parser.Inline) []Image {
 	return images
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
 // Slug returns the anchor of a heading of text, as the Rust implementation
-// makes them: lowercased ASCII, dropped marks and punctuation, runs of
-// spaces and dashes to one dash, trimmed dashes.
+// makes them: lowercased, each whitespace rune to one dash (no collapsing),
+// Unicode letters, digits and dashes kept, trimmed dashes.
 func Slug(text string) string {
 	var b strings.Builder
-	space := false
-	for _, r := range text {
+	for _, r := range strings.ToLower(text) {
 		switch {
-		case r == ' ' || r == '-':
-			space = true
-		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
-			if space && b.Len() > 0 {
-				b.WriteByte('-')
-			}
-			space = false
+		case unicode.IsSpace(r):
+			b.WriteByte('-')
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-':
 			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			if space && b.Len() > 0 {
-				b.WriteByte('-')
-			}
-			space = false
-			b.WriteRune(r + 'a' - 'A')
 		}
 	}
 	return strings.Trim(b.String(), "-")
