@@ -1,78 +1,84 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/internal/settings"
+	"github.com/windedge/peekdown/internal/shell"
 )
 
-func abs(t *testing.T, path string) string {
+func newTestApp(t *testing.T) *app {
 	t.Helper()
-	got, err := filepath.Abs(path)
-	if err != nil {
+	s := shell.New()
+	s.Load = settings.Default
+	s.Save = func(settings.Settings) error { return nil }
+	s.SetTheme = func(mygo.ThemeSource) {}
+	s.Saved = s.Load()
+	s.Draft = s.Saved
+	return &app{shell: s}
+}
+
+func writeDoc(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return got
+	return path
 }
 
 func TestTitle(t *testing.T) {
-	a := &app{}
+	a := newTestApp(t)
 	if got := a.title(); got != "Peekdown" {
 		t.Fatalf("empty title: %q", got)
 	}
-	path := filepath.Join("docs", "readme.md")
+	path := writeDoc(t, t.TempDir(), "readme.md", "# Hi\n")
 	a.open(path)
-	if got, want := a.title(), abs(t, path)+" - Peekdown"; got != want {
+	if got, want := a.title(), "readme.md - Peekdown"; got != want {
 		t.Fatalf("title: got %q, want %q", got, want)
 	}
 }
 
 func TestViewShowsTheOpenFile(t *testing.T) {
-	a := &app{}
-	path := filepath.Join("docs", "readme.md")
+	a := newTestApp(t)
+	path := writeDoc(t, t.TempDir(), "readme.md", "# Hi\n\nthere\n")
 	a.open(path)
 	tt := ui.NewTester(a.view, 640, 400)
-	if !tt.HasText(filepath.Base(path)) {
-		t.Fatalf("texts %q: want the file name", tt.Texts())
+	if !tt.HasText("readme.md") {
+		t.Fatalf("texts %q: want the tab title", tt.Texts())
 	}
-	if !tt.HasText(abs(t, path)) {
-		t.Fatalf("texts %q: want the path", tt.Texts())
+	if !tt.HasText("Hi") {
+		t.Fatalf("texts %q: want the document heading", tt.Texts())
 	}
 }
 
-func TestPendingFilesRecordedWhenTheWindowArrives(t *testing.T) {
-	var got []string
-	a := &app{addRecent: func(path string) error {
-		got = append(got, path)
-		return nil
-	}}
-	a.open(filepath.Join("docs", "a.md"))
-	a.open(filepath.Join("docs", "b.md"))
-	if a.ready {
-		t.Fatal("ready before the window")
+func TestOpenMissingFileKeepsTheTabs(t *testing.T) {
+	a := newTestApp(t)
+	path := writeDoc(t, t.TempDir(), "readme.md", "# Hi\n")
+	a.open(path)
+	a.open(filepath.Join(t.TempDir(), "missing.md"))
+	if got := len(a.shell.Tabs); got != 1 {
+		t.Fatalf("tabs = %d, want 1", got)
 	}
-	a.adopt(nil)
-	if !a.ready || len(a.pending) != 0 {
-		t.Fatalf("after adopt: ready %v, pending %v", a.ready, a.pending)
-	}
-	want := []string{abs(t, filepath.Join("docs", "a.md")), abs(t, filepath.Join("docs", "b.md"))}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("recorded %v, want %v", got, want)
-	}
-	a.open(filepath.Join("docs", "c.md"))
-	if want := []string{want[0], want[1], abs(t, filepath.Join("docs", "c.md"))}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after the window opened: %v, want %v", got, want)
+	if got := a.title(); got != "readme.md - Peekdown" {
+		t.Fatalf("title = %q", got)
 	}
 }
 
 func TestActivateBeforeTheWindow(t *testing.T) {
-	a := &app{}
+	a := newTestApp(t)
 	a.activate()
 	if !a.activatePending {
 		t.Fatal("activation before the window was forgotten")
+	}
+	a.adopt(nil)
+	if a.win != nil || !a.activatePending {
+		t.Fatalf("adopt(nil) changed state: win %v pending %v", a.win, a.activatePending)
 	}
 }
 

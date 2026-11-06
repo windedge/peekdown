@@ -8,12 +8,12 @@ import (
 
 // The window's view builds without a window, as the native template does.
 func TestEmptyView(t *testing.T) {
-	a := &app{}
+	a := newTestApp(t)
 	tt := ui.NewTester(a.view, 640, 400)
-	if !tt.HasText("Peekdown") {
-		t.Fatalf("texts %q: want the app name", tt.Texts())
+	if !tt.HasText("Welcome to Peekdown") {
+		t.Fatalf("texts %q: want the welcome title", tt.Texts())
 	}
-	if !tt.HasText("Markdown viewer") {
-		t.Fatalf("texts %q: want the placeholder line", tt.Texts())
+	if !tt.HasText("Drop a Markdown file here") {
+		t.Fatalf("texts %q: want the drop hint", tt.Texts())
 	}
 }

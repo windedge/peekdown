@@ -9,52 +9,28 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/windedge/peekdown/internal/settings"
+	"github.com/windedge/peekdown/internal/shell"
 )
 
-// app is the state the window shows. Its fields are only touched on the main
-// thread, as the mygo callbacks that call open, activate and adopt are.
+// app glues the shell to the single window: it keeps the window handle and
+// remembers an activation that arrived before the window existed.
 type app struct {
-	active          string
-	pending         []string // files that arrived before the window existed
+	shell           *shell.Shell
 	win             *mygo.Window
-	ready           bool
 	activatePending bool
-	addRecent       func(string) error
 }
 
-// view builds the window's interface from the app's state.
-func (a *app) view(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Center().Gap(8).Padding(24).Children(func() {
-		ui.Text(c, "Peekdown").FontSize(28).Bold()
-		if a.active == "" {
-			ui.Text(c, "Markdown viewer").FontSize(14).TextColor(t.TextMuted)
-			return
-		}
-		ui.Text(c, filepath.Base(a.active)).FontSize(20)
-		ui.Text(c, a.active).FontSize(12).TextColor(t.TextMuted)
-	})
-}
+// view renders the shell.
+func (a *app) view(c *ui.Context) { a.shell.View(c) }
 
-// title is the window title: the file path and the app name, as the Rust
-// implementation shows it.
-func (a *app) title() string {
-	if a.active == "" {
-		return "Peekdown"
-	}
-	return a.active + " - Peekdown"
-}
+// title is the window title, as the Rust implementation shows it.
+func (a *app) title() string { return a.shell.Title() }
 
-// open shows path in the window, recording it once the app is ready.
+// open shows path in the window.
 func (a *app) open(path string) {
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	a.active = path
-	if a.ready {
-		a.recordRecent(path)
-	} else {
-		a.pending = append(a.pending, path)
+	if err := a.shell.OpenFile(path); err != nil {
+		log.Printf("peekdown: open %s: %v", path, err)
+		return
 	}
 	if a.win != nil {
 		a.win.SetTitle(a.title())
@@ -62,30 +38,15 @@ func (a *app) open(path string) {
 	}
 }
 
-// recordRecent adds path to the app's and the system's recent documents.
-func (a *app) recordRecent(path string) {
-	if a.addRecent == nil {
-		return
-	}
-	if err := a.addRecent(path); err != nil {
-		log.Printf("peekdown: recent documents: %v", err)
-	}
-}
-
-// adopt takes the window: it records the files that arrived before it
-// existed, then shows the last of them.
+// adopt takes the window and replays a pending activation.
 func (a *app) adopt(w *mygo.Window) {
-	a.win, a.ready = w, true
-	for _, p := range a.pending {
-		a.recordRecent(p)
-	}
-	a.pending = nil
+	a.win = w
 	if w == nil {
 		return
 	}
 	w.SetTitle(a.title())
-	if a.active != "" {
-		w.SetRepresentedFile(a.active)
+	if t := a.shell.ActiveTab(); t != nil {
+		w.SetRepresentedFile(t.Path)
 	}
 	if a.activatePending {
 		a.activatePending = false
@@ -132,15 +93,47 @@ func loadSettings() settings.Settings {
 	return s
 }
 
+// newShell builds the shell with the platform implementations wired in.
+func newShell() *shell.Shell {
+	s := shell.New()
+	s.Load = loadSettings
+	s.Save = func(v settings.Settings) error {
+		dir, err := mygo.App.Path(mygo.PathUserData)
+		if err != nil {
+			return err
+		}
+		return settings.Save(filepath.Join(dir, settings.FileName), v)
+	}
+	s.SetTheme = mygo.Theme.SetSource
+	s.Recent = mygo.App.RecentDocuments
+	s.AddRecent = mygo.App.AddRecentDocument
+	s.ClearRecent = mygo.App.ClearRecentDocuments
+	s.OpenDialog = func() ([]string, error) {
+		return mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Title:    "Open Markdown",
+			Multiple: true,
+			Filters: []mygo.FileFilter{
+				{Name: "Markdown", Extensions: []string{"md", "markdown"}},
+			},
+		})
+	}
+	return s
+}
+
 func main() {
 	mygo.App.SetName("Peekdown")
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
-	s := loadSettings()
-	mygo.Theme.SetSource(themeSource(s.Theme))
 
-	a := &app{addRecent: mygo.App.AddRecentDocument}
+	s := newShell()
+	s.Saved = s.Load()
+	s.Draft = s.Saved
+	s.SetSidebarWidth(float32(s.Saved.SidebarWidth))
+	s.Sidebar.Visible = s.Saved.SidebarVisible
+	s.SetTheme(themeSource(s.Saved.Theme))
+
+	a := &app{shell: s}
 	mygo.App.OnOpenFile(a.open)
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
 		a.activate()
@@ -156,6 +149,7 @@ func main() {
 			Content:   ui.View(a.view),
 		})
 		a.adopt(w)
+		mygo.App.SetMenu(shell.BuildMenu(s))
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
