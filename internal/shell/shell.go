@@ -39,6 +39,10 @@ type Shell struct {
 	Zoom         float64
 	saveErr      string
 
+	// SearchOpen shows the search bar; search is its state.
+	SearchOpen bool
+	search     searchBar
+
 	// Injected dependencies.
 	Load          func() settings.Settings
 	Save          func(settings.Settings) error
@@ -253,11 +257,17 @@ func (s *Shell) View(c *ui.Context) {
 			return
 		}
 		s.tabBar(c)
+		body := func() {
+			if s.SearchOpen {
+				s.searchView(c)
+			}
+			s.content(c)
+		}
 		if s.Sidebar.Visible {
 			s.SetSidebarWidth(s.Sidebar.Width)
-			ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, func() { s.content(c) }).Fill()
+			ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Fill()
 		} else {
-			ui.Box(c).Fill().Children(func() { s.content(c) })
+			ui.Box(c).Fill().Children(func() { body() })
 		}
 		s.statusBar(c)
 	})

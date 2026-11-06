@@ -14,6 +14,7 @@ The Go rewrite on mygo's native UI. The reading features of the Rust implementat
 - Go module scaffolded on mygo `977ea57e`, pinned in `go.mod` with the CLI as a tool.
 - Native window and a view tested without a window through mygo's headless tester.
 - App metadata for `Peekdown`: identifier `com.windedge.peekdown`, version `0.3.0`, and the `.md` / `.markdown` file associations.
+- In-document search (`Ctrl+F`): plain text and regular expressions, a case toggle, a hit counter, `Enter` / `F3` and `Shift+Enter` / `Shift+F3` navigation, `Esc` to close, and the first 10000 matches at most.
 - CI on Windows, macOS and Linux, and a release workflow that attaches the Windows archive, installer, and macOS app and disk image to a `v*` tag.
 - Scoop manifest template and release notes.
 

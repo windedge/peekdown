@@ -46,6 +46,25 @@ func BuildMenu(s *Shell) *mygo.Menu {
 			}},
 		}},
 		{Label: "View", Submenu: []*mygo.MenuItem{
+			{Label: "Find", Accelerator: "CmdOrCtrl+F", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
+				s.OpenSearch()
+				if w != nil {
+					w.Invalidate()
+				}
+			}},
+			{Label: "Find Next", Accelerator: "F3", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
+				s.NextSearchMatch()
+				if w != nil {
+					w.Invalidate()
+				}
+			}},
+			{Label: "Find Previous", Accelerator: "Shift+F3", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
+				s.PrevSearchMatch()
+				if w != nil {
+					w.Invalidate()
+				}
+			}},
+			mygo.Separator(),
 			{Label: "Toggle Sidebar", Accelerator: "CmdOrCtrl+B", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
 				s.ToggleSidebar()
 				if w != nil {

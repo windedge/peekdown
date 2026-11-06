@@ -71,6 +71,7 @@ func (s *Shell) tabBar(c *ui.Context) {
 
 	if len(s.Tabs) > 0 && (!s.synced || s.activeSeen != s.Active) {
 		if s.Active >= 0 && s.Active < len(s.Tabs) {
+			s.tabSwitched(&s.Tabs[s.Active])
 			parts.Tab(s.Active).ScrollIntoView()
 			s.activeSeen = s.Active
 			s.synced = true

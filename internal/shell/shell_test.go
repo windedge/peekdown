@@ -2,6 +2,7 @@ package shell
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -392,6 +393,295 @@ func TestZoomClamps(t *testing.T) {
 	s.ZoomReset()
 	if s.Zoom != 1 {
 		t.Fatalf("zoom reset = %v, want 1", s.Zoom)
+	}
+}
+
+// searchShell opens a document with "first" twice, once upper case, and
+// shows the search bar.
+func searchShell(t *testing.T) (*Shell, *ui.Tester, *Tab) {
+	s, dir := newShell(t)
+	if err := os.WriteFile(filepath.Join(dir, "find.md"), []byte("# A\n\nfirst\n\n## A two\n\nsecond\n\nfirst FIRST\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tt := s.render(t)
+	if err := s.OpenFile(filepath.Join(dir, "find.md")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	s.OpenSearch()
+	tt.Frame()
+	if !s.SearchOpen {
+		t.Fatal("the search bar did not open")
+	}
+	return s, tt, s.ActiveTab()
+}
+
+// TestSearchBarOpensAndCloses walks the bar's life: Ctrl+F opens it, the
+// query runs, and Escape in the field closes it with the highlights.
+func TestSearchBarOpensAndCloses(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	s.search.Query = "second"
+	s.runSearch(tab)
+	tt.Frame()
+	if len(tab.Model.Matches) != 1 {
+		t.Fatalf("matches = %d, want 1", len(tab.Model.Matches))
+	}
+	if !tt.HasText("1/1") || !tt.HasText("Previous match") {
+		t.Fatalf("bar not rendered: %v", tt.Texts())
+	}
+
+	// Escape in the field closes the bar and clears every tab's search:
+	// OnTextKey takes the key, so the input's editor never clears it.
+	tt.TypeKey(0, ui.KeyEscape, "")
+	tt.Frame()
+	if s.SearchOpen {
+		t.Fatal("Escape left the bar open")
+	}
+	if len(tab.Model.Matches) != 0 || tab.Model.Current != -1 || tab.Model.Query() != "" {
+		t.Fatalf("Escape kept the search: %+v current %d", tab.Model.Matches, tab.Model.Current)
+	}
+	if tt.HasText("Previous match") {
+		t.Fatalf("bar still rendered: %v", tt.Texts())
+	}
+
+	// Ctrl+F reopens it, empty again.
+	s.OpenSearch()
+	tt.Frame()
+	if !s.SearchOpen || s.search.Query != "" {
+		t.Fatalf("reopen: open=%v query=%q", s.SearchOpen, s.search.Query)
+	}
+}
+
+// TestSearchQueryRunsSetSearch types into the field and reads the model:
+// each change runs the search, Enter moves the current and wraps.
+func TestSearchQueryRunsSetSearch(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	// Typing goes to the field once it has the focus; the input asks
+	// for it as the bar opens.
+	tt.Type("seco")
+	tt.Frame()
+	if len(tab.Model.Matches) != 1 {
+		t.Fatalf("matches of %q = %d, want 1", s.search.Query, len(tab.Model.Matches))
+	}
+	if tab.Model.Current != 0 || s.search.Count != "1/1" {
+		t.Fatalf("current %d count %q, want 0 and 1/1", tab.Model.Current, s.search.Count)
+	}
+
+	tt.Type("nd")
+	tt.Frame()
+	if len(tab.Model.Matches) != 1 || tab.Model.Query() != "second" {
+		t.Fatalf("after typing: %d matches of %q", len(tab.Model.Matches), tab.Model.Query())
+	}
+
+	// Enter wraps back to the first match, Shift+Enter forward again.
+	tt.TypeKey(0, ui.KeyEnter, "")
+	tt.Frame()
+	if tab.Model.Current != 0 || s.search.Count != "1/1" {
+		t.Fatalf("after Enter: current %d count %q", tab.Model.Current, s.search.Count)
+	}
+	tt.TypeKey(ui.Shift, ui.KeyEnter, "")
+	tt.Frame()
+	if tab.Model.Current != 0 {
+		t.Fatalf("Shift+Enter went to %d, want 0", tab.Model.Current)
+	}
+
+	// A query without matches empties them.
+	s.search.Query = "gone"
+	s.runSearch(tab)
+	tt.Frame()
+	if len(tab.Model.Matches) != 0 || tab.Model.Current != -1 || s.search.Count != "no results" {
+		t.Fatalf("no matches: %d current %d count %q", len(tab.Model.Matches), tab.Model.Current, s.search.Count)
+	}
+}
+
+// TestSearchToggleRegexCase flips the toggles and reads the state: a
+// case-sensitive query drops matches, an invalid regex reports "bad
+// pattern" instead of a count.
+func TestSearchToggleRegexCase(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	if err := tt.Click("Match case"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !s.search.CaseSensitive {
+		t.Fatal("the case toggle did not turn on")
+	}
+
+	s.search.Query = "FIRST"
+	s.runSearch(tab)
+	tt.Frame()
+	if len(tab.Model.Matches) != 1 {
+		t.Fatalf("sensitive FIRST: %d matches, want the one upper case", len(tab.Model.Matches))
+	}
+
+	if err := tt.Click("Regular expression"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !s.search.Regex {
+		t.Fatal("the regex toggle did not turn on")
+	}
+
+	// An invalid pattern finds nothing and the bar says so.
+	s.search.Query = "("
+	s.runSearch(tab)
+	tt.Frame()
+	if len(tab.Model.Matches) != 0 {
+		t.Fatalf("bad pattern: %d matches", len(tab.Model.Matches))
+	}
+	if !tt.HasText("bad pattern") {
+		t.Fatalf("count %q, want \"bad pattern\": %v", s.search.Count, tt.Texts())
+	}
+
+	// A valid regex counts again: every "first" holds "irs".
+	s.search.Query = `f.rst`
+	s.runSearch(tab)
+	tt.Frame()
+	if s.search.Count != "1/2" {
+		t.Fatalf("regex count %q, want 1/2", s.search.Count)
+	}
+
+	// The toggles reset when the bar closes.
+	s.CloseSearch()
+	if s.search.CaseSensitive || s.search.Regex || s.search.Query != "" {
+		t.Fatalf("close left state: %+v", s.search)
+	}
+}
+
+// findPoint returns the center of the first element showing want.
+func findPoint(tt *ui.Tester, want string) (float32, float32, error) {
+	r, ok := tt.Find(want)
+	if !ok {
+		return 0, 0, fmt.Errorf("no element shows %q", want)
+	}
+	return r.X + r.W/2, r.Y + r.H/2, nil
+}
+
+// TestSearchFollowsTabSwitch walks the bar across tabs: the count shows
+// the tab the search ran on, a switch shows the target tab's own search
+// (empty after an edit dropped it), and switching back restores it.
+func TestSearchFollowsTabSwitch(t *testing.T) {
+	s, dir := newShell(t)
+	if err := os.WriteFile(filepath.Join(dir, "find.md"), []byte("# A\n\nfirst\n\n## A two\n\nsecond\n\nfirst FIRST\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tt := s.render(t)
+	if err := s.OpenFile(filepath.Join(dir, "b.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(filepath.Join(dir, "find.md")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	s.OpenSearch()
+	tt.Frame()
+	if !s.SearchOpen {
+		t.Fatal("the search bar did not open")
+	}
+	tab := &s.Tabs[1]
+
+	s.search.Query = "first"
+	s.runSearch(tab)
+	tt.Frame()
+	if s.search.Count != "1/3" {
+		t.Fatalf("count %q, want 1/3", s.search.Count)
+	}
+
+	// Clicking the other tab's strip button switches; the model edit
+	// dropped tab A's search, so the bar's field and count empty out
+	// with it. The strip's tab buttons carry no label of their own, so
+	// the click goes by point, over the target tab's title.
+	x, y, err := findPoint(tt, "b.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt.ClickAt(x, y)
+	tt.Frame()
+	b := s.ActiveTab()
+	if b.Path == tab.Path {
+		t.Fatal("the click did not switch tabs")
+	}
+	if s.search.Query != "" || s.search.Count != "" {
+		t.Fatalf("after switch: query %q count %q, want empty", s.search.Query, s.search.Count)
+	}
+	if len(tab.Model.Matches) != 3 {
+		t.Fatalf("tab A holds %d matches, want its 3 kept for the return", len(tab.Model.Matches))
+	}
+	if len(b.Model.Matches) != 0 {
+		t.Fatalf("tab B holds %d matches without a search", len(b.Model.Matches))
+	}
+
+	// A search on B, then back to A: the field restores A's query and
+	// the count A's matches, and B keeps its own.
+	s.search.Query = "second"
+	s.runSearch(b)
+	tt.Frame()
+	if s.search.Count != "1/1" {
+		t.Fatalf("B count %q, want 1/1", s.search.Count)
+	}
+	x, y, err = findPoint(tt, "find.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt.ClickAt(x, y)
+	tt.Frame()
+	if s.search.Query != "first" {
+		t.Fatalf("field %q after switching back, want A's query %q", s.search.Query, "first")
+	}
+	if s.search.Count != "1/3" {
+		t.Fatalf("count %q after switching back, want A's 1/3", s.search.Count)
+	}
+	if len(b.Model.Matches) != 1 || b.Model.Query() != "second" {
+		t.Fatalf("B lost its search: %d matches %q", len(b.Model.Matches), b.Model.Query())
+	}
+
+	// With the bar closed a switch touches nothing: B keeps its search.
+	s.CloseSearch()
+	tt.Frame()
+	x, y, err = findPoint(tt, "b.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt.ClickAt(x, y)
+	tt.Frame()
+	if len(s.ActiveTab().Model.Matches) != 0 {
+		t.Fatalf("close left matches: %d", len(s.ActiveTab().Model.Matches))
+	}
+}
+
+// TestFirstHitScrollsIntoView types a fresh query and reads the view's
+// scroll target: it lands on the first hit's block, as Next would.
+func TestFirstHitScrollsIntoView(t *testing.T) {
+	_, tt, tab := searchShell(t)
+	tt.Frame()
+
+	m := tab.Model
+	// "first" hits every block, the last one last; the query is new, so
+	// the view gets the first hit's block to scroll to.
+	tt.Type("first")
+	tt.Frame()
+	if len(m.Matches) < 3 {
+		t.Fatalf("matches of first: %d, want at least 3", len(m.Matches))
+	}
+	firstHit := m.Matches[0].Block
+	if got := tab.State.ScrollTargetBlock; got != firstHit {
+		t.Fatalf("scroll target %d, want the first hit's block %d", got, firstHit)
+	}
+	if m.Current != 0 {
+		t.Fatalf("current %d, want the first hit", m.Current)
+	}
+
+	// Enter moves to the next hit and re-targets the scroll.
+	tt.TypeKey(0, ui.KeyEnter, "")
+	tt.Frame()
+	if m.Current != 1 {
+		t.Fatalf("after Enter: current %d, want 1", m.Current)
+	}
+	if got := tab.State.ScrollTargetBlock; got != m.Matches[1].Block {
+		t.Fatalf("scroll target %d, want the second hit's block %d", got, m.Matches[1].Block)
 	}
 }
 

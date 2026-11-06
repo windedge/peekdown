@@ -41,9 +41,11 @@ type State struct {
 	ctx        *ui.Context
 
 	// Matches are the search's matches, in document order; Current is the
-	// one the user is on, -1 for none. A match addresses a run of a block's
-	// text, in runes.
-	Matches []Match
+	// one the user is on, -1 for none. The view's overlays consume them;
+	// ScrollView syncs them from the model each frame, and a caller that
+	// renders rows without ScrollView may fill them itself. A match
+	// addresses a run of a block's text, in runes.
+	Matches []doc.Match
 	Current int
 
 	// Anchor scrolls the heading of this slug into view; AnchorVersion
@@ -52,6 +54,13 @@ type State struct {
 	AnchorVersion  uint64
 	anchorDone     string
 	anchorVersions uint64
+
+	// ScrollTargetBlock is the block the search found the current match
+	// in, which the view scrolls into view; -1 for none. The search bar
+	// sets it as the current match moves, and ScrollView consumes it: a
+	// value survives one scroll, so the next sets it again.
+	ScrollTargetBlock int
+	scrollTargetDone  int
 
 	// AnchorOf returns the anchor of top-level block i, as the model
 	// makes them, so the view can find the row to scroll to.
@@ -85,12 +94,10 @@ type selectionRange struct {
 // Point is a block and a rune offset in its text.
 type Point = selection.Point
 
-// Match is one search match: block i's text, runes from to.
-type Match struct {
-	Block int
-	From  int
-	To    int
-}
+// Match is one search match: block i's text, runes from Start to End.
+// The view's and the doc's search agree on the shape, so the model's
+// state can feed the view's overlays directly.
+type Match = doc.Match
 
 // SetSelection stores the selection the view draws.
 func (st *State) SetSelection(anchor, caret selection.Point) {
@@ -251,7 +258,12 @@ func runeLen(text string) int { return len([]rune(text)) }
 // ScrollView builds the whole document: a virtual list of the blocks. The
 // list keeps its own scroll place; use State.List to scroll it. Each row
 // binds its block's handle, which the Handler the caller wires reads.
+// The model's search state is the authority here: it syncs the view's
+// copy each frame, so SetSearch and ClearSearch on the model show up
+// without further wiring.
 func ScrollView(c *ui.Context, m *doc.Model, st *State) {
+	st.Matches = m.Matches
+	st.Current = m.Current
 	ui.List(c, &st.List, m.Len(), func(r int) {
 		st.Row(c, m, r)
 	}).Grow(1)
@@ -259,6 +271,24 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 		st.AnchorOf = anchorsOf(m)
 	}
 	st.scrollPendingAnchor(m)
+	st.scrollPendingMatch(m)
+}
+
+// scrollPendingMatch scrolls to the block the search's current match is
+// in, once per value the search bar sets: it finds the row that shows
+// the block and hands it to the list. It runs after the list built, so
+// the row is measured when the frame lays out.
+func (st *State) scrollPendingMatch(m *doc.Model) {
+	if st.ScrollTargetBlock < 0 || st.ScrollTargetBlock == st.scrollTargetDone {
+		return
+	}
+	st.scrollTargetDone = st.ScrollTargetBlock
+	for r := range m.Len() {
+		if m.RowBlock(r).Index == st.ScrollTargetBlock {
+			st.List.ScrollIntoView(r)
+			return
+		}
+	}
 }
 
 // Row builds the row of the r-th top-level block, binding the block's
@@ -297,6 +327,7 @@ func anchorsOf(m *doc.Model) func(int) string {
 
 // Render builds the row of top-level block i.
 func Render(c *ui.Context, m *doc.Model, st *State, i int) {
+	t := c.Theme()
 	b := m.Block(i)
 	switch b.Kind {
 	case parser.Heading:
@@ -314,9 +345,20 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 	case parser.ThematicBreak:
 		ui.Box(c).Height(1).Background(c.Theme().Border).AlignSelf(ui.Stretch).MarginY(8)
 	case parser.HTMLBlock:
-		ui.Text(c, strings.TrimRight(m.Lines(i), "\n")).
+		// An HTML block is one run in the run table, its lines joined:
+		// the same RichText carries them, with the matches cut in.
+		lines := strings.Split(strings.TrimRight(m.Lines(i), "\n"), "\n")
+		spans := make([]ui.Span, 0, len(lines))
+		for k, line := range lines {
+			if k > 0 {
+				spans = append(spans, ui.Span{Text: "\n"})
+			}
+			spans = append(spans, ui.Span{Text: line})
+		}
+		spans = st.overlay(c, m, i, spans)
+		ui.RichText(c, spans...).
 			Font(fontMono).FontSize(13).
-			TextColor(c.Theme().TextMuted).PaddingY(4)
+			TextColor(t.TextMuted).PaddingY(4)
 	default:
 		ui.Box(c)
 	}
@@ -421,7 +463,7 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 		}
 		spans = append(spans, ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color, Underline: base.underline})
 	})
-	return st.overlay(c, m, i, spans, s)
+	return st.overlay(c, m, i, spans)
 }
 
 // walk flattens inlines to runs of text in style s, marking code and
@@ -473,7 +515,7 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 // in is the leaf the row draws, often a cell or a quote's paragraph; the
 // overlays address top-level runs, so RunAt maps the leaf into its run
 // and the cuts shift by the leaf's offset there.
-func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span, s style) []ui.Span {
+func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span) []ui.Span {
 	var cuts []cut
 	// The cuts come in run coordinates; the leaf draws only its slice.
 	leaf, off := i, 0
@@ -494,7 +536,7 @@ func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span, s 
 		if k == st.Current {
 			kind = cutCurrent
 		}
-		cuts = append(cuts, cut{match.From, match.To, kind})
+		cuts = append(cuts, cut{match.Start, match.End, kind})
 	}
 	if len(cuts) == 0 {
 		return spans
@@ -530,7 +572,9 @@ const (
 )
 
 // splitSpans recolors the spans where the cuts are. The spans' texts joined
-// are the block's text, so cuts address runes of that joined text.
+// are the block's text, so cuts address runes of that joined text. Its
+// spans carry no per-span TextColor: a color set on the element would
+// not move with the recolored pieces.
 func splitSpans(spans []ui.Span, cuts []cut, t *ui.Theme) []ui.Span {
 	if len(spans) == 0 {
 		return spans
@@ -700,7 +744,9 @@ func (st *State) source(url string) ui.ImageSource {
 }
 
 // codeBlock builds a fenced or indented code block, its lines tokenized by
-// the language the fence names.
+// the language the fence names. The lines are one run in doc's run table,
+// the text the search's matches address, so the matches cut the joined
+// lines through the same overlay the paragraphs draw with.
 func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 	t := c.Theme()
 	ct := st.CodeTheme
@@ -708,21 +754,26 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 		ct = editor.DefaultTheme(t)
 	}
 	lang := editor.LanguageNamed(m.Language(i))
-	lines := splitLines(m.Lines(i))
 	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
 	box.Children(func() {
-		for _, line := range lines {
+		lines := splitLines(m.Lines(i))
+		spans := make([]ui.Span, 0, len(lines))
+		for k, line := range lines {
+			if k > 0 {
+				spans = append(spans, ui.Span{Text: "\n"})
+			}
 			var toks []editor.Token
 			if lang != nil && lang.Tokenizer != nil {
 				toks, _ = lang.Tokenizer.Tokenize(line, 0, nil)
 			}
-			spans := codeSpans(line, toks, ct, t.Text)
-			if len(spans) == 0 {
-				spans = append(spans, ui.Span{Text: " "})
-			}
-			el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
-			el.NoWrap()
+			spans = append(spans, codeSpans(line, toks, ct, t.Text)...)
 		}
+		if len(spans) == 0 {
+			spans = append(spans, ui.Span{Text: " "})
+		}
+		spans = st.overlay(c, m, i, spans)
+		el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
+		el.NoWrap()
 	})
 }
 
@@ -970,23 +1021,4 @@ func (st *State) SelectionText(m *doc.Model) string {
 	}
 	s := selection.Selection{Anchor: st.Selection.start, Caret: st.Selection.end}
 	return s.TextOf(m)
-}
-
-// FindAll returns the matches of substr in block i's text, in runes.
-func FindAll(m *doc.Model, block int, substr string) []Match {
-	text := []rune(runText(m, block))
-	var out []Match
-	if substr == "" {
-		return out
-	}
-	needle := []rune(substr)
-	for i := 0; i+len(needle) <= len(text); {
-		if string(text[i:i+len(needle)]) == substr {
-			out = append(out, Match{Block: block, From: i, To: i + len(needle)})
-			i += len(needle)
-			continue
-		}
-		i++
-	}
-	return out
 }

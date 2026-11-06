@@ -196,6 +196,58 @@ func TestScrollViewAnchor(t *testing.T) {
 	}
 }
 
+// TestScrollTargetBlockScrolls walks the search's scroll target: a new
+// block scrolls into view and is consumed, a repeated one does not
+// scroll again, a new value does.
+func TestScrollTargetBlockScrolls(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Top\n\n")
+	for i := range 40 {
+		b.WriteString("Paragraph number ")
+		b.WriteString(itoa(i))
+		b.WriteString(" of filler.\n\n")
+	}
+	b.WriteString("Target paragraph at the end.\n")
+	m := doc.New(b.String())
+	var state State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		ScrollView(c, m, &state)
+	}, 400, 300)
+	tt.Frame()
+	if first, _ := state.List.Visible(); first != 0 {
+		t.Fatalf("first row %d of a fresh view, want 0", first)
+	}
+	last := m.Blocks()[m.Len()-1].Index
+	state.ScrollTargetBlock = last
+	tt.Frame()
+	if state.scrollTargetDone != last {
+		t.Fatalf("scrollTargetDone = %d, want the consumed %d", state.scrollTargetDone, last)
+	}
+	if !has(tt, "Target paragraph") {
+		t.Fatalf("texts %v: the target is not in view", texts(tt))
+	}
+
+	// The same value again leaves the view where the user scrolled it.
+	state.List.ScrollTo(0, ui.Start)
+	tt.Frame()
+	state.ScrollTargetBlock = last
+	tt.Frame()
+	if first, _ := state.List.Visible(); first != 0 {
+		t.Fatalf("a repeated target scrolled again: first row %d", first)
+	}
+
+	// A new value scrolls once more.
+	state.ScrollTargetBlock = 0
+	tt.Frame()
+	if state.scrollTargetDone != 0 {
+		t.Fatalf("scrollTargetDone = %d, want 0", state.scrollTargetDone)
+	}
+	if first, _ := state.List.Visible(); first != 0 {
+		t.Fatalf("first row %d after scrolling to the top, want 0", first)
+	}
+}
+
 func TestAnchorOfModel(t *testing.T) {
 	m := doc.New("# One\n\n## One\n")
 	var state State

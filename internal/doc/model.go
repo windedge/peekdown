@@ -25,6 +25,14 @@ type Model struct {
 	// run's index and the rune offset of its text within the run's text.
 	leafRun map[int]leafOffset
 	version uint64
+
+	// The search's state: the query it ran with, the matches in reading
+	// order and the one the user is on, -1 for none. Matches address the
+	// run table, the text the view draws.
+	query   string
+	opts    SearchOptions
+	Matches []Match
+	Current int
 }
 
 // leafOffset locates a leaf's text inside the run that holds it.
@@ -79,15 +87,17 @@ func NewWith(src string, ext parser.Extensions) *Model {
 // wrap finishes a document the parser made: it scans the blocks the model
 // caches.
 func wrap(d *parser.Document) *Model {
-	m := &Model{doc: d}
+	m := &Model{doc: d, Current: -1}
 	m.scan()
 	return m
 }
 
-// Set replaces the source, parsing again only what changed.
+// Set replaces the source, parsing again only what changed. The search
+// drops: its matches name text the new document need not have.
 func (m *Model) Set(src string) {
 	m.doc.Set(src)
 	m.scan()
+	m.ClearSearch()
 }
 
 // Source returns the document's source.
@@ -298,6 +308,52 @@ func topLevelImages(in []parser.Inline) []Image {
 		}
 	}
 	return images
+}
+
+// SetSearch runs query over the document and stores the state: the
+// matches, with the current one reset to the first, or -1 when the
+// search found nothing. The document is unchanged, so the version does
+// not move; the view redraws the overlays off the new matches.
+func (m *Model) SetSearch(query string, opts SearchOptions) {
+	m.query = query
+	m.opts = opts
+	m.Matches = FindAll(m, query, opts)
+	if len(m.Matches) == 0 {
+		m.Current = -1
+		return
+	}
+	m.Current = 0
+}
+
+// Query returns the text of the current search, empty for none.
+func (m *Model) Query() string { return m.query }
+
+// SearchOptions returns the options the current search ran with.
+func (m *Model) SearchOptions() SearchOptions { return m.opts }
+
+// NextMatch moves to the next match, wrapping to the first.
+func (m *Model) NextMatch() {
+	if len(m.Matches) == 0 {
+		return
+	}
+	m.Current = (m.Current + 1) % len(m.Matches)
+}
+
+// PrevMatch moves to the previous match, wrapping to the last.
+func (m *Model) PrevMatch() {
+	if len(m.Matches) == 0 {
+		return
+	}
+	m.Current += len(m.Matches) - 1
+	m.Current %= len(m.Matches)
+}
+
+// ClearSearch drops the matches: no query, nothing to highlight.
+func (m *Model) ClearSearch() {
+	m.query = ""
+	m.opts = SearchOptions{}
+	m.Matches = nil
+	m.Current = -1
 }
 
 // Slug returns the anchor of a heading of text, as the Rust implementation

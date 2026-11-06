@@ -170,8 +170,8 @@ func TestMatchesDrawn(t *testing.T) {
 	var state State
 	blocks := m.Blocks()
 	state.Matches = []Match{
-		{Block: blocks[0].Index, From: 0, To: 6},
-		{Block: blocks[1].Index, From: 8, To: 14},
+		{Block: blocks[0].Index, Start: 0, End: 6},
+		{Block: blocks[1].Index, Start: 8, End: 14},
 	}
 	state.Current = 1
 	tt := ui.NewTester(func(c *ui.Context) {
@@ -191,8 +191,8 @@ func TestMatchesDrawn(t *testing.T) {
 func TestMatchHelpers(t *testing.T) {
 	m := doc.New("one two one three\n")
 	blocks := m.Blocks()
-	got := FindAll(m, blocks[0].Index, "one")
-	if len(got) != 2 || got[0].From != 0 || got[1].From != 8 {
+	got := doc.FindAll(m, "one", doc.SearchOptions{})
+	if len(got) != 2 || got[0].Start != 0 || got[1].Start != 8 || got[0].Block != blocks[0].Index {
 		t.Fatalf("FindAll: %+v", got)
 	}
 }
