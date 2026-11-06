@@ -35,16 +35,17 @@ type Selection struct {
 // point selecting nothing.
 func Collapsed(p Point) Selection { return Selection{Anchor: p, Caret: p} }
 
-// All returns a selection of the whole document.
+// All returns a selection of the whole document: the first run's start to
+// the last run's end.
 func All(m *doc.Model) Selection {
-	blocks := m.Blocks()
-	if len(blocks) == 0 {
+	runs := m.Runs()
+	if len(runs) == 0 {
 		return Collapsed(Point{})
 	}
-	first, last := blocks[0], blocks[len(blocks)-1]
+	first, last := runs[0], runs[len(runs)-1]
 	return Selection{
-		Anchor: Point{Block: first.Index, Offset: 0},
-		Caret:  Point{Block: last.Index, Offset: runeLen(m.Plain(last.Index))},
+		Anchor: Point{Block: first.Block, Offset: 0},
+		Caret:  Point{Block: last.Block, Offset: runeLen(last.Text)},
 	}
 }
 
@@ -75,29 +76,36 @@ func (s Selection) Text(text string) string {
 	return string(r[start.Offset:end.Offset])
 }
 
-// TextOf returns the selected text of the document: one block's slice, or
-// the blocks in between joined with newlines.
+// TextOf returns the selected text of the document, from the run table:
+// the endpoints are (top-level block, rune offset in that block's run
+// text). Runs in between join whole; a run's text joins the others with a
+// newline. Endpoints whose block carries no run (say, a lone image) count
+// as empty; offsets past a run's end clamp to it.
 func (s Selection) TextOf(m *doc.Model) string {
 	start, end := s.Order()
-	blocks := m.Blocks()
-	if len(blocks) == 0 {
-		return ""
-	}
-	first, last := blocks[0].Index, blocks[len(blocks)-1].Index
-	if start.Block < first || end.Block > last || start.Block < 0 {
-		return ""
-	}
-	if start.Block == end.Block {
-		return s.Text(m.Plain(start.Block))
-	}
 	var b strings.Builder
-	b.WriteString(textFrom(m, start.Block, start.Offset, runeLen(m.Plain(start.Block))))
-	for i := start.Block + 1; i < end.Block; i++ {
-		b.WriteString("\n")
-		b.WriteString(m.Plain(i))
+	startRun := true
+	for _, run := range m.Runs() {
+		if run.Block < start.Block {
+			continue
+		}
+		if run.Block > end.Block {
+			break
+		}
+		from, to := 0, runeLen(run.Text)
+		if run.Block == start.Block {
+			from = max(from, start.Offset)
+		}
+		if run.Block == end.Block {
+			to = min(to, end.Offset)
+		}
+		if startRun {
+			startRun = false
+		} else {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.RunText(run, from, to))
 	}
-	b.WriteString("\n")
-	b.WriteString(textFrom(m, end.Block, 0, end.Offset))
 	return b.String()
 }
 
@@ -127,20 +135,6 @@ func SelectLine(p Point, text string) Selection {
 		Anchor: Point{Block: p.Block, Offset: 0},
 		Caret:  Point{Block: p.Block, Offset: runeLen(text)},
 	}
-}
-
-func textFrom(m *doc.Model, block, from, to int) string {
-	r := []rune(m.Plain(block))
-	if from < 0 {
-		from = 0
-	}
-	if to > len(r) {
-		to = len(r)
-	}
-	if from >= to {
-		return ""
-	}
-	return string(r[from:to])
 }
 
 func runeLen(text string) int { return len([]rune(text)) }

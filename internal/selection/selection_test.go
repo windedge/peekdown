@@ -1,8 +1,10 @@
 package selection
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/ui/markdown/parser"
 	"github.com/windedge/peekdown/internal/doc"
 )
 
@@ -15,6 +17,10 @@ More text here.
 ## Next
 
 End paragraph.
+
+` + "```go\nx := 1\n```\n\n" + `| a | b |
+|---|---|
+| 1 | 2 |
 `
 
 func model(t *testing.T) *doc.Model {
@@ -123,9 +129,40 @@ func TestSelectLine(t *testing.T) {
 func TestAll(t *testing.T) {
 	m := model(t)
 	s := All(m)
-	want := "Title\nAlpha beta gamma delta.\nMore text here.\nNext\nEnd paragraph."
+	want := "Title\nAlpha beta gamma delta.\nMore text here.\nNext\nEnd paragraph.\nx := 1\na b 1 2"
 	if got := s.TextOf(m); got != want {
 		t.Fatalf("all: %q, want %q", got, want)
+	}
+}
+
+// A selection crossing a code block copies the code's text, which the run
+// table holds where the old per-block Plain gave the block nothing.
+func TestTextOfCrossesACodeBlock(t *testing.T) {
+	m := model(t)
+	blocks := m.Blocks()
+	var code, table int
+	for _, b := range blocks {
+		switch b.Kind {
+		case parser.CodeBlock:
+			code = b.Index
+		case parser.Table:
+			table = b.Index
+		}
+	}
+	if code == 0 || table == 0 {
+		t.Fatalf("blocks %+v: no code or table", blocks)
+	}
+	s := Selection{
+		Anchor: Point{Block: blocks[1].Index, Offset: 6},
+		Caret:  Point{Block: table, Offset: 3},
+	}
+	got := s.TextOf(m)
+	want := "beta gamma delta.\nMore text here.\nNext\nEnd paragraph.\nx := 1\na b"
+	if got != want {
+		t.Fatalf("across code and table: %q, want %q", got, want)
+	}
+	if !strings.Contains(got, "x := 1") {
+		t.Fatalf("the code's text is missing from %q", got)
 	}
 }
 

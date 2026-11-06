@@ -226,7 +226,12 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 }
 
 // walk flattens inlines to runs of text in style s, marking code and
-// links. It keeps the order the parser gave, breaks as spaces.
+// links. The spans' texts joined are the block's run text in doc's run
+// table, rune for rune: the offsets of the selection, the cuts and the
+// search all address that text. LineBreak and FootnoteRef follow
+// parser.PlainText (a break is a space, a note is "[^label]"); an
+// image's alt text stays in the text, as PlainText's flat walk over the
+// inline array emits it too.
 func walk(in []parser.Inline, s style, fn func(text string, code, link bool, dest string)) {
 	for k := 0; k < len(in); k++ {
 		n := &in[k]
@@ -236,7 +241,7 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 		case parser.SoftBreak:
 			fn(" ", false, false, "")
 		case parser.LineBreak:
-			fn("\n", false, false, "")
+			fn(" ", false, false, "")
 		case parser.Code:
 			fn(n.Text, true, false, "")
 		case parser.Emphasis:
@@ -252,8 +257,10 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 			walk(in[k+1:n.Next], style{s.size, s.weight, s.color}, func(text string, code, link bool, dest string) {
 				fn(text, code, false, "")
 			})
-		case parser.HTML, parser.Math, parser.FootnoteRef:
+		case parser.HTML, parser.Math:
 			fn(n.Text, true, false, "")
+		case parser.FootnoteRef:
+			fn("[^"+n.Text+"]", true, false, "")
 		}
 		if n.Next > k {
 			k = n.Next - 1
@@ -629,6 +636,15 @@ type textLayout struct {
 	width  float32
 }
 
+// runText returns the text of top-level block i as the run table holds
+// it, falling back to Plain for a block without a run of its own.
+func runText(m *doc.Model, block int) string {
+	if r := m.RunOf(block); r != nil {
+		return r.Text
+	}
+	return m.Plain(block)
+}
+
 // layout shapes block i's text at the pointer's width, caching by block and
 // width.
 func (st *State) layout(block int, m *doc.Model) *ui.TextLayout {
@@ -641,7 +657,7 @@ func (st *State) layout(block int, m *doc.Model) *ui.TextLayout {
 		return entry.layout
 	}
 	font := ui.Font{Size: 15}
-	layout := ui.ShapeText(m.Plain(block), font, width)
+	layout := ui.ShapeText(runText(m, block), font, width)
 	st.layouts[block] = &textLayout{layout: layout, width: width}
 	return layout
 }
@@ -694,7 +710,7 @@ func (st *State) SelectionText(m *doc.Model) string {
 
 // FindAll returns the matches of substr in block i's text, in runes.
 func FindAll(m *doc.Model, block int, substr string) []Match {
-	text := []rune(m.Plain(block))
+	text := []rune(runText(m, block))
 	var out []Match
 	if substr == "" {
 		return out

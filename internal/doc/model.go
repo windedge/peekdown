@@ -18,7 +18,7 @@ type Model struct {
 	anchors  map[int]string
 	images   map[int][]Image
 	rows     []Block
-	count    int
+	runs     []Run
 }
 
 // Block is a top-level block of the document.
@@ -227,6 +227,7 @@ func (m *Model) scan() {
 	m.anchors = nil
 	m.images = nil
 	m.rows = nil
+	m.runs = nil
 	seen := map[string]int{}
 	for i := range m.doc.Children(root) {
 		m.rows = append(m.rows, m.blockAt(i))
@@ -254,6 +255,7 @@ func (m *Model) scan() {
 				m.images[i] = images
 			}
 		}
+		m.appendRuns(i)
 	}
 }
 
@@ -318,4 +320,110 @@ func Slug(text string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// Run is one stretch of document text the reader sees, with its rune
+// offsets: the run table is the one authority selections, search and copy
+// address. A run is a leaf block's rendered text: a paragraph's or heading's
+// plain text, a code block's lines, a table's cells in reading order, a
+// list's or a quote's text in reading order.
+type Run struct {
+	// Block is the top-level block the run belongs to.
+	Block int
+	// Leaf is the parser block the text was taken from, a child of Block
+	// for nested blocks, Block itself otherwise.
+	Leaf int
+	// Text is the run's rendered text, what the view draws for it.
+	Text string
+}
+
+// RunText returns runes from..to of run, clamped to its length.
+func (m *Model) RunText(run Run, from, to int) string {
+	r := []rune(run.Text)
+	if from < 0 {
+		from = 0
+	}
+	if to > len(r) {
+		to = len(r)
+	}
+	if from >= to {
+		return ""
+	}
+	return string(r[from:to])
+}
+
+// Runs returns the document's runs in reading order.
+func (m *Model) Runs() []Run { return m.runs }
+
+// RunOf returns the run that holds block i's text, or nil when block i
+// contributes none.
+func (m *Model) RunOf(block int) *Run {
+	for k := range m.runs {
+		if m.runs[k].Leaf == block {
+			return &m.runs[k]
+		}
+	}
+	return nil
+}
+
+// appendRuns walks block i's subtree in reading order, appending one run
+// per stretch of text. Code blocks are their lines; HTML blocks are their
+// source; nested blocks contribute their leaves in order; a leaf run
+// inherits the text the view renders for it.
+func (m *Model) appendRuns(i int) {
+	b := m.doc.Block(i)
+	switch b.Kind {
+	case parser.Paragraph, parser.Heading:
+		m.appendRun(i, m.Plain(i))
+	case parser.CodeBlock:
+		m.appendRun(i, strings.Trim(m.Lines(i), "\n"))
+	case parser.HTMLBlock:
+		m.appendRun(i, strings.TrimRight(m.Lines(i), "\n"))
+	case parser.Table:
+		var cells []string
+		for _, row := range m.TableRows(i) {
+			for _, cell := range m.TableCells(row) {
+				cells = append(cells, m.Plain(cell))
+			}
+		}
+		m.appendRun(i, strings.Join(cells, " "))
+	case parser.Quote, parser.List:
+		// One run for the whole block: its leaves in reading order.
+		var parts []string
+		m.collectLeafText(i, &parts)
+		m.appendRun(i, strings.Join(parts, "\n"))
+	}
+}
+
+// collectLeafText gathers the text of block i's leaf descendants.
+func (m *Model) collectLeafText(i int, parts *[]string) {
+	b := m.doc.Block(i)
+	switch b.Kind {
+	case parser.Paragraph, parser.Heading:
+		*parts = append(*parts, m.Plain(i))
+		return
+	case parser.CodeBlock:
+		*parts = append(*parts, strings.Trim(m.Lines(i), "\n"))
+		return
+	case parser.HTMLBlock:
+		*parts = append(*parts, strings.TrimRight(m.Lines(i), "\n"))
+		return
+	case parser.Table:
+		for _, row := range m.TableRows(i) {
+			for _, cell := range m.TableCells(row) {
+				*parts = append(*parts, m.Plain(cell))
+			}
+		}
+		return
+	}
+	for j := range m.doc.Children(i) {
+		m.collectLeafText(j, parts)
+	}
+}
+
+func (m *Model) appendRun(block int, text string) {
+	if text == "" {
+		return
+	}
+	m.runs = append(m.runs, Run{Block: block, Leaf: block, Text: text})
 }
