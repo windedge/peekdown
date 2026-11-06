@@ -75,5 +75,6 @@ func (s *Shell) tabBar(c *ui.Context) {
 			s.activeSeen = s.Active
 			s.synced = true
 		}
+		s.emitTitle()
 	}
 }

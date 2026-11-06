@@ -331,6 +331,7 @@ func TestWindowTitle(t *testing.T) {
 		t.Fatalf("title = %q, want %q", s.Title(), want)
 	}
 	s.CloseAll()
+	s.emitTitle()
 	if s.Title() != "Peekdown" {
 		t.Fatalf("title = %q", s.Title())
 	}
@@ -391,5 +392,46 @@ func TestZoomClamps(t *testing.T) {
 	s.ZoomReset()
 	if s.Zoom != 1 {
 		t.Fatalf("zoom reset = %v, want 1", s.Zoom)
+	}
+}
+
+// TestTitleEmittedOnTabChanges checks OnTitleChange fires as the active tab
+// opens, switches or closes, so the host window title follows along.
+func TestTitleEmittedOnTabChanges(t *testing.T) {
+	s, dir := newShell(t)
+	var titles []string
+	s.OnTitleChange = func(title string) { titles = append(titles, title) }
+
+	a := filepath.Join(dir, "a.md")
+	b := filepath.Join(dir, "b.md")
+	if err := s.OpenFile(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(b); err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 2 || titles[len(titles)-1] != b+" - Peekdown" {
+		t.Fatalf("after open: %v, want last %q", titles, b+" - Peekdown")
+	}
+
+	// Clicking a tab rebinds Active at render time; the title follows on the frame.
+	tt := s.render(t)
+	tt.Frame()
+	if err := tt.Click("a.md"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if titles[len(titles)-1] != a+" - Peekdown" {
+		t.Fatalf("after switch: %v, want %q", titles, a+" - Peekdown")
+	}
+
+	s.CloseTab(0)
+	if titles[len(titles)-1] != b+" - Peekdown" {
+		t.Fatalf("after close: %v, want last %q", titles, b+" - Peekdown")
+	}
+
+	s.CloseAll()
+	if titles[len(titles)-1] != "Peekdown" {
+		t.Fatalf("after close all: %v, want last %q", titles, "Peekdown")
 	}
 }

@@ -95,7 +95,7 @@ func loadSettings() settings.Settings {
 }
 
 // newShell builds the shell with the platform implementations wired in.
-func newShell() *shell.Shell {
+func newShell(a *app) *shell.Shell {
 	s := shell.New()
 	s.Load = loadSettings
 	s.Save = func(v settings.Settings) error {
@@ -118,6 +118,12 @@ func newShell() *shell.Shell {
 			},
 		})
 	}
+	s.OnTitleChange = func(title string) {
+		if a.win != nil {
+			a.win.SetTitle(title)
+			a.win.Invalidate()
+		}
+	}
 	return s
 }
 
@@ -127,7 +133,7 @@ func main() {
 		return
 	}
 
-	s := newShell()
+	s := newShell(&app{})
 	s.Saved = s.Load()
 	s.Draft = s.Saved
 	s.SetSidebarWidth(float32(s.Saved.SidebarWidth))

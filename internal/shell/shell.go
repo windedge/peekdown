@@ -40,13 +40,14 @@ type Shell struct {
 	saveErr      string
 
 	// Injected dependencies.
-	Load        func() settings.Settings
-	Save        func(settings.Settings) error
-	SetTheme    func(mygo.ThemeSource)
-	Recent      func() []string
-	AddRecent   func(string) error
-	ClearRecent func() error
-	OpenDialog  func() ([]string, error)
+	Load          func() settings.Settings
+	Save          func(settings.Settings) error
+	SetTheme      func(mygo.ThemeSource)
+	Recent        func() []string
+	AddRecent     func(string) error
+	ClearRecent   func() error
+	OpenDialog    func() ([]string, error)
+	OnTitleChange func(string)
 
 	activeSeen int
 	synced     bool
@@ -86,6 +87,7 @@ func (s *Shell) OpenFile(path string) error {
 	if s.AddRecent != nil {
 		_ = s.AddRecent(abs)
 	}
+	s.emitTitle()
 	return nil
 }
 
@@ -115,6 +117,7 @@ func (s *Shell) CloseTab(i int) {
 	if s.Active >= len(s.Tabs) {
 		s.Active = len(s.Tabs) - 1
 	}
+	s.emitTitle()
 }
 
 // CloseOthers keeps only tab i.
@@ -125,12 +128,21 @@ func (s *Shell) CloseOthers(i int) {
 	keep := s.Tabs[i]
 	s.Tabs = []Tab{keep}
 	s.Active = 0
+	s.emitTitle()
 }
 
 // CloseAll removes every tab.
 func (s *Shell) CloseAll() {
 	s.Tabs = nil
 	s.Active = -1
+	s.emitTitle()
+}
+
+// emitTitle reports the window title to the host, once the tab state settled.
+func (s *Shell) emitTitle() {
+	if s.OnTitleChange != nil {
+		s.OnTitleChange(s.Title())
+	}
 }
 
 // ActiveTab returns the active tab or nil.
@@ -264,8 +276,12 @@ func (s *Shell) Content(c *ui.Context) {
 		})
 		return
 	}
-	ui.Box(c).Fill().Children(func() {
-		view.ScrollView(c, tab.Model, &tab.State)
+	ui.Box(c).Fill().Padding(16, 24).Children(func() {
+		// Mirrors the Rust reader: the column is capped at 900 DIPs and
+		// centered, the padding keeps the text off the window edges.
+		ui.Column(c).MaxWidth(900).AlignSelf(ui.Center).Grow(1).Children(func() {
+			view.ScrollView(c, tab.Model, &tab.State)
+		})
 	})
 }
 
