@@ -2,7 +2,10 @@ module github.com/windedge/peekdown
 
 go 1.27.3
 
-require github.com/egoist/mygo v0.7.5-0.20261105040656-977ea57e0baf
+require (
+	github.com/egoist/mygo v0.7.5-0.20261105040656-977ea57e0baf
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/ebitengine/purego v0.11.1 // indirect

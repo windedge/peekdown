@@ -15,7 +15,11 @@ import (
 // caches what the blocks share: the headings, their anchors and, of each
 // block, whether its top-level content is one run of images.
 type Model struct {
-	doc      *parser.Document
+	doc *parser.Document
+	// Front is the frontmatter the source opened with, nil for none. It
+	// is not document text: the blocks, the runs and the search all see
+	// the body alone.
+	Front    *Frontmatter
 	headings []Heading
 	anchors  map[int]string
 	images   map[int][]Image
@@ -74,31 +78,58 @@ type Image struct {
 
 // New parses src.
 func New(src string) *Model {
-	return wrap(parser.Parse(src))
+	front, body := stripped(src)
+	return wrap(parser.Parse(body), front)
 }
 
 // NewWith parses src with extensions, as GFM with footnotes.
 func NewWith(src string, ext parser.Extensions) *Model {
+	front, body := stripped(src)
 	d := parser.New(ext)
-	d.Set(src)
-	return wrap(d)
+	d.Set(body)
+	return wrap(d, front)
 }
 
-// wrap finishes a document the parser made: it scans the blocks the model
-// caches.
-func wrap(d *parser.Document) *Model {
-	m := &Model{doc: d, Current: -1}
+// stripped returns src's frontmatter and the body after it: the one
+// place the header comes off the source, so the parser, the blocks and
+// the runs see the body alone.
+func stripped(src string) (*Frontmatter, string) {
+	front, body, _ := ExtractFrontmatter(src)
+	return front, body
+}
+
+// wrap finishes a document the parser made: it caches the frontmatter
+// taken off its source and scans the blocks.
+func wrap(d *parser.Document, front *Frontmatter) *Model {
+	m := &Model{doc: d, Front: front, Current: -1}
 	m.scan()
 	return m
 }
 
 // Set replaces the source, parsing again only what changed. The search
-// drops: its matches name text the new document need not have.
+// drops: its matches name text the new document need not have. A
+// frontmatter is stripped first, so the parser, the blocks and the runs
+// see the body alone.
 func (m *Model) Set(src string) {
-	m.doc.Set(src)
+	front, body := stripped(src)
+	m.setBody(front, body)
+}
+
+// setBody swaps the source and its frontmatter in one step, the search
+// dropping: its matches name text the new document need not have.
+func (m *Model) setBody(front *Frontmatter, body string) {
+	m.Front = front
+	m.doc.Set(body)
 	m.scan()
 	m.ClearSearch()
 }
+
+// Offset contract: the model's source is the body, whose line 1 is the
+// file's line Front.LineCount+1. Every block Start and End addresses the
+// body; a viewer mapping lines back to the file adds LineCount to the
+// line. The frontmatter itself is no block, contributes no run and never
+// matches a search, even when shown as a code block (broken YAML or
+// TOML), unlike an ordinary code block.
 
 // Source returns the document's source.
 func (m *Model) Source() string { return m.doc.Source() }

@@ -69,6 +69,10 @@ type State struct {
 	// LoadImage loads the image at url; nil shows its description.
 	LoadImage func(url string) (ui.ImageSource, error)
 
+	// CopyFrontmatter runs when the frontmatter card's copy button is
+	// clicked, with the block's Raw text; nil hides the button. The shell
+	// writes the clipboard and toasts; the view keeps out of the host.
+	CopyFrontmatter func(string)
 	// imageCache caches the sources the loader returned, by URL.
 	imageCache map[string]ui.ImageSource
 

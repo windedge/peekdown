@@ -322,6 +322,12 @@ func (s *Shell) Content(c *ui.Context) {
 	if tab.State.LoadImage == nil {
 		tab.State.LoadImage = markdown.FileImages(filepath.Dir(tab.Path))
 	}
+	// The card's copy button writes the clipboard and tells the user;
+	// set each frame so a tab opened elsewhere finds it in place.
+	tab.State.CopyFrontmatter = func(raw string) {
+		c.WriteClipboard(raw)
+		c.Toast("Copied frontmatter")
+	}
 	ui.Box(c).Fill().Padding(16, 24).Children(func() {
 		// Mirrors the Rust reader: centered caps the column at 900 DIPs,
 		// full_width lets it follow the window; the padding keeps the
@@ -333,6 +339,7 @@ func (s *Shell) Content(c *ui.Context) {
 			col.MaxWidth(900).AlignSelf(ui.Center)
 		}
 		col.Children(func() {
+			view.Frontmatter(c, tab.Model, &tab.State)
 			view.ScrollView(c, tab.Model, &tab.State)
 		})
 	})
