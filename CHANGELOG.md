@@ -21,6 +21,7 @@ The Go rewrite on mygo's native UI. The reading features of the Rust implementat
 - CI on Windows, macOS and Linux, and a release workflow that attaches the Windows archive, installer, and macOS app and disk image to a `v*` tag.
 - Scoop manifest template and release notes.
 - Mermaid diagram rendering: flowchart, sequence, pie and other diagram types, light/dark theme following the app, 2x rendering for high-DPI displays, an LRU render cache shared across tabs, and a fallback to the source block with a red error line on syntax errors. CJK labels render with system fonts (Microsoft YaHei on Windows); the rasterizer is owned locally (vendored from go-mermaid, MIT).
+- Embedded HTML blocks rendered semantically instead of as raw source: block-level tables, images, rules, preformatted code, headings and paragraphs, containers expanded in place, inline styles (bold, italic, underline, strikethrough, code, safe links) mapped to the reader's spans, and a whitelist that prunes script, style, iframe, form and friends; unknown tags degrade to their text.
 
 ### Fixed
 

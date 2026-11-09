@@ -9,6 +9,8 @@ import (
 	"unicode"
 
 	"github.com/egoist/mygo/ui/markdown/parser"
+
+	"github.com/windedge/peekdown/internal/htmlx"
 )
 
 // Model is a parsed document. It keeps the parser's incremental document and
@@ -465,10 +467,10 @@ func (m *Model) RunAt(leaf int) (*Run, int) {
 }
 
 // appendRuns walks block i's subtree in reading order, appending one run
-// per stretch of text. Code blocks are their lines; HTML blocks are their
-// source; nested blocks contribute their leaves in order; a leaf run
-// inherits the text the view renders for it. Each contributing leaf is
-// recorded with its rune offset in the run that holds it.
+// per stretch of text. Code blocks are their lines; HTML blocks the visible
+// text of their semantic content; nested blocks contribute their leaves in
+// order; a leaf run inherits the text the view renders for it. Each
+// contributing leaf is recorded with its rune offset in the run that holds it.
 func (m *Model) appendRuns(i int) {
 	b := m.doc.Block(i)
 	switch b.Kind {
@@ -477,7 +479,7 @@ func (m *Model) appendRuns(i int) {
 	case parser.CodeBlock:
 		m.appendRun(i, strings.Trim(m.Lines(i), "\n"), nil)
 	case parser.HTMLBlock:
-		m.appendRun(i, strings.TrimRight(m.Lines(i), "\n"), nil)
+		m.appendRun(i, htmlx.RunText(m.Lines(i)), nil)
 	case parser.Table:
 		var leaves []leafText
 		m.collectLeaves(i, &leaves)
@@ -517,7 +519,7 @@ func (m *Model) collectLeaves(i int, leaves *[]leafText) {
 		*leaves = append(*leaves, leafText{i, strings.Trim(m.Lines(i), "\n")})
 		return
 	case parser.HTMLBlock:
-		*leaves = append(*leaves, leafText{i, strings.TrimRight(m.Lines(i), "\n")})
+		*leaves = append(*leaves, leafText{i, htmlx.RunText(m.Lines(i))})
 		return
 	case parser.Table:
 		for _, row := range m.TableRows(i) {

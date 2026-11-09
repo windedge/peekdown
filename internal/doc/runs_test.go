@@ -91,6 +91,37 @@ func TestEmptyDocumentHasNoRuns(t *testing.T) {
 	}
 }
 
+// TestRunsOfHTMLBlock checks an HTML block's run is the visible text of
+// its semantic content, not its source: tags, and everything a pruned tag
+// holds, leave the text, so the search and the selection address what the
+// view draws.
+func TestRunsOfHTMLBlock(t *testing.T) {
+	m := New("<div>\n<p>Alpha</p>\n<table><tr><th>a</th></tr><tr><td>1</td></tr></table>\n</div>")
+	if m.Len() != 1 {
+		t.Fatalf("%d blocks, want 1 (the HTML block)", m.Len())
+	}
+	runs := m.Runs()
+	if len(runs) != 1 {
+		t.Fatalf("%d runs %v, want 1", len(runs), runs)
+	}
+	want := "Alpha\na 1"
+	if runs[0].Text != want {
+		t.Fatalf("run %q, want %q", runs[0].Text, want)
+	}
+}
+
+// TestRunsOfPrunedHTMLBlock checks a fully pruned HTML block produces no
+// run at all: no ghost text for the search or the selection to land in.
+func TestRunsOfPrunedHTMLBlock(t *testing.T) {
+	m := New("<script>var x = 1;</script>")
+	if m.Len() != 1 {
+		t.Fatalf("%d blocks, want 1 (the HTML block)", m.Len())
+	}
+	if runs := m.Runs(); len(runs) != 0 {
+		t.Fatalf("runs %v, want none", runs)
+	}
+}
+
 func TestTextOfRun(t *testing.T) {
 	m := New("Alpha beta.\n\nGamma delta.\n")
 	runs := m.Runs()

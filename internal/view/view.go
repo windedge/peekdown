@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"github.com/windedge/peekdown/internal/doc"
+	"github.com/windedge/peekdown/internal/htmlx"
 	"github.com/windedge/peekdown/internal/mermaid"
 	"github.com/windedge/peekdown/internal/selection"
 )
@@ -345,7 +346,6 @@ func anchorsOf(m *doc.Model) func(int) string {
 
 // Render builds the row of top-level block i.
 func Render(c *ui.Context, m *doc.Model, st *State, i int) {
-	t := c.Theme()
 	b := m.Block(i)
 	switch b.Kind {
 	case parser.Heading:
@@ -363,20 +363,7 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 	case parser.ThematicBreak:
 		ui.Box(c).Height(1).Background(c.Theme().Border).AlignSelf(ui.Stretch).MarginY(8)
 	case parser.HTMLBlock:
-		// An HTML block is one run in the run table, its lines joined:
-		// the same RichText carries them, with the matches cut in.
-		lines := strings.Split(strings.TrimRight(m.Lines(i), "\n"), "\n")
-		spans := make([]ui.Span, 0, len(lines))
-		for k, line := range lines {
-			if k > 0 {
-				spans = append(spans, ui.Span{Text: "\n"})
-			}
-			spans = append(spans, ui.Span{Text: line})
-		}
-		spans = st.overlay(c, m, i, spans)
-		ui.RichText(c, spans...).
-			Font(fontMono).FontSize(13).
-			TextColor(t.TextMuted).PaddingY(4)
+		st.htmlBlock(c, m, i)
 	default:
 		ui.Box(c)
 	}
@@ -392,6 +379,8 @@ type style struct {
 	weight    int
 	color     ui.Color
 	underline bool
+	italic    bool
+	strike    bool
 }
 
 func (st *State) heading(c *ui.Context, m *doc.Model, i, level int) {
@@ -504,16 +493,16 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 		case parser.Code:
 			fn(n.Text, true, false, "")
 		case parser.Emphasis:
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, fn)
+			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, fn)
 		case parser.Strong:
-			walk(in[k+1:n.Next], style{s.size, 700, s.color, s.underline}, fn)
+			walk(in[k+1:n.Next], style{size: s.size, weight: 700, color: s.color, underline: s.underline}, fn)
 		case parser.Link:
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, func(text string, code, link bool, dest string) {
+			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, true, n.Dest)
 			})
 		case parser.Image:
 			// Its description stands for it within the text.
-			walk(in[k+1:n.Next], style{s.size, s.weight, s.color, s.underline}, func(text string, code, link bool, dest string) {
+			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, false, "")
 			})
 		case parser.HTML, parser.Math:
@@ -528,18 +517,22 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 }
 
 // overlay splits a block's spans where the selection and the matches cut
-// its text, coloring the covered runs. The spans carry the text of the
-// block joined, which the overlays address by rune. The block i handed
-// in is the leaf the row draws, often a cell or a quote's paragraph; the
-// overlays address top-level runs, so RunAt maps the leaf into its run
-// and the cuts shift by the leaf's offset there.
+// its text, coloring the covered runs. The block i handed in is the leaf
+// the row draws, often a cell or a quote's paragraph; its run and the
+// leaf's offset in it come from the run table.
 func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span) []ui.Span {
-	var cuts []cut
-	// The cuts come in run coordinates; the leaf draws only its slice.
 	leaf, off := i, 0
 	if run, at := m.RunAt(i); run != nil {
 		leaf, off = run.Block, at
 	}
+	return st.overlayRun(c, leaf, off, spans)
+}
+
+// overlayRun recolors spans where the selection and the matches cut the
+// run of top-level block leaf at rune offset off, which a nested piece
+// that draws one slice of the run carries in as its own offset.
+func (st *State) overlayRun(c *ui.Context, leaf, off int, spans []ui.Span) []ui.Span {
+	var cuts []cut
 	if st.Selection.set {
 		start, end := st.Selection.start, st.Selection.end
 		if start.Block == end.Block && start.Block == leaf && start.Offset < end.Offset {
@@ -804,7 +797,7 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 		if len(spans) == 0 {
 			spans = append(spans, ui.Span{Text: " "})
 		}
-		spans = st.overlay(c, m, i, spans)
+		spans = st.overlayRun(c, i, 0, spans)
 		el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
 		el.NoWrap()
 	})
@@ -1054,4 +1047,155 @@ func (st *State) SelectionText(m *doc.Model) string {
 	}
 	s := selection.Selection{Anchor: st.Selection.start, Caret: st.Selection.end}
 	return s.TextOf(m)
+}
+
+// htmlBlock renders an embedded HTML block as the semantic content its
+// tags hold, the way the markdown blocks around it draw: paragraphs and
+// headings as rich text, tables as grids, pre as code, hr as a rule and
+// img as a picture. Tags outside the whitelist the parser prunes or
+// flattens to their text. The run table holds the block's visible text,
+// joined with newlines, so the overlays cut it node by node: each piece
+// hands overlayRun its slice's rune offset in the run, from the leaf's
+// base when the block sits nested in a quote or a list, and the run's
+// block, the quote or list the matches and the selection address.
+// Zero-text nodes draw but take no slot in the run: a rule's line, an
+// image without alt. The block reparses once a frame, HTML blocks being
+// few; the run table caches the same text through doc.RunText for the
+// search.
+func (st *State) htmlBlock(c *ui.Context, m *doc.Model, i int) {
+	nodes := htmlx.Parse(m.Lines(i))
+	if len(nodes) == 0 {
+		ui.Box(c)
+		return
+	}
+	leaf, base := htmlLeaf(m, i)
+	col := ui.Column(c).AlignSelf(ui.Stretch).MinWidth(0)
+	col.Children(func() {
+		at := base
+		parts := 0
+		for _, n := range nodes {
+			if n.Text != "" {
+				if parts > 0 {
+					at++
+				}
+				parts++
+				st.htmlNode(c, m, leaf, n, at)
+				at += runeLen(n.Text)
+				continue
+			}
+			st.htmlNode(c, m, leaf, n, at)
+		}
+	})
+}
+
+// htmlLeaf returns the block the overlays address the HTML block's text
+// under, with the rune offset where its piece starts: the block itself
+// at 0 at the top level, or its place in the quote's or list's run when
+// nested.
+func htmlLeaf(m *doc.Model, i int) (leaf, base int) {
+	if run, at := m.RunAt(i); run != nil {
+		return run.Block, at
+	}
+	return i, 0
+}
+
+// htmlNode renders one semantic node, drawing its piece of the run's
+// text, the slice at off; i is the block the run table holds it under.
+func (st *State) htmlNode(c *ui.Context, m *doc.Model, i int, n htmlx.Node, off int) {
+	t := c.Theme()
+	switch n.Kind {
+	case htmlx.Para:
+		var spans []ui.Span
+		for _, seg := range n.Segs {
+			spans = append(spans, st.htmlSeg(c, seg, n.Level))
+		}
+		spans = st.overlayRun(c, i, off, spans)
+		el := ui.RichText(c, spans...).AlignSelf(ui.Stretch).MinWidth(0).PaddingY(4)
+		if n.Level > 0 {
+			el.Role(ui.RoleHeading).Level(n.Level)
+		}
+	case htmlx.Pre:
+		box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6)
+		box.Children(func() {
+			spans := st.overlayRun(c, i, off, []ui.Span{{Text: n.Text}})
+			el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
+			el.NoWrap()
+		})
+	case htmlx.Rule:
+		ui.Box(c).Height(1).Background(t.Border).AlignSelf(ui.Stretch).MarginY(8)
+	case htmlx.Image:
+		// No overlays over the picture, as for a markdown image block.
+		st.images(c, i, []doc.Image{{Dest: n.Src, Alt: n.Alt}})
+	case htmlx.Table:
+		st.htmlTable(c, i, n, off)
+	}
+}
+
+// htmlSeg styles one inline seg of a paragraph, headings by their
+// level's size, links in the accent color underlined and code as the
+// markdown walk styles it.
+func (st *State) htmlSeg(c *ui.Context, seg htmlx.Seg, level int) ui.Span {
+	t := c.Theme()
+	s := style{}
+	if level > 0 {
+		s.weight = 700
+		s.size, s.color = headingStyle(c, level)
+	} else {
+		s.size, s.color = 15, t.Text
+	}
+	if seg.Bold {
+		s.weight = 700
+	}
+	if seg.Italic {
+		s.italic = true
+	}
+	if seg.Strike {
+		s.strike = true
+	}
+	if seg.Underline {
+		s.underline = true
+	}
+	if seg.Code {
+		s.color = t.TextMuted
+		s.size *= 0.95
+	}
+	if seg.Link {
+		s.color = t.Accent
+		s.underline = true
+	}
+	return ui.Span{Text: seg.Text, Size: s.size, Weight: s.weight, Italic: s.italic, Color: s.color, Underline: s.underline, Strikethrough: s.strike}
+}
+
+// htmlTable renders an HTML table as a grid of rows, the header on a
+// Surface background at weight 600. The run text of the cells is joined
+// with spaces, the markdown table's convention, so the overlays cut
+// each cell at its rune offset in the block's run.
+func (st *State) htmlTable(c *ui.Context, i int, n htmlx.Node, off int) {
+	t := c.Theme()
+	grid := ui.Column(c).Border(1, t.Border).Radius(4).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	grid.Children(func() {
+		cellOff := off
+		first := true
+		for _, row := range n.Cells {
+			r := ui.Row(c)
+			if first {
+				r.Background(t.Surface)
+			}
+			r.Children(func() {
+				for _, cell := range row {
+					at := cellOff
+					weight := 400
+					if first {
+						weight = 600
+					}
+					spans := st.overlayRun(c, i, at, []ui.Span{{Text: cell, Size: 14, Weight: weight}})
+					ui.Box(c).Grow(1).Padding(6, 10).Children(func() {
+						ui.RichText(c, spans...).FontSize(14)
+					})
+					cellOff += runeLen(cell) + 1
+				}
+			})
+			first = false
+		}
+	})
 }
