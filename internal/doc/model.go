@@ -78,11 +78,10 @@ type Image struct {
 	Alt  string
 }
 
-// New parses src.
-func New(src string) *Model {
-	front, body := stripped(src)
-	return wrap(parser.Parse(body), front)
-}
+// New parses src with the app's extension set, GFM plus footnotes: the
+// set the shell opens files with, minus the math extensions so math
+// stays literal text.
+func New(src string) *Model { return NewWith(src, parser.GFM|parser.ExtFootnotes) }
 
 // NewWith parses src with extensions, as GFM with footnotes.
 func NewWith(src string, ext parser.Extensions) *Model {
@@ -476,7 +475,7 @@ func (m *Model) appendRuns(i int) {
 	switch b.Kind {
 	case parser.Paragraph, parser.Heading:
 		m.appendRun(i, m.Plain(i), nil)
-	case parser.CodeBlock:
+	case parser.CodeBlock, parser.MathBlock:
 		m.appendRun(i, strings.Trim(m.Lines(i), "\n"), nil)
 	case parser.HTMLBlock:
 		m.appendRun(i, htmlx.RunText(m.Lines(i)), nil)
@@ -484,8 +483,10 @@ func (m *Model) appendRuns(i int) {
 		var leaves []leafText
 		m.collectLeaves(i, &leaves)
 		m.appendRun(i, joined(leaves, " "), leaves)
-	case parser.Quote, parser.List:
-		// One run for the whole block: its leaves in reading order.
+	case parser.Quote, parser.List, parser.FootnoteDefinition:
+		// One run for the whole block: its leaves in reading order. A
+		// footnote definition keeps its note text here, the reference in
+		// the citing text being only the [^label] mark.
 		var leaves []leafText
 		m.collectLeaves(i, &leaves)
 		m.appendRun(i, joined(leaves, "\n"), leaves)
@@ -515,7 +516,7 @@ func (m *Model) collectLeaves(i int, leaves *[]leafText) {
 	case parser.Paragraph, parser.Heading:
 		*leaves = append(*leaves, leafText{i, m.Plain(i)})
 		return
-	case parser.CodeBlock:
+	case parser.CodeBlock, parser.MathBlock:
 		*leaves = append(*leaves, leafText{i, strings.Trim(m.Lines(i), "\n")})
 		return
 	case parser.HTMLBlock:

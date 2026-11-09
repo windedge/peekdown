@@ -364,8 +364,18 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 		ui.Box(c).Height(1).Background(c.Theme().Border).AlignSelf(ui.Stretch).MarginY(8)
 	case parser.HTMLBlock:
 		st.htmlBlock(c, m, i)
+	case parser.FootnoteDefinition:
+		// The note's text renders here, its children in muted text; the
+		// reference in the citing text is only the [^label] mark.
+		st.mutedChildren(c, m, i)
+	case parser.MathBlock:
+		// No math rendering (ticket #17): the block's TeX shows as plain
+		// source, LaTeX typesetting later work.
+		st.sourceBlock(c, m, i)
 	default:
-		ui.Box(c)
+		// An unmapped block kind degrades to its source lines, so content
+		// never vanishes into a blank row.
+		st.sourceBlock(c, m, i)
 	}
 }
 
@@ -794,13 +804,19 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 			}
 			spans = append(spans, codeSpans(line, toks, ct, t.Text)...)
 		}
-		if len(spans) == 0 {
-			spans = append(spans, ui.Span{Text: " "})
-		}
-		spans = st.overlayRun(c, i, 0, spans)
-		el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
-		el.NoWrap()
+		st.monoBox(c, i, 0, spans)
 	})
+}
+
+// monoBox lays spans out as one no-wrap monospaced text in a surface box,
+// cutting the overlays into them at off, the leaf's base in its run.
+func (st *State) monoBox(c *ui.Context, i, off int, spans []ui.Span) {
+	if len(spans) == 0 {
+		spans = append(spans, ui.Span{Text: " "})
+	}
+	spans = st.overlayRun(c, i, off, spans)
+	el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
+	el.NoWrap()
 }
 
 // codeSpans splits one line of code into spans, one per token, colored
@@ -827,6 +843,33 @@ func splitLines(s string) []string {
 		return []string{""}
 	}
 	return strings.Split(s, "\n")
+}
+
+// sourceBlock renders block i's raw lines as plain monospaced gray text:
+// an unmapped or unstyled block kind falls back to its source.
+func (st *State) sourceBlock(c *ui.Context, m *doc.Model, i int) {
+	t := c.Theme()
+	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
+	box.Children(func() {
+		spans := []ui.Span{{Text: strings.Trim(m.Lines(i), "\n"), Color: t.TextMuted}}
+		st.monoBox(c, i, 0, spans)
+	})
+}
+
+// mutedChildren draws the blocks nested in i in muted text, the note of
+// a footnote definition, styled like a quote's text without its bar.
+func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
+	t := c.Theme()
+	col := ui.Column(c).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	col.Children(func() {
+		for j := range m.Children(i) {
+			if m.Block(j).Kind == parser.Paragraph {
+				st.paragraph(c, m, j, style{color: t.TextMuted})
+			} else {
+				Render(c, m, st, j)
+			}
+		}
+	})
 }
 
 // table builds a Markdown table as a grid of rows.

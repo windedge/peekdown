@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"github.com/windedge/peekdown/internal/doc"
 	"github.com/windedge/peekdown/internal/mermaid"
@@ -89,7 +90,9 @@ func (s *Shell) OpenFile(path string) error {
 	if err != nil {
 		return err
 	}
-	m := doc.New(string(data))
+	// Math extensions stay off (ticket #17): TeX shows as plain text, as
+	// the Rust version shows it; LaTeX typesetting is later work.
+	m := doc.NewWith(string(data), parser.GFM|parser.ExtFootnotes)
 	abs := path
 	if a, err := filepath.Abs(path); err == nil {
 		abs = a
