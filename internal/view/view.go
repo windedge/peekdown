@@ -5,6 +5,7 @@ package view
 
 import (
 	"cmp"
+	"image"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -14,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"github.com/windedge/peekdown/internal/doc"
+	"github.com/windedge/peekdown/internal/mermaid"
 	"github.com/windedge/peekdown/internal/selection"
 )
 
@@ -73,8 +75,17 @@ type State struct {
 	// clicked, with the block's Raw text; nil hides the button. The shell
 	// writes the clipboard and toasts; the view keeps out of the host.
 	CopyFrontmatter func(string)
+
+	// LoadMermaid renders a mermaid diagram to a picture; nil shows
+	// mermaid blocks as plain source code. The shell wires the shared
+	// LRU cache here; the view stays out of when and where it renders.
+	LoadMermaid func(src string, theme mermaid.Theme, scale float64) (image.Image, error)
 	// imageCache caches the sources the loader returned, by URL.
 	imageCache map[string]ui.ImageSource
+	// bitmapCache caches the mermaid bitmaps the loader made, by the
+	// mermaid.Key of source, theme and scale, so a bitmap is built once
+	// per key instead of once a frame.
+	bitmapCache map[string]*ui.Bitmap
 
 	// layouts cache the shaped text of the blocks the pointer has hit.
 	layouts map[layoutKey]*textLayout
@@ -761,6 +772,21 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 		ct = editor.DefaultTheme(t)
 	}
 	lang := editor.LanguageNamed(m.Language(i))
+	// A mermaid block with a loader draws its diagram in the loader's
+	// place; on failure it stays the source block, an error line above
+	// saying why. Search hits in the source highlight only there: a
+	// diagram carries no text to cut, so they stay counted but invisible
+	// over the picture, a known limit. CJK tofu is fixed on Windows by
+	// injecting system Microsoft YaHei (internal/mermaid/font.go); other
+	// platforms may still tofu (TODO macOS PingFang, Linux fontconfig).
+	if isMermaid(m.Language(i)) && st.LoadMermaid != nil {
+		b, err := st.mermaidBitmap(strings.Trim(m.Lines(i), "\n"), mermaidTheme(c), mermaidScale(c))
+		if err == nil {
+			mermaidImage(c, b)
+			return
+		}
+		mermaidErrorLine(c, err)
+	}
 	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
 	box.Children(func() {
 		lines := splitLines(m.Lines(i))

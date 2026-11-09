@@ -2,6 +2,7 @@ package shell
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/windedge/peekdown/internal/doc"
+	"github.com/windedge/peekdown/internal/mermaid"
 	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/internal/view"
 )
@@ -44,6 +46,10 @@ type Shell struct {
 	SearchOpen bool
 	search     searchBar
 
+	// mermaidCache renders the mermaid blocks of every tab: one app-wide
+	// LRU, shared across tabs and theme or zoom changes.
+	mermaidCache *mermaid.Cache
+
 	// Load reads the user's settings; nil leaves the defaults.
 	Load          func() settings.Settings
 	Save          func(settings.Settings) error
@@ -67,8 +73,9 @@ type Shell struct {
 // New returns a shell with sane defaults.
 func New() *Shell {
 	s := &Shell{
-		Load: settings.Default,
-		Zoom: 1,
+		Load:         settings.Default,
+		Zoom:         1,
+		mermaidCache: mermaid.NewCache(16),
 	}
 	s.Active = -1
 	s.Sidebar.Width = 200
@@ -327,6 +334,12 @@ func (s *Shell) Content(c *ui.Context) {
 	tab.State.CopyFrontmatter = func(raw string) {
 		c.WriteClipboard(raw)
 		c.Toast("Copied frontmatter")
+	}
+	// The diagrams render through the shared cache, keyed by source,
+	// theme and scale: a theme switch or a zoom past 2x re-renders once
+	// and every tab shares the result.
+	tab.State.LoadMermaid = func(src string, theme mermaid.Theme, scale float64) (image.Image, error) {
+		return s.mermaidCache.Render(src, theme, scale)
 	}
 	ui.Box(c).Fill().Padding(16, 24).Children(func() {
 		// Mirrors the Rust reader: centered caps the column at 900 DIPs,

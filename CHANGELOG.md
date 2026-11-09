@@ -20,6 +20,7 @@ The Go rewrite on mygo's native UI. The reading features of the Rust implementat
 - The layout setting applies: centered caps the reading column at 900 DIPs, full width follows the window; the saved sidebar tab is restored at startup.
 - CI on Windows, macOS and Linux, and a release workflow that attaches the Windows archive, installer, and macOS app and disk image to a `v*` tag.
 - Scoop manifest template and release notes.
+- Mermaid diagram rendering: flowchart, sequence, pie and other diagram types, light/dark theme following the app, 2x rendering for high-DPI displays, an LRU render cache shared across tabs, and a fallback to the source block with a red error line on syntax errors. CJK labels render with system fonts (Microsoft YaHei on Windows); the rasterizer is owned locally (vendored from go-mermaid, MIT).
 
 ### Fixed
 

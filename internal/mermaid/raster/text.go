@@ -1,0 +1,247 @@
+// Copied from zkrebbekx/go-mermaid v0.1.6 (MIT License, Copyright (c) 2026 Zac Krebbekx). Local fork adds SetFonts for CJK font injection.
+
+package raster
+
+import (
+	"image"
+	"image/color"
+	"math"
+	"regexp"
+	"strconv"
+	"strings"
+
+	xhtml "html"
+
+	svgutil "github.com/windedge/peekdown/internal/mermaid/svgutil"
+	xdraw "golang.org/x/image/draw"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/f64"
+	"golang.org/x/image/math/fixed"
+)
+
+// oksvg does not render <text>, so we draw labels ourselves. We control the
+// SVG format, so a light regex pass over <text>/<tspan> elements is enough.
+
+var (
+	textRe     = regexp.MustCompile(`(?s)<text\b([^>]*)>(.*?)</text>`)
+	tspanRe    = regexp.MustCompile(`(?s)<tspan\b([^>]*)>(.*?)</tspan>`)
+	attrRe     = regexp.MustCompile(`([\w-]+)="([^"]*)"`)
+	groupRe    = regexp.MustCompile(`<g transform="translate\(([0-9.-]+),([0-9.-]+)\)">`)
+	rotateRe   = regexp.MustCompile(`rotate\(\s*(-?[0-9.]+)(?:[ ,]+(-?[0-9.]+)[ ,]+(-?[0-9.]+))?\s*\)`)
+	regularFnt *opentype.Font
+	boldFnt    *opentype.Font
+)
+
+func init() {
+	regularFnt, _ = opentype.Parse(goregular.TTF)
+	boldFnt, _ = opentype.Parse(gobold.TTF)
+}
+
+// SetFonts overrides the regular and bold faces used for <text>; call before
+// the first PNG. A nil argument keeps the current face for that weight. The
+// default faces (Go fonts) have no CJK coverage, so hosts rendering CJK
+// labels should pass system font faces instead.
+func SetFonts(regular, bold *opentype.Font) {
+	if regular != nil {
+		regularFnt = regular
+	}
+	if bold != nil {
+		boldFnt = bold
+	}
+}
+
+// drawText overlays the SVG's text elements onto img at the given scale.
+// Text inside the content group inherits that group's translate; text before
+// it (e.g. the title) does not.
+func drawText(img *image.RGBA, svg string, scale, rootSize float64) {
+	gx, gy, gIdx := 0.0, 0.0, -1
+	if loc := groupRe.FindStringSubmatchIndex(svg); loc != nil {
+		gx = numAttr(svg[loc[2]:loc[3]], "0")
+		gy = numAttr(svg[loc[4]:loc[5]], "0")
+		gIdx = loc[0]
+	}
+	for _, loc := range textRe.FindAllStringSubmatchIndex(svg, -1) {
+		ox, oy := 0.0, 0.0
+		if gIdx >= 0 && loc[0] > gIdx {
+			ox, oy = gx, gy
+		}
+		attrs := parseAttrs(svg[loc[2]:loc[3]])
+		inner := svg[loc[4]:loc[5]]
+		fill := colorOf(attrs["fill"])
+		size := sizeOf(attrs["font-size"], rootSize)
+		bold := attrs["font-weight"] == "bold"
+		anchor := attrs["text-anchor"]
+		dy := numAttr(attrs["dy"], "0") // baseline shift, e.g. dy="-2" on labels
+
+		if strings.Contains(inner, "<tspan") {
+			for _, ts := range tspanRe.FindAllStringSubmatch(inner, -1) {
+				ta := parseAttrs(ts[1])
+				x := numAttr(ta["x"], attrs["x"])
+				y := numAttr(ta["y"], attrs["y"]) + numAttr(ta["dy"], "0") + dy
+				drawString(img, xhtml.UnescapeString(ts[2]), x+ox, y+oy, size, scale, fill, bold, anchor)
+			}
+			continue
+		}
+		x := numAttr(attrs["x"], "0")
+		y := numAttr(attrs["y"], "0") + dy
+		if m := rotateRe.FindStringSubmatch(attrs["transform"]); m != nil {
+			ang, _ := strconv.ParseFloat(m[1], 64)
+			cx, cy := x, y
+			if m[2] != "" {
+				cx, _ = strconv.ParseFloat(m[2], 64)
+				cy, _ = strconv.ParseFloat(m[3], 64)
+			}
+			drawRotated(img, xhtml.UnescapeString(inner), x+ox, y+oy, (cx+ox)*scale, (cy+oy)*scale, ang, size, scale, fill, bold, anchor)
+			continue
+		}
+		drawString(img, xhtml.UnescapeString(inner), x+ox, y+oy, size, scale, fill, bold, anchor)
+	}
+}
+
+// buildFace returns a font face sized to px and the advance width of s, shrunk
+// to the width the layout reserved (svgutil.TextWidth) so glyphs stay in place.
+func buildFace(s string, size, scale float64, bold bool) (font.Face, float64) {
+	fnt := regularFnt
+	if bold {
+		fnt = boldFnt
+	}
+	if fnt == nil {
+		return nil, 0
+	}
+	px := size * scale
+	face, err := opentype.NewFace(fnt, &opentype.FaceOptions{Size: px, DPI: 72})
+	if err != nil {
+		return nil, 0
+	}
+	adv := float64(font.MeasureString(face, s)) / 64
+	if reserved := svgutil.TextWidth(s, size) * scale; reserved > 0 && adv > reserved {
+		_ = face.Close()
+		px *= reserved / adv
+		face, err = opentype.NewFace(fnt, &opentype.FaceOptions{Size: px, DPI: 72})
+		if err != nil {
+			return nil, 0
+		}
+		adv = float64(font.MeasureString(face, s)) / 64
+	}
+	return face, adv
+}
+
+// drawRotated renders s horizontally to a temp image, then rotates it by ang
+// degrees about (px,py) onto img -- oksvg ignores text transforms, so we apply
+// the rotation ourselves (used for vertical axis labels).
+func drawRotated(img *image.RGBA, s string, x, y, px, py, ang, size, scale float64, fill color.Color, bold bool, anchor string) {
+	if strings.TrimSpace(s) == "" {
+		return
+	}
+	face, adv := buildFace(s, size, scale, bold)
+	if face == nil {
+		return
+	}
+	defer func() { _ = face.Close() }()
+
+	startX := x * scale
+	switch anchor {
+	case "middle":
+		startX -= adv / 2
+	case "end":
+		startX -= adv
+	}
+	ascent := size * scale * 0.8
+	descent := size * scale * 0.3
+	topY := y*scale - ascent
+	tw := int(math.Ceil(adv)) + 2
+	th := int(math.Ceil(ascent+descent)) + 2
+	if tw <= 0 || th <= 0 {
+		return
+	}
+	tmp := image.NewRGBA(image.Rect(0, 0, tw, th))
+	d := &font.Drawer{Dst: tmp, Src: image.NewUniform(fill), Face: face}
+	d.Dot = fixed.Point26_6{X: 0, Y: fixed.Int26_6(ascent * 64)}
+	d.DrawString(s)
+
+	rad := ang * math.Pi / 180
+	cos, sin := math.Cos(rad), math.Sin(rad)
+	s2d := f64.Aff3{
+		cos, -sin, cos*(startX-px) - sin*(topY-py) + px,
+		sin, cos, sin*(startX-px) + cos*(topY-py) + py,
+	}
+	xdraw.BiLinear.Transform(img, s2d, tmp, tmp.Bounds(), xdraw.Over, nil)
+}
+
+func drawString(img *image.RGBA, s string, x, y, size, scale float64, fill color.Color, bold bool, anchor string) {
+	if strings.TrimSpace(s) == "" {
+		return
+	}
+	face, adv := buildFace(s, size, scale, bold)
+	if face == nil {
+		return
+	}
+	defer func() { _ = face.Close() }()
+
+	d := &font.Drawer{Dst: img, Src: image.NewUniform(fill), Face: face}
+	dx := x * scale
+	switch anchor {
+	case "middle":
+		dx -= adv / 2
+	case "end":
+		dx -= adv
+	}
+	d.Dot = fixed.Point26_6{X: fixed.Int26_6(dx * 64), Y: fixed.Int26_6(y * scale * 64)}
+	d.DrawString(s)
+}
+
+func parseAttrs(s string) map[string]string {
+	m := map[string]string{}
+	for _, a := range attrRe.FindAllStringSubmatch(s, -1) {
+		m[a[1]] = a[2]
+	}
+	return m
+}
+
+func numAttr(v, fallback string) float64 {
+	if v == "" {
+		v = fallback
+	}
+	f, _ := strconv.ParseFloat(v, 64)
+	return f
+}
+
+func sizeOf(v string, root float64) float64 {
+	if v == "" {
+		if root > 0 {
+			return root
+		}
+		return 14
+	}
+	f, _ := strconv.ParseFloat(v, 64)
+	if f <= 0 {
+		return 14
+	}
+	return f
+}
+
+// colorOf parses #rgb/#rrggbb (defaulting to black). "none" stays transparent.
+func colorOf(s string) color.Color {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return color.Black
+	}
+	if !strings.HasPrefix(s, "#") {
+		return color.Black
+	}
+	hex := s[1:]
+	if len(hex) == 3 {
+		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+	}
+	if len(hex) != 6 {
+		return color.Black
+	}
+	v, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return color.Black
+	}
+	return color.RGBA{R: byte(v >> 16), G: byte(v >> 8), B: byte(v), A: 255}
+}
