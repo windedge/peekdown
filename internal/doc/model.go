@@ -4,6 +4,7 @@
 package doc
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
@@ -27,6 +28,12 @@ type Model struct {
 	images   map[int][]Image
 	rows     []Block
 	runs     []Run
+	// tableRowBySlice maps a slice block's model index to the parser
+	// indices of the rows it shows, the header repeated at the front;
+	// plain (unsplit) tables answer TableRows from the parser's tree.
+	// sliceByIndex holds the block each slice index carries.
+	tableRowBySlice map[int][]int
+	sliceByIndex    map[int]Block
 	// leafRun maps each leaf block that contributes text to a run to the
 	// run's index and the rune offset of its text within the run's text.
 	leafRun map[int]leafOffset
@@ -60,8 +67,17 @@ type Block struct {
 	Task    parser.Task
 	Level   int
 	Align   []parser.Align
-	// Start and End are the block's bytes in the source.
+	// Start and End are the block's bytes in the source. A table slice
+	// reports the whole table's span: the slices share it.
 	Start, End int
+	// TableSlice marks a table the scan split: the block is one window
+	// of a parser table too big to render in one row. TableTotalRows is
+	// the whole table's body rows, the repeated header not counted, and
+	// TableSliceFirst the body row the slice opens with, for a "rows
+	// N-M of T" note.
+	TableSlice      bool
+	TableTotalRows  int
+	TableSliceFirst int
 }
 
 // Heading is a heading of the document, for the outline and anchors.
@@ -81,14 +97,32 @@ type Image struct {
 // New parses src with the app's extension set, GFM plus footnotes: the
 // set the shell opens files with, minus the math extensions so math
 // stays literal text.
-func New(src string) *Model { return NewWith(src, parser.GFM|parser.ExtFootnotes) }
+func New(src string) *Model {
+	m, _ := NewWith(src, parser.GFM|parser.ExtFootnotes)
+	return m
+}
 
-// NewWith parses src with extensions, as GFM with footnotes.
-func NewWith(src string, ext parser.Extensions) *Model {
+// NewWith parses src with extensions, as GFM with footnotes. A parse
+// that panics leaves an empty document and reports it: the viewer must
+// never take the process down over one file.
+func NewWith(src string, ext parser.Extensions) (m *Model, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			m, err = empty(ext), fmt.Errorf("parse failed: %v", r)
+		}
+	}()
 	front, body := stripped(src)
 	d := parser.New(ext)
 	d.Set(body)
-	return wrap(d, front)
+	return wrap(d, front), nil
+}
+
+// empty builds an empty model with ext, what a failed parse falls back
+// to.
+func empty(ext parser.Extensions) *Model {
+	d := parser.New(ext)
+	d.Set("")
+	return wrap(d, nil)
 }
 
 // stripped returns src's frontmatter and the body after it: the one
@@ -111,9 +145,15 @@ func wrap(d *parser.Document, front *Frontmatter) *Model {
 // drops: its matches name text the new document need not have. A
 // frontmatter is stripped first, so the parser, the blocks and the runs
 // see the body alone.
-func (m *Model) Set(src string) {
+func (m *Model) Set(src string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("parse failed: %v", r)
+		}
+	}()
 	front, body := stripped(src)
 	m.setBody(front, body)
+	return nil
 }
 
 // setBody swaps the source and its frontmatter in one step, the search
@@ -138,6 +178,23 @@ func (m *Model) Source() string { return m.doc.Source() }
 // root is the parser's block 0, which holds the document.
 const root = 0
 
+// tableSliceRows caps a table slice's rows, the header repeated at the
+// front. A whole table renders inside the view List's one row callback,
+// so a giant table means one giant per-frame layout: by-stars.md's
+// 1281-row block allocated 54 MB per frame (mygo's text layouts, capped
+// at 4096, evict and reshape every frame). 64 rows keep a slice's text
+// near 10 KB, well inside the layout cache's budget.
+const tableSliceRows = 64
+
+// tableSplitRows is the row count that splits a table, and
+// tableSplitBytes the byte size that does: past either, a table's text
+// could crowd the layout cache in one row, so the scan cuts it into
+// slices of tableSliceRows.
+const (
+	tableSplitRows  = 64
+	tableSplitBytes = 256 << 10
+)
+
 // Len returns the number of top-level blocks.
 func (m *Model) Len() int { return len(m.rows) }
 
@@ -150,11 +207,29 @@ func (m *Model) Version() uint64 { return m.version }
 func (m *Model) Blocks() []Block { return m.rows }
 
 // Block returns block i.
-func (m *Model) Block(i int) Block { return m.blockAt(i) }
+func (m *Model) Block(i int) Block {
+	if b, ok := m.sliceAt(i); ok {
+		return b
+	}
+	return m.blockAt(i)
+}
+
+// sliceAt returns the slice block of model index i and whether i names
+// one: tableRowBySlice maps the model's virtual indices to their rows,
+// and sliceByIndex to the block they carry.
+func (m *Model) sliceAt(i int) (Block, bool) {
+	slice, ok := m.sliceByIndex[i]
+	if !ok {
+		return Block{}, false
+	}
+	slice.Index = i
+	return slice, true
+}
 
 // RowBlock returns the block row r shows: the r-th top-level block. Rows
 // are 0-based and dense, block indices are the parser's and skip the
-// nested blocks.
+// nested blocks - except a split table's slices, whose indices are the
+// model's own and live in tableRowBySlice.
 func (m *Model) RowBlock(r int) Block { return m.rows[r] }
 
 func (m *Model) blockAt(i int) Block {
@@ -228,13 +303,29 @@ func (m *Model) Info(i int) string { return m.doc.Block(i).Info() }
 func (m *Model) Language(i int) string { return m.doc.Block(i).Language() }
 
 // Children iterates the blocks nested in block i, a list, a quote or a
-// table's rows.
+// table's rows. A table slice answers with its own window's rows, the
+// header first: the slice is the model's block, the rows the parser's.
 func (m *Model) Children(i int) func(yield func(int) bool) {
+	if rows, ok := m.tableRowBySlice[i]; ok {
+		return func(yield func(int) bool) {
+			for _, r := range rows {
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}
 	return m.doc.Children(i)
 }
 
-// TableRows returns the rows of table block i, the first its header.
+// TableRows returns the rows of table block i, the first its header. A
+// split table's slice answers with its own window, the header repeated
+// at the front; the rows are the parser's, so Plain and TableCells read
+// them as any other.
 func (m *Model) TableRows(i int) []int {
+	if rows, ok := m.tableRowBySlice[i]; ok {
+		return rows
+	}
 	var rows []int
 	m.doc.Children(i)(func(j int) bool {
 		if m.doc.Block(j).Kind == parser.TableRow {
@@ -288,9 +379,15 @@ func (m *Model) scan() {
 	m.images = nil
 	m.rows = nil
 	m.runs = nil
+	m.tableRowBySlice = nil
+	m.sliceByIndex = nil
 	m.leafRun = nil
 	seen := map[string]bool{}
 	for i := range m.doc.Children(root) {
+		if b := m.doc.Block(i); b.Kind == parser.Table && m.splitsTable(i, b) {
+			m.appendTableSlices(i, b)
+			continue
+		}
 		m.rows = append(m.rows, m.blockAt(i))
 		b := m.doc.Block(i)
 		switch b.Kind {
@@ -318,6 +415,68 @@ func (m *Model) scan() {
 		}
 		m.appendRuns(i)
 	}
+}
+
+// splitsTable reports whether table i's text and rows crowd one List
+// row enough to split it: more rows than the slice holds, or more bytes
+// than the split budget.
+func (m *Model) splitsTable(i int, b *parser.Block) bool {
+	return b.End-b.Start >= tableSplitBytes || len(m.TableRows(i)) >= tableSplitRows
+}
+
+// appendTableSlices splits parser table i into consecutive slice blocks:
+// each a window of tableSliceRows rows, the header repeated at the front
+// so a slice renders as a table of its own. The slices' indices are the
+// model's own (a dense range past the parser's), held in tableRowBySlice
+// and sliceByIndex, which answer TableRows, Block and Children for them;
+// the runs treat each slice as a table in its own right.
+func (m *Model) appendTableSlices(i int, b *parser.Block) {
+	all := m.TableRows(i)
+	header, body := all[0], all[1:]
+	base := m.nextSliceIndex()
+	for first := 0; first < len(body); {
+		end := min(first+tableSliceRows-1, len(body))
+		window := append([]int{header}, body[first:end]...)
+		idx := base + len(m.tableRowBySlice)
+		if m.tableRowBySlice == nil {
+			m.tableRowBySlice = map[int][]int{}
+		}
+		m.tableRowBySlice[idx] = window
+		if m.sliceByIndex == nil {
+			m.sliceByIndex = map[int]Block{}
+		}
+		slice := Block{
+			Index: idx, Kind: parser.Table, Align: b.Align,
+			Start: b.Start, End: b.End,
+			TableSlice: true,
+			// The body rows of the whole table, the repeated header not
+			// counted.
+			TableTotalRows:  len(body),
+			TableSliceFirst: first,
+		}
+		m.rows = append(m.rows, slice)
+		m.sliceByIndex[idx] = slice
+		var leaves []leafText
+		for _, row := range window {
+			for _, cell := range m.TableCells(row) {
+				leaves = append(leaves, leafText{cell, m.Plain(cell)})
+			}
+		}
+		m.appendRun(idx, joined(leaves, " "), leaves)
+		first = end
+	}
+}
+
+// nextSliceIndex returns the first model index free for a slice: past
+// the parser's blocks and any slices already made.
+func (m *Model) nextSliceIndex() int {
+	n := m.doc.Len()
+	for k := range m.tableRowBySlice {
+		if k >= n {
+			n = k + 1
+		}
+	}
+	return n
 }
 
 // topLevelImages returns the images of in whose run of top-level content

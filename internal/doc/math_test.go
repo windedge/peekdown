@@ -10,7 +10,7 @@ import (
 // Math stays plain text (ticket #17): parsed without the math extensions,
 // the run table holds the literal characters, so search finds them.
 func TestMathLiteralStaysInRunsAndSearch(t *testing.T) {
-	m := NewWith("before\n\n$$E=mc^2$$\n\nPrice $x+y$ today.\n", parser.GFM|parser.ExtFootnotes)
+	m, _ := NewWith("before\n\n$$E=mc^2$$\n\nPrice $x+y$ today.\n", parser.GFM|parser.ExtFootnotes)
 	found := false
 	for _, r := range m.Runs() {
 		if strings.Contains(r.Text, "$$E=mc^2$$") {
@@ -34,7 +34,7 @@ func TestMathLiteralStaysInRunsAndSearch(t *testing.T) {
 // are empty, the note living in the blocks nested in it, so the run is
 // the leaves joined, and the search finds the note where it renders.
 func TestRunsOfFootnoteDefinition(t *testing.T) {
-	m := NewWith("Alpha[^1] beta.\n\n[^1]: the note text\n", parser.GFM|parser.ExtFootnotes)
+	m, _ := NewWith("Alpha[^1] beta.\n\n[^1]: the note text\n", parser.GFM|parser.ExtFootnotes)
 	var def *Block
 	for k := range m.Blocks() {
 		if m.Blocks()[k].Kind == parser.FootnoteDefinition {

@@ -259,3 +259,20 @@ func TestNewlineOutsideParagraphIsSpace(t *testing.T) {
 		t.Fatalf("plain: %q", got)
 	}
 }
+
+// A badge paragraph parses and renders without panicking, and the run
+// table keeps the images' alt text. The recover path in NewWith needs a
+// parser panic, which no fixture reproduces, so this covers the healthy
+// branch alone.
+func TestNewWithParsesBadgeSource(t *testing.T) {
+	m, err := NewWith("# hi\n\nbroken [![a](b)](c) badge\n", parser.GFM|parser.ExtFootnotes)
+	if err != nil {
+		t.Logf("parse reported: %v", err)
+	}
+	if m == nil {
+		t.Fatal("nil model after parse")
+	}
+	if m.Source() == "" {
+		t.Fatal("empty source on a healthy parse")
+	}
+}

@@ -5,6 +5,7 @@ package view
 
 import (
 	"cmp"
+	"fmt"
 	"image"
 	"slices"
 	"strings"
@@ -328,7 +329,10 @@ func (st *State) Row(c *ui.Context, m *doc.Model, r int) {
 		handle = &ui.Handle{}
 		st.rowHandles[block] = handle
 	}
-	row := ui.Column(c)
+	// The end padding keeps the row's text clear of the scrollbar: the
+	// shell pads the content's right edge 0 so the scrollbar hugs the
+	// window's edge, and the clearance happens here instead.
+	row := ui.Column(c).Padding(0, 16, 0, 0)
 	row.Bind(handle)
 	row.Children(func() {
 		Render(c, m, st, block)
@@ -368,13 +372,10 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 		// The note's text renders here, its children in muted text; the
 		// reference in the citing text is only the [^label] mark.
 		st.mutedChildren(c, m, i)
-	case parser.MathBlock:
-		// No math rendering (ticket #17): the block's TeX shows as plain
-		// source, LaTeX typesetting later work.
-		st.sourceBlock(c, m, i)
 	default:
-		// An unmapped block kind degrades to its source lines, so content
-		// never vanishes into a blank row.
+		// A math block (no TeX typesetting, ticket #17), an unmapped or
+		// unknown kind degrades to its source lines, so content never
+		// vanishes into a blank row.
 		st.sourceBlock(c, m, i)
 	}
 }
@@ -491,8 +492,28 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 // image's alt text stays in the text, as PlainText's flat walk over the
 // inline array emits it too.
 func walk(in []parser.Inline, s style, fn func(text string, code, link bool, dest string)) {
-	for k := 0; k < len(in); k++ {
+	walkRange(in, 0, len(in), s, fn)
+}
+
+// walkRange walks in[from:to) as one subtree in style s. A node's Next
+// names the flat array the parser returned for the whole block, not the
+// slice a recursion holds, so the children's range reads the absolute
+// Next and clamps it to the subtree's end: a nested image inside a link,
+// [![a](b)](c), keeps the flat Next of its parent's end, and slicing a
+// slice off it with the raw Next both panics and loses nodes. An end
+// past the subtree's own (a malformed table the streaming parser has
+// not healed yet) clamps too, so a bad index can never reach out of the
+// array the walk was handed.
+func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, code, link bool, dest string)) {
+	for k := from; k < to; k++ {
 		n := &in[k]
+		end := n.Next
+		if end > to {
+			end = to
+		}
+		if end < k {
+			end = k
+		}
 		switch n.Kind {
 		case parser.Text:
 			fn(n.Text, false, false, "")
@@ -503,16 +524,16 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 		case parser.Code:
 			fn(n.Text, true, false, "")
 		case parser.Emphasis:
-			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, fn)
+			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, fn)
 		case parser.Strong:
-			walk(in[k+1:n.Next], style{size: s.size, weight: 700, color: s.color, underline: s.underline}, fn)
+			walkRange(in, k+1, end, style{size: s.size, weight: 700, color: s.color, underline: s.underline}, fn)
 		case parser.Link:
-			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
+			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, true, n.Dest)
 			})
 		case parser.Image:
 			// Its description stands for it within the text.
-			walk(in[k+1:n.Next], style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
+			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
 				fn(text, code, false, "")
 			})
 		case parser.HTML, parser.Math:
@@ -790,22 +811,28 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 		}
 		mermaidErrorLine(c, err)
 	}
-	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
-	box.Children(func() {
-		lines := splitLines(m.Lines(i))
-		spans := make([]ui.Span, 0, len(lines))
-		for k, line := range lines {
-			if k > 0 {
-				spans = append(spans, ui.Span{Text: "\n"})
-			}
-			var toks []editor.Token
-			if lang != nil && lang.Tokenizer != nil {
-				toks, _ = lang.Tokenizer.Tokenize(line, 0, nil)
-			}
-			spans = append(spans, codeSpans(line, toks, ct, t.Text)...)
+	lines := splitLines(m.Lines(i))
+	spans := make([]ui.Span, 0, len(lines))
+	for k, line := range lines {
+		if k > 0 {
+			spans = append(spans, ui.Span{Text: "\n"})
 		}
-		st.monoBox(c, i, 0, spans)
-	})
+		var toks []editor.Token
+		if lang != nil && lang.Tokenizer != nil {
+			toks, _ = lang.Tokenizer.Tokenize(line, 0, nil)
+		}
+		spans = append(spans, codeSpans(line, toks, ct, t.Text)...)
+	}
+	st.monoPanel(c, i, spans)
+}
+
+// monoPanel wraps spans in the surface box the source-like blocks share:
+// a code block's tokenized lines, a math block's TeX, the source of any
+// kind the view does not map.
+func (st *State) monoPanel(c *ui.Context, i int, spans []ui.Span) {
+	t := c.Theme()
+	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
+	box.Children(func() { st.monoBox(c, i, 0, spans) })
 }
 
 // monoBox lays spans out as one no-wrap monospaced text in a surface box,
@@ -848,12 +875,8 @@ func splitLines(s string) []string {
 // sourceBlock renders block i's raw lines as plain monospaced gray text:
 // an unmapped or unstyled block kind falls back to its source.
 func (st *State) sourceBlock(c *ui.Context, m *doc.Model, i int) {
-	t := c.Theme()
-	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
-	box.Children(func() {
-		spans := []ui.Span{{Text: strings.Trim(m.Lines(i), "\n"), Color: t.TextMuted}}
-		st.monoBox(c, i, 0, spans)
-	})
+	spans := []ui.Span{{Text: strings.Trim(m.Lines(i), "\n"), Color: c.Theme().TextMuted}}
+	st.monoPanel(c, i, spans)
 }
 
 // mutedChildren draws the blocks nested in i in muted text, the note of
@@ -872,7 +895,12 @@ func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
 	})
 }
 
-// table builds a Markdown table as a grid of rows.
+// table builds a Markdown table as a grid of rows. A split table's slice
+// renders as a table of its own: the header it carries opens bold on a
+// surface, and a "rows N-M of T" note when the table has more slices.
+// Slices measure their columns independently, so the widths can drift a
+// little between slices of one table; the header repeats, which keeps
+// the drift readable.
 func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 	t := c.Theme()
 	widths := tableColumnWidths(m, i)
@@ -897,6 +925,11 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 				}
 			})
 			first = false
+		}
+		if b := m.Block(i); b.TableSlice && b.TableSliceFirst > 0 {
+			from, to := b.TableSliceFirst+1, b.TableSliceFirst+len(m.TableRows(i))-1
+			ui.Text(c, fmt.Sprintf("rows %d-%d of %d", from, to, b.TableTotalRows)).
+				TextColor(t.TextMuted).FontSize(12).Padding(4, 10)
 		}
 	})
 }

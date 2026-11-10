@@ -127,7 +127,7 @@ func TestSpansMatchPlainInsideQuoteAndList(t *testing.T) {
 // Semantic corners where walk used to drift from parser.PlainText: hard
 // breaks are spaces and a footnote reference shows as [^label].
 func TestWalkFollowsPlainTextSemantics(t *testing.T) {
-	m := doc.NewWith("Alpha.  \nBeta[^1] gamma.\n\n[^1]: the note\n", parser.ExtFootnotes)
+	m, _ := doc.NewWith("Alpha.  \nBeta[^1] gamma.\n\n[^1]: the note\n", parser.ExtFootnotes)
 	blocks := m.Blocks()
 	if len(blocks) == 0 || blocks[0].Kind != parser.Paragraph {
 		t.Fatalf("blocks %+v, want a paragraph first", blocks)
@@ -163,5 +163,44 @@ func TestWalkDropsLinkDestinationButKeepsText(t *testing.T) {
 	}
 	if strings.Contains(joined, "https://example.com/guide") {
 		t.Fatalf("walk %q holds the destination", joined)
+	}
+}
+
+// A nested image inside a link, [![alt](img)](dest), keeps the flat Next
+// of the link's end on its image node, past the slice one recursion of
+// walk sees. walk used to slice the children off the raw Next and panic
+// out of the frame, taking the process down on any document with a
+// badge: a 16MB README of badges quit on open, no dialog, no log.
+func TestWalkNestedImageInsideLinkDoesNotPanic(t *testing.T) {
+	src := "[![Build Status](https://ci.example.com/badge.svg)](https://ci.example.com/pipeline)"
+	m := doc.New(src + "\n")
+	var st State
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		Render(c, m, &st, m.RowBlock(0).Index)
+	}, 400, 300)
+	// The alt text of the image, the link's only child, still renders.
+	if !tt.HasText("Build Status") {
+		t.Fatalf("nested image's alt text lost: texts %v", tt.Texts())
+	}
+}
+
+// A run of badges in one paragraph, the shape by-stars.md opens with.
+func TestWalkBadgeRowRendersAltText(t *testing.T) {
+	src := `[![A](a.svg)](x) [![B](b.svg)](y) [![C](c.svg)](z)` + "\n"
+	m := doc.New(src)
+	var st State
+	ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		Render(c, m, &st, m.RowBlock(0).Index)
+	}, 600, 300)
+	run := ""
+	if r := m.RunOf(m.RowBlock(0).Index); r != nil {
+		run = r.Text
+	}
+	for _, want := range []string{"A", "B", "C"} {
+		if !strings.Contains(run, want) {
+			t.Fatalf("run %q misses alt %q", run, want)
+		}
 	}
 }

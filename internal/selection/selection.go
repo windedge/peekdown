@@ -78,35 +78,52 @@ func (s Selection) Text(text string) string {
 
 // TextOf returns the selected text of the document, from the run table:
 // the endpoints are (top-level block, rune offset in that block's run
-// text). Runs in between join whole; a run's text joins the others with a
-// newline. Endpoints whose block carries no run (say, a lone image) count
-// as empty; offsets past a run's end clamp to it.
+// text). The run table is walked in its own order, the document's
+// reading order: a split table's slices carry block numbers past the
+// document's length (virtual indices), so sorting endpoints by number
+// would break Select All at the first slice. Runs in between join
+// whole; a run's text joins the others with a newline. Endpoints whose
+// block carries no run (say, a lone image) count as empty; offsets
+// past a run's end clamp to it.
 func (s Selection) TextOf(m *doc.Model) string {
+	runs := m.Runs()
 	start, end := s.Order()
+	startAt, endAt := clampRun(runs, start.Block), clampRun(runs, end.Block)
+	if startAt > endAt {
+		startAt, endAt = endAt, startAt
+	}
 	var b strings.Builder
-	startRun := true
-	for _, run := range m.Runs() {
-		if run.Block < start.Block {
-			continue
+	for k := startAt; k <= endAt; k++ {
+		if k > startAt {
+			b.WriteString("\n")
 		}
-		if run.Block > end.Block {
-			break
-		}
+		run := runs[k]
 		from, to := 0, runeLen(run.Text)
-		if run.Block == start.Block {
+		// An endpoint's own run cuts at its offset; a runless block the
+		// endpoint named leaves the run beside it whole.
+		if k == startAt && run.Block == start.Block {
 			from = max(from, start.Offset)
 		}
-		if run.Block == end.Block {
-			to = min(to, end.Offset)
-		}
-		if startRun {
-			startRun = false
-		} else {
-			b.WriteString("\n")
+		if k == endAt && run.Block == end.Block {
+			to = min(to, max(0, end.Offset))
 		}
 		b.WriteString(m.RunText(run, from, to))
 	}
 	return b.String()
+}
+
+// clampRun returns the run index holding block, the nearest one around
+// it: the first run past it when the table has none of it (a runless
+// block), the last run when the block sits past the table's end, and
+// 0 for a table of no runs. Ordering by this index reads the document
+// in the run table's order, which is the reading order.
+func clampRun(runs []doc.Run, block int) int {
+	for k := range runs {
+		if runs[k].Block >= block {
+			return k
+		}
+	}
+	return max(len(runs)-1, 0)
 }
 
 // SelectWord returns the selection of the word at p within text.

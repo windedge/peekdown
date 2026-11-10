@@ -1,10 +1,13 @@
 package shell
 
 import (
+	"context"
 	"fmt"
 	"image"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/windedge/peekdown/internal/doc"
 	"github.com/windedge/peekdown/internal/mermaid"
+	"github.com/windedge/peekdown/internal/selection"
 	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/internal/view"
 )
@@ -30,9 +34,21 @@ type Tab struct {
 // Every platform specific operation is injected as a func so headless tests
 // never touch mygo.App / mygo.Dialog / mygo.Theme.
 type Shell struct {
-	Tabs    []Tab
-	Active  int
-	Sidebar struct {
+	Tabs   []Tab
+	Active int
+	// ContentHook, when set, runs at the head of Content with the frame's
+	// Context: tests read element Bounds out of band with it. Production
+	// wiring leaves it nil.
+	ContentHook func(*ui.Context)
+	// watchCancel stops the auto-refresh watcher, watchDone closes once
+	// its watches released, watchKick carries the tabs' paths to the loop
+	// after a change and watchHits names the files the watcher saw change
+	// for the next frame to reload on the main thread.
+	watchCancel context.CancelFunc
+	watchDone   chan struct{}
+	watchKick   chan []string
+	watchHits   chan string
+	Sidebar     struct {
 		Width   float32
 		Tab     int // 0 files, 1 outline
 		Visible bool
@@ -60,6 +76,16 @@ type Shell struct {
 	ClearRecent   func() error
 	OpenDialog    func() ([]string, error)
 	OnTitleChange func(string)
+	// OnWatchReload repaints the window after the watcher reloaded a
+	// tab; the host also toasts here. Nil skips it.
+	OnWatchReload func()
+	// OnOpenError reports a parse failure over an opened file: the host
+	// toasts it. Nil logs only.
+	OnOpenError func(string)
+
+	// openError is the last failed open's parse error; the window title
+	// carries it until the next successful open clears it.
+	openError string
 
 	activeSeen int
 	synced     bool
@@ -92,16 +118,32 @@ func (s *Shell) OpenFile(path string) error {
 	}
 	// Math extensions stay off (ticket #17): TeX shows as plain text, as
 	// the Rust version shows it; LaTeX typesetting is later work.
-	m := doc.NewWith(string(data), parser.GFM|parser.ExtFootnotes)
+	// A failed parse still opens a tab, over an empty document with the
+	// error toasted: never leave the user without the app.
+	m, parseErr := doc.NewWith(string(data), parser.GFM|parser.ExtFootnotes)
+	if parseErr != nil {
+		log.Printf("peekdown: parse %s: %v", path, parseErr)
+		if s.OnOpenError != nil {
+			s.OnOpenError(parseErr.Error())
+		}
+	}
 	abs := path
 	if a, err := filepath.Abs(path); err == nil {
 		abs = a
 	}
 	s.Tabs = append(s.Tabs, Tab{Path: abs, Model: m})
+	if parseErr != nil {
+		// The error title sticks until the next successful open; a plain
+		// emitTitle here would overwrite it at once.
+		s.openError = parseErr.Error()
+	} else {
+		s.openError = ""
+	}
 	s.Active = len(s.Tabs) - 1
 	if s.AddRecent != nil {
 		_ = s.AddRecent(abs)
 	}
+	s.syncWatch()
 	s.emitTitle()
 	return nil
 }
@@ -123,12 +165,50 @@ func (s *Shell) OpenDrop(paths []string) {
 	}
 }
 
+// freeHeapThreshold is the closed document size over which closing a tab
+// asks the runtime to hand the freed pages to the OS right away. Go's
+// scavenger returns them lazily, so without this the working set in the
+// task manager stays at the closed document's peak for a while.
+const freeHeapThreshold = 1 << 20
+
+// modelBytes estimates the memory a tab's document holds: the source with
+// its parse, twice over, the parse caching the text several ways. It gates
+// debug.FreeOSMemory, a full GC with a sweep, over small documents.
+func modelBytes(t *Tab) int {
+	if t == nil || t.Model == nil {
+		return 0
+	}
+	return 2 * len(t.Model.Source())
+}
+
+// releaseTabs zeroes the closed tabs the slice holds and, when any held
+// a big document, hands the freed heap to the OS once for the whole
+// batch: a scavenger run per tab would stutter the frame for seconds.
+// Main thread only, so no sweep can race the next operation's
+// allocations. It reports whether it ran the scavenger.
+func (s *Shell) releaseTabs(tabs ...Tab) bool {
+	big := false
+	for i := range tabs {
+		if modelBytes(&tabs[i]) >= freeHeapThreshold {
+			big = true
+		}
+	}
+	clear(tabs)
+	if big {
+		debug.FreeOSMemory()
+	}
+	return big
+}
+
 // CloseTab closes tab i and picks a sensible neighbour as the new active tab.
 func (s *Shell) CloseTab(i int) {
 	if i < 0 || i >= len(s.Tabs) {
 		return
 	}
+	closed := s.Tabs[i]
 	s.Tabs = append(s.Tabs[:i], s.Tabs[i+1:]...)
+	s.clearTabTail()
+	s.releaseTabs(closed)
 	switch {
 	case len(s.Tabs) == 0:
 		s.Active = -1
@@ -142,6 +222,7 @@ func (s *Shell) CloseTab(i int) {
 	if s.Active >= len(s.Tabs) {
 		s.Active = len(s.Tabs) - 1
 	}
+	s.syncWatch()
 	s.emitTitle()
 }
 
@@ -150,20 +231,42 @@ func (s *Shell) CloseOthers(i int) {
 	if i < 0 || i >= len(s.Tabs) {
 		return
 	}
+	closed := make([]Tab, 0, len(s.Tabs)-1)
+	for k := range s.Tabs {
+		if k != i {
+			closed = append(closed, s.Tabs[k])
+		}
+	}
 	keep := s.Tabs[i]
 	s.Tabs = []Tab{keep}
 	s.Active = 0
+	s.releaseTabs(closed...)
+	s.syncWatch()
 	s.emitTitle()
 }
 
 // CloseAll removes every tab.
 func (s *Shell) CloseAll() {
+	closed := s.Tabs
 	s.Tabs = nil
 	s.Active = -1
+	s.releaseTabs(closed...)
+	s.syncWatch()
 	s.emitTitle()
 }
 
-// emitTitle reports the window title to the host, once the tab state settled.
+// clearTabTail zeroes the slots of the tabs slice past its length: the
+// shift in CloseTab leaves the closed tab in the backing array's tail,
+// where the GC keeps tracing it, and the closed document's memory never
+// frees (by-stars.md: 56 MB held after the tab closed).
+func (s *Shell) clearTabTail() {
+	tail := s.Tabs[len(s.Tabs):cap(s.Tabs)]
+	clear(tail)
+}
+
+// emitTitle reports the window title to the host, once the tab state
+// settled. A failed open's error title holds until the next successful
+// open clears it.
 func (s *Shell) emitTitle() {
 	if s.OnTitleChange != nil {
 		s.OnTitleChange(s.Title())
@@ -178,12 +281,50 @@ func (s *Shell) ActiveTab() *Tab {
 	return &s.Tabs[s.Active]
 }
 
-// Title is the window title.
+// Title is the window title. The title of the last failed open shows
+// until the next successful open replaces it.
 func (s *Shell) Title() string {
+	if s.openError != "" {
+		return "Could not read this document: " + s.openError + " - Peekdown"
+	}
 	if t := s.ActiveTab(); t != nil {
 		return t.Path + " - Peekdown"
 	}
 	return "Peekdown"
+}
+
+// CopySelection writes the active tab's selected text to the clipboard
+// and reports whether there was any; the menu's Copy and Ctrl+C run it.
+// write is the host's clipboard writer, so tests stub it; nil uses
+// mygo's system clipboard, callable from any goroutine.
+func (s *Shell) CopySelection(write func(string)) bool {
+	tab := s.ActiveTab()
+	if tab == nil || !tab.State.HasSelection() {
+		return false
+	}
+	text := tab.State.SelectionText(tab.Model)
+	if text == "" {
+		return false
+	}
+	if write == nil {
+		mygo.Clipboard.WriteText(text)
+	} else {
+		write(text)
+	}
+	return true
+}
+
+// SelectAll selects the active tab's whole document, as Ctrl+A does:
+// the selection model's All, from the first run's start to the last's
+// end. It reports whether a document was there to select.
+func (s *Shell) SelectAll() bool {
+	tab := s.ActiveTab()
+	if tab == nil || tab.Model == nil {
+		return false
+	}
+	sel := selection.All(tab.Model)
+	tab.State.SetSelection(sel.Anchor, sel.Caret)
+	return true
 }
 
 // tabIndex returns the index of the first tab with path, or -1.
@@ -237,6 +378,7 @@ func (s *Shell) RestoreFromSettings(t settings.Settings) {
 	s.SetSidebarWidth(float32(t.SidebarWidth))
 	s.Sidebar.Visible = t.SidebarVisible
 	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
+	s.applyAutoRefresh()
 	if s.SetTheme != nil {
 		s.SetTheme(themeSource(t.Theme))
 	}
@@ -268,6 +410,7 @@ func (s *Shell) Apply(t settings.Settings) error {
 	if t.SidebarWidth > 0 {
 		s.SetSidebarWidth(float32(t.SidebarWidth))
 	}
+	s.applyAutoRefresh()
 	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
 	if s.SetTheme != nil {
 		s.SetTheme(themeSource(t.Theme))
@@ -319,6 +462,9 @@ func (s *Shell) View(c *ui.Context) {
 
 // Content renders the active document.
 func (s *Shell) Content(c *ui.Context) {
+	if s.ContentHook != nil {
+		s.ContentHook(c)
+	}
 	t := c.Theme()
 	tab := s.ActiveTab()
 	if tab == nil || tab.Model == nil {
@@ -344,10 +490,13 @@ func (s *Shell) Content(c *ui.Context) {
 	tab.State.LoadMermaid = func(src string, theme mermaid.Theme, scale float64) (image.Image, error) {
 		return s.mermaidCache.Render(src, theme, scale)
 	}
-	ui.Box(c).Fill().Padding(16, 24).Children(func() {
+	// The right edge is 0 so the list's own scrollbar sits at the window's
+	// edge instead of floating 24 DIPs in; the rows give the text its
+	// clearance on the right themselves.
+	ui.Box(c).Fill().Padding(16, 0, 16, 24).Children(func() {
 		// Mirrors the Rust reader: centered caps the column at 900 DIPs,
-		// full_width lets it follow the window; the padding keeps the
-		// text off the window edges either way.
+		// full_width lets it follow the window; the left padding keeps the
+		// text off the window's edge and the rows pad the right.
 		col := ui.Column(c).Grow(1)
 		if s.Saved.Layout == "full_width" {
 			col.AlignSelf(ui.Stretch)

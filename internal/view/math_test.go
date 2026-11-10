@@ -16,7 +16,7 @@ const mathSample = "# Math samples\n\n$$E=mc^2$$\n\nInline \\(a+b\\) here.\n\n\\
 
 func renderExt(t *testing.T, src string, ext parser.Extensions) (*doc.Model, *ui.Tester, *State) {
 	t.Helper()
-	m := doc.NewWith(src, ext)
+	m, _ := doc.NewWith(src, ext)
 	state := &State{AnchorOf: anchorsOf(m)}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
@@ -57,7 +57,7 @@ func TestMathStaysLiteral(t *testing.T) {
 func TestRenderUnknownBlockFallsBackToSource(t *testing.T) {
 	const src = "before\n\n$$\nE=mc^2\n$$\n\nafter\n"
 	ext := parser.GFM | parser.ExtFootnotes | parser.ExtMath
-	m := doc.NewWith(src, ext)
+	m, _ := doc.NewWith(src, ext)
 	math := -1
 	for _, b := range m.Blocks() {
 		if b.Kind == parser.MathBlock {

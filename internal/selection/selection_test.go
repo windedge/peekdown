@@ -1,6 +1,7 @@
 package selection
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -195,4 +196,72 @@ func TestParagraphOffsets(t *testing.T) {
 	if len(plain) != 23 {
 		t.Fatalf("length: %d", len(plain))
 	}
+}
+
+// A split table's slices sit at virtual block indices past the parser's
+// blocks, so a Select All over such a document walks the run table by
+// position, not by block number: every slice's text must land in the
+// copy, slices included that block-number sorting would skip.
+func TestTextOfSplitTableSelectAllCoversEverySlice(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# Head\n\n| c1 | c2 |\n|---|---|\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&b, "| r%d | x%d |\n", i, i)
+	}
+	m := doc.New(b.String())
+	slices := 0
+	for _, blk := range m.Blocks() {
+		if blk.TableSlice {
+			slices++
+		}
+	}
+	if slices < 3 {
+		t.Fatalf("%d slices, want a split table of at least 3", slices)
+	}
+	s := All(m)
+	got := s.TextOf(m)
+	if !strings.Contains(got, "Head") {
+		t.Fatalf("TextOf lost the heading: %q", firstN(got, 120))
+	}
+	// The first and the last body row name the first and the last slice.
+	if !strings.Contains(got, "r0") || !strings.Contains(got, "x0") {
+		t.Fatalf("TextOf lost the table's first body row: %q", firstN(got, 120))
+	}
+	if !strings.Contains(got, "r199") || !strings.Contains(got, "x199") {
+		t.Fatalf("TextOf lost the table's last body row: %q", lastN(got, 120))
+	}
+	// Every slice's run appears in reading order, before the run the
+	// block numbers would sort it after.
+	runs := m.Runs()
+	lastSlice := -1
+	for k, r := range runs {
+		if r.Block > m.Len() {
+			lastSlice = k
+		}
+	}
+	if lastSlice < 0 {
+		t.Fatal("no slice run in the run table")
+	}
+	if lastSlice != len(runs)-1 {
+		t.Fatalf("slice run at %d of %d, want last", lastSlice, len(runs))
+	}
+	if !strings.Contains(got, "r63") || !strings.Contains(got, "r126") {
+		t.Fatalf("TextOf lost a middle slice's rows")
+	}
+}
+
+func firstN(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		r = r[:n]
+	}
+	return string(r)
+}
+
+func lastN(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		r = r[len(r)-n:]
+	}
+	return string(r)
 }
