@@ -59,7 +59,9 @@ func FrontmatterElement(c *ui.Context, front *doc.Frontmatter, copy func(string)
 		return
 	}
 	t := c.Theme()
-	table := ui.Column(c).Background(t.Surface).Radius(6).Border(1, t.Border).Padding(10).MarginY(6).
+	// The right padding doubles as the scrollbar clearance: the shell
+	// pads the content's right edge 0, so the card pads its own right.
+	table := ui.Column(c).Background(t.Surface).Radius(6).Border(1, t.Border).Padding(10, 26, 10, 10).MarginY(6).
 		AlignSelf(ui.Stretch).MinWidth(0)
 	table.Children(func() {
 		// The header: the format tag on the left, the copy button on the
