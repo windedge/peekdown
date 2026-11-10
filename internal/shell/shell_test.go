@@ -27,7 +27,10 @@ func newShell(t *testing.T) (*Shell, string) {
 	}
 
 	s := New()
+	// Auto refresh off: watcher tests turn it on themselves, the rest of
+	// the suite must not race a live watcher goroutine.
 	saved := settings.Default()
+	saved.AutoRefresh = false
 	recent := []string{}
 	s.Load = func() settings.Settings { return saved }
 	s.Save = func(v settings.Settings) error {

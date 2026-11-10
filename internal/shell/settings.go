@@ -31,6 +31,9 @@ func (s *Shell) settingsDialog(c *ui.Context) {
 			ui.Text(c, "Scroll Speed")
 			ui.Slider(c, &s.Draft.ScrollSpeed, 0.5, 3.0)
 
+			ui.Switch(c, &s.Draft.AutoRefresh).Label("Auto Refresh")
+			ui.Text(c, "Auto Refresh")
+
 			ui.Switch(c, &s.Draft.InertiaScroll)
 			ui.Text(c, "Smooth Scrolling")
 

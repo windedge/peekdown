@@ -21,7 +21,12 @@ type app struct {
 }
 
 // view renders the shell.
-func (a *app) view(c *ui.Context) { a.shell.View(c) }
+func (a *app) view(c *ui.Context) {
+	// A watched file's changes reload before the frame reads the model:
+	// the view never sees a half-swapped document.
+	a.shell.ApplyWatchReloads()
+	a.shell.View(c)
+}
 
 // title is the window title, as the Rust implementation shows it.
 func (a *app) title() string { return a.shell.Title() }
@@ -154,6 +159,23 @@ func newShell(a *app) *shell.Shell {
 		})
 	}
 	s.OnTitleChange = a.OnTitleChange
+	// The watcher reloads a tab off the main thread; the window only
+	// repaints when told, so the reload must ask for a frame.
+	s.OnWatchReload = func() {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
+	// A parse failure over an opened file is logged and shown in the
+	// window's title area via the title; the empty tab still opens, so
+	// the app never loses the window. A toast needs a frame context,
+	// which the shell's Content wires per tab. The shell also holds the
+	// error for its own Title until the next successful open.
+	s.OnOpenError = func(msg string) {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
 	return s
 }
 

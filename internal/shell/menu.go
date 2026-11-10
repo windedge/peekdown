@@ -45,6 +45,23 @@ func BuildMenu(s *Shell) *mygo.Menu {
 				}
 			}},
 		}},
+		{Label: "Edit", Submenu: []*mygo.MenuItem{
+			// The document's selection is the app's own model, so Copy
+			// and Select All live here; the menu accelerator is the only
+			// key route that works without focus in a text field.
+			{Label: "Copy", Accelerator: "CmdOrCtrl+C", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
+				s.CopySelection(nil)
+				if w != nil {
+					w.Invalidate()
+				}
+			}},
+			{Label: "Select All", Accelerator: "CmdOrCtrl+A", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
+				s.SelectAll()
+				if w != nil {
+					w.Invalidate()
+				}
+			}},
+		}},
 		{Label: "View", Submenu: []*mygo.MenuItem{
 			{Label: "Find", Accelerator: "CmdOrCtrl+F", Click: func(_ *mygo.MenuItem, w *mygo.Window) {
 				s.OpenSearch()

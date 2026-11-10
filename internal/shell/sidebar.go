@@ -3,7 +3,9 @@ package shell
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -33,8 +35,8 @@ func (s *Shell) filesPane(c *ui.Context) {
 			ui.Text(c, "No file open").FontSize(12).TextColor(t.TextMuted)
 			return
 		}
-		dir := filepath.Dir(tab.Path)
-		entries, err := os.ReadDir(dir)
+		dir := s.explorerRoot(tab.Path)
+		entries, err := readSortedEntries(dir, s.Saved.ExplorerSortMode)
 		if err != nil {
 			ui.Text(c, err.Error()).FontSize(12).TextColor(t.TextMuted)
 			return
@@ -55,6 +57,102 @@ func (s *Shell) filesPane(c *ui.Context) {
 			}
 		}
 	})
+}
+
+// explorerRoot is the directory the file pane shows: the document's own
+// directory, or the project root found upward from it when the settings
+// ask for one. Without a root it falls back to the document's directory.
+func (s *Shell) explorerRoot(path string) string {
+	dir := filepath.Dir(path)
+	if s.Saved.ExplorerRootMode != "project_root" {
+		return dir
+	}
+	if root := findProjectRoot(dir, s.Saved.ProjectRootMarkers); root != "" {
+		return root
+	}
+	return dir
+}
+
+// findProjectRoot walks from dir upward to the first directory holding
+// any marker, a plain stat per marker per level, as the Rust version
+// does. Returns "" when none matches above dir.
+func findProjectRoot(dir string, markers []string) string {
+	for {
+		for _, m := range markers {
+			m = strings.TrimSpace(m)
+			if m == "" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// readSortedEntries lists dir and orders it as the sort setting asks:
+// directories first, then by name or modification time. The pane reads
+// the directory every frame (a known leftover), so the sort runs there
+// too; the lists are small, and entries sort without allocating.
+func readSortedEntries(dir, mode string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	byTime := mode == "time_asc" || mode == "time_desc"
+	if byTime {
+		type stamp struct {
+			entry os.DirEntry
+			mod   time.Time
+		}
+		rows := make([]stamp, 0, len(entries))
+		for _, e := range entries {
+			mod := time.Time{}
+			if info, err := e.Info(); err == nil {
+				mod = info.ModTime()
+			}
+			rows = append(rows, stamp{e, mod})
+		}
+		slices.SortFunc(rows, func(a, b stamp) int {
+			if a.entry.IsDir() != b.entry.IsDir() {
+				if a.entry.IsDir() {
+					return -1
+				}
+				return 1
+			}
+			if c := a.mod.Compare(b.mod); c != 0 {
+				if mode == "time_desc" {
+					return -c
+				}
+				return c
+			}
+			return strings.Compare(a.entry.Name(), b.entry.Name())
+		})
+		out := make([]os.DirEntry, len(rows))
+		for i, v := range rows {
+			out[i] = v.entry
+		}
+		return out, nil
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		if a.IsDir() != b.IsDir() {
+			if a.IsDir() {
+				return -1
+			}
+			return 1
+		}
+		c := strings.Compare(a.Name(), b.Name())
+		if mode == "name_desc" {
+			return -c
+		}
+		return c
+	})
+	return entries, nil
 }
 
 func (s *Shell) outlinePane(c *ui.Context) {
