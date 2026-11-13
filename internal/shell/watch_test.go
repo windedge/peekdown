@@ -105,9 +105,7 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 		t.Fatal("switch on before the click, want off")
 	}
 
-	if err := tt.Click("Auto Refresh"); err != nil {
-		t.Fatal(err)
-	}
+	clickSwitch(tt, sw)
 	tt.Frame()
 	if !s.Draft.AutoRefresh {
 		t.Fatal("click did not flip the draft")
@@ -123,11 +121,12 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 		t.Fatal("watcher not started after save")
 	}
 
-	// Turning it back off stops the watcher again.
+	// Turning it back off stops the watcher again. The row's visible label
+	// shares the switch's name, so the second click targets the box too.
 	s.OpenSettings()
 	tt.Frame()
-	if err := tt.Click("Auto Refresh"); err != nil {
-		t.Fatal(err)
+	if off, ok := tt.AccessByRole(ui.RoleSwitch, "Auto Refresh"); ok {
+		clickSwitch(tt, off)
 	}
 	if err := tt.Click("Save"); err != nil {
 		t.Fatal(err)
@@ -136,6 +135,13 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 	if s.Saved.AutoRefresh || s.watchCancel != nil {
 		t.Fatalf("after save: auto refresh %v, watcher running %v", s.Saved.AutoRefresh, s.watchCancel != nil)
 	}
+}
+
+// clickSwitch clicks the switch's own box: the row's visible label sits
+// to its left and does not toggle it.
+func clickSwitch(tt *ui.Tester, sw ui.AccessInfo) {
+	b := sw.Bounds
+	tt.ClickAt(b.X+b.W/2, b.Y+b.H/2)
 }
 
 func TestApplyTogglesAutoRefresh(t *testing.T) {

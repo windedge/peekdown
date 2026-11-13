@@ -1,0 +1,57 @@
+package shell
+
+import (
+	"image/png"
+	"os"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// TestFontPickerScreenshot writes the popover's screenshots for a human
+// to look at; skipped unless PEEKDOWN_SHOT is set, so the regular test
+// runs stay headless-clean. The hover pass moves the pointer over the
+// list, so the overlay scroll bar shows and the shot proves the check
+// clear of it.
+func TestFontPickerScreenshot(t *testing.T) {
+	if os.Getenv("PEEKDOWN_SHOT") == "" {
+		t.Skip("set PEEKDOWN_SHOT=1 to write the popover screenshots")
+	}
+	s, _ := newShell(t)
+	tt := s.renderSize(t, 1400, 880)
+	s.OpenSettings()
+	tt.Frame()
+	if err := tt.Click("Choose Content Font"); err != nil {
+		t.Fatalf("content font trigger: %v", err)
+	}
+	tt.Frame()
+	writePng(t, tt, "C:/tmp/fontpicker-popover.png")
+
+	// Hover the list: the bar shows while the pointer is over the
+	// container, and at the top its thumb stands beside the checked
+	// row's check, the overlap the user saw.
+	panel, _ := tt.Find("Font picker")
+	tt.Move(panel.X+panel.W/2, panel.Y+panel.H/2)
+	tt.Frame()
+	writePng(t, tt, "C:/tmp/fontpicker-popover-scrollbar.png")
+
+	tt.Type("ari")
+	tt.Frame()
+	writePng(t, tt, "C:/tmp/fontpicker-popover-filtered.png")
+}
+
+func writePng(t *testing.T, tt *ui.Tester, path string) {
+	t.Helper()
+	img := tt.Image()
+	if img == nil {
+		t.Fatalf("no image for %s", path)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatalf("encode %s: %v", path, err)
+	}
+}

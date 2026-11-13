@@ -138,14 +138,21 @@ func (s *Shell) trackMatch(tab *Tab) {
 	s.search.Count = searchStatus(m)
 }
 
-// searchView builds the bar: the field, the count, the toggles, the
-// arrows and the close, above the document, under the tabs.
+// searchCountWidth is the count's fixed width in DIPs, wide enough for
+// the longest text the bar shows at 12pt.
+const searchCountWidth float32 = 72
+
+// The bar's float: an absolute overlay near the body's top right corner.
+// As a flow child it pushed the document down on every open; the body
+// container clips it, and its own rectangle is all that takes the pointer.
 func (s *Shell) searchView(c *ui.Context) {
 	t := c.Theme()
-	bar := ui.Row(c).Height(32).AlignSelf(ui.Stretch).Padding(2, 8).Gap(6).
-		Background(t.Surface).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).AlignItems(ui.Center)
+	bar := ui.Row(c).Absolute().Top(8).Right(12).MaxWidth(600).
+		Padding(4, 8).Gap(6).
+		Background(t.Surface).BorderWidth(1).BorderColor(t.Border).Radius(8).
+		Shadow(0, 2, 8, 0, t.Border).ZIndex(10).AlignItems(ui.Center)
 	bar.Children(func() {
-		in := ui.TextInput(c, &s.search.Query).Grow(1).Height(24).Placeholder("Find")
+		in := ui.TextInput(c, &s.search.Query).Width(180).Grow(1).Placeholder("Find")
 		// The keys that edit nothing go to the search: Enter and
 		// Shift+Enter move, Escape closes. A taken key does not reach
 		// the input, so Enter submits nothing and Escape clears not.
@@ -170,7 +177,15 @@ func (s *Shell) searchView(c *ui.Context) {
 		if in.Changed() {
 			s.runSearch(s.ActiveTab())
 		}
-		ui.Text(c, s.search.Count).FontSize(12).TextColor(t.TextMuted).Shrink(0)
+
+		// Fixed width: the count comes and goes ("no results", "bad
+		// pattern", "3/17") and must not resize the float, which sits
+		// right-anchored, taking its left edge and every button with
+		// it. 72 holds the widest text at 12pt ("12345/10000");
+		// right-aligned it reads as a counter beside the arrows.
+		ui.Text(c, s.search.Count).FontSize(12).TextColor(t.TextMuted).
+			Width(searchCountWidth).Shrink(0).SingleLine().Ellipsis("…").
+			TextAlign(ui.End)
 
 		toggle(c, "search-case", "Match case", "Aa", s.search.CaseSensitive, s.flipCase)
 		toggle(c, "search-regex", "Regular expression", ".*", s.search.Regex, s.flipRegex)
@@ -200,18 +215,25 @@ func (s *Shell) rerun() {
 	}
 }
 
-// toggle is a pressed-state icon button: it paints the theme's
-// InactiveAccent while the state it toggles is on.
+// toggle is a pressed-state icon button: on it paints the selection's
+// pale accent and tints the glyph, since InactiveAccent is unset (fully
+// transparent) in the stock themes and an on state there draws no fill.
 func toggle(c *ui.Context, key any, label, glyph string, on bool, flip func()) {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).Label(label).Size(24, 24).Padding(0).Radius(5)
 	b.AlignItems(ui.Center).Justify(ui.Center).FocusRing(false)
 	if on {
-		b.Background(t.InactiveAccent)
+		b.Background(t.Selection)
 	} else if b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
-	b.Children(func() { ui.Text(c, glyph).FontSize(12) })
+	b.Children(func() {
+		if on {
+			ui.Text(c, glyph).FontSize(12).TextColor(t.Accent)
+			return
+		}
+		ui.Text(c, glyph).FontSize(12)
+	})
 	if b.Clicked() {
 		flip()
 	}

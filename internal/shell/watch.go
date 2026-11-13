@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -49,6 +50,9 @@ func (s *Shell) reloadTab(tab *Tab) bool {
 	tab.State.ClearSelection()
 	tab.State.Matches = nil
 	tab.State.Current = -1
+	// The file's name or timestamp may have changed with its content:
+	// drop its directory's listing so the tree reads it again.
+	s.invalidateTreeDir(filepath.Dir(tab.Path))
 	return true
 }
 

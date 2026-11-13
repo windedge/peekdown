@@ -64,7 +64,10 @@ func TestContentWiresMermaidCache(t *testing.T) {
 	}
 
 	// A tab opened elsewhere is topped up with the same shared loader.
-	if err := s.OpenFile(filepath.Join(dir, "m.md")); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "m2.md"), []byte(mermaidDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(filepath.Join(dir, "m2.md")); err != nil {
 		t.Fatal(err)
 	}
 	second := s.ActiveTab()
