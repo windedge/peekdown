@@ -13,7 +13,7 @@ func TestEmptyView(t *testing.T) {
 	if !tt.HasText("Welcome to Peekdown") {
 		t.Fatalf("texts %q: want the welcome title", tt.Texts())
 	}
-	if !tt.HasText("Drop a Markdown file here") {
+	if !tt.HasText("Or drag and drop files \u2022 Ctrl+O to open") {
 		t.Fatalf("texts %q: want the drop hint", tt.Texts())
 	}
 }

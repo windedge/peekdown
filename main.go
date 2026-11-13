@@ -59,6 +59,9 @@ func (a *app) adopt(w *mygo.Window) {
 	if w == nil {
 		return
 	}
+	// The window controls are the system's, drawn in the app's bar: a dark
+	// bar under the default light ones would show light glyphs on it.
+	a.syncWindowButtons()
 	a.showOpen()
 	// Files dropped on the window open as tabs, the markdown ones only.
 	w.OnFileDrop(func(e *mygo.FileDropEvent) {
@@ -121,6 +124,16 @@ func themeSource(theme string) mygo.ThemeSource {
 	}
 }
 
+// syncWindowButtons draws the system's window controls in the bar's
+// colors, from the theme the shell holds: the light or dark the bar
+// paints, not the system's appearance the window defaults to.
+func (a *app) syncWindowButtons() {
+	if a.win == nil {
+		return
+	}
+	a.win.SetWindowButtonsTheme(themeSource(a.shell.Saved.Theme))
+}
+
 // loadSettings reads the settings from the user data directory.
 func loadSettings() settings.Settings {
 	dir, err := mygo.App.Path(mygo.PathUserData)
@@ -147,7 +160,12 @@ func newShell(a *app) *shell.Shell {
 		}
 		return settings.Save(filepath.Join(dir, settings.FileName), v)
 	}
-	s.SetTheme = mygo.Theme.SetSource
+	s.SetTheme = func(src mygo.ThemeSource) {
+		mygo.Theme.SetSource(src)
+		// The bar's background follows the app's appearance; the system's
+		// controls over it keep their own, so they are told separately.
+		a.syncWindowButtons()
+	}
 	s.Recent = mygo.App.RecentDocuments
 	s.AddRecent = mygo.App.AddRecentDocument
 	s.ClearRecent = mygo.App.ClearRecentDocuments
@@ -159,6 +177,15 @@ func newShell(a *app) *shell.Shell {
 		})
 	}
 	s.OnTitleChange = a.OnTitleChange
+	// The Help menu's pages open in the system's browser; quitting closes
+	// the window, which ends the run loop, as the system's close button
+	// does.
+	s.OpenURL = func(url string) { mygo.Shell.OpenExternal(url) }
+	s.CloseWindow = func() {
+		if a.win != nil {
+			a.win.Close()
+		}
+	}
 	// The watcher reloads a tab off the main thread; the window only
 	// repaints when told, so the reload must ask for a frame.
 	s.OnWatchReload = func() {
@@ -196,13 +223,15 @@ func main() {
 	})
 	mygo.App.WhenReady(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{
-			Title:     a.title(),
-			Width:     1024,
-			Height:    768,
-			MinWidth:  480,
-			MinHeight: 320,
-			StateKey:  "main",
-			Content:   ui.View(a.view),
+			Title:          a.title(),
+			Width:          1024,
+			Height:         768,
+			MinWidth:       480,
+			MinHeight:      320,
+			StateKey:       "main",
+			TitleBarStyle:  mygo.TitleBarHidden,
+			TitleBarHeight: shell.TitleBarHeight,
+			Content:        ui.View(a.view),
 		})
 		a.adopt(w)
 		mygo.App.SetMenu(shell.BuildMenu(s))
