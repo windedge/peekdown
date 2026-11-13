@@ -43,50 +43,109 @@ func copyLabel(front *doc.Frontmatter) string {
 // runs table holds the document body alone, so the card is outside the
 // selection and the search, and copying goes through the button.
 func Frontmatter(c *ui.Context, m *doc.Model, st *State) {
-	FrontmatterElement(c, m.Front, st.CopyFrontmatter)
-}
-
-// FrontmatterElement builds the card of front, nil for none, so a test
-// can drive it alone. copy runs on click, with Raw; nil copy hides the
-// button. The callback answers the click inside the build, the way a
-// button's click is answered anywhere, so the clipboard and the toast
-// the host keeps never hold a stale element.
-func FrontmatterElement(c *ui.Context, front *doc.Frontmatter, copy func(string)) {
+	front := m.Front
 	if front == nil || (front.Format != "toml" && !front.Broken && len(front.Order) == 0) {
 		// No card for no frontmatter, and none for an empty or
 		// comment-only block: it parses fine but has no rows to show,
 		// and a bare frame over the body reads as a bug.
 		return
 	}
-	t := c.Theme()
-	// The right padding doubles as the scrollbar clearance: the shell
-	// pads the content's right edge 0, so the card pads its own right.
-	table := ui.Column(c).Background(t.Surface).Radius(6).Border(1, t.Border).Padding(10, 26, 10, 10).MarginY(6).
-		AlignSelf(ui.Stretch).MinWidth(0)
+	tk := st.tokens(c)
+	if st.ContentWidth > 0 {
+		// The card sits above the list, outside its rows, so it takes the
+		// same cap and centering the rows do; otherwise it would span the
+		// window over a column capped at ContentWidth.
+		ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MaxWidth(st.ContentWidth).Children(func() {
+				frontmatterCard(c, front, st.CopyFrontmatter, tk, st)
+			})
+		})
+		return
+	}
+	frontmatterCard(c, front, st.CopyFrontmatter, tk, st)
+}
+
+// frontmatterCard builds the card: a bordered key-value table for a YAML
+// mapping, a plain monospace code block for TOML or a YAML that failed to
+// parse. The copy button runs copy with the block's Raw text; nil copy
+// hides the button.
+func frontmatterCard(c *ui.Context, front *doc.Frontmatter, copy func(string), tk docTokens, st *State) {
+	// The right margin is the rows' scrollbar clearance: the card sits
+	// above the list, outside the rows that carry it, so it takes the
+	// same room and its frame ends where their text does. The inner 26 is
+	// the card's own padding, keeping the copy button off the frame. The
+	// bottom margin is the block gap the rows take, so the card clears
+	// the first block below it.
+	table := ui.Column(c).Background(tk.panel).Radius(tk.radius).Border(1, tk.border).Padding(10, 26, 10, 10).
+		Margin(0, rowClearance, blockGap, 0).AlignSelf(ui.Stretch).MinWidth(0).
+		Label("Frontmatter card")
 	table.Children(func() {
-		// The header: the format tag on the left, the copy button on the
-		// right. The tag names the language a code block below would
+		// The header: the format tag on the left, the fold and copy buttons
+		// on the right. The tag names the language a code block below would
 		// carry; the Rust version labels its fallback the same way.
 		head := ui.Row(c).Gap(8).AlignItems(ui.Center).AlignSelf(ui.Stretch)
 		head.Children(func() {
-			ui.Text(c, front.Format).FontSize(11).TextColor(t.TextMuted).Grow(1)
-			if copy != nil && ui.Button(c, copyLabel(front)).FontSize(11).Clicked() {
+			ui.Text(c, front.Format).FontSize(11).TextColor(tk.muted).Grow(1)
+			// The fold toggle shows the state the card is in: an up
+			// chevron while open, a down one while folded. The click only
+			// flips a bool, but the flip must reach this build for the
+			// frame to change, and mygo rebuilds a pass when a click was
+			// taken, so the fold applies the same frame.
+			fold := ui.ButtonBase(c.Key("frontmatter-fold")).Label("Toggle frontmatter").Padding(4).Radius(5).
+				AlignItems(ui.Center).Tooltip("Toggle frontmatter")
+			if fold.Hovered() {
+				fold.Background(c.Theme().SurfaceHover)
+			}
+			icon := chevronUpIcon
+			if st.FrontCollapsed {
+				icon = chevronDownIcon
+			}
+			fold.Children(func() {
+				ui.Icon(c, icon).Size(12, 12).TextColor(tk.muted)
+			})
+			if fold.Clicked() {
+				st.FrontCollapsed = !st.FrontCollapsed
+			}
+			if copy == nil {
+				return
+			}
+			// The icon-only button matches the code block's copy button:
+			// the label keeps naming it for clicks and the screen reader,
+			// the tooltip says the action the icon alone does not. No
+			// copied feedback; the card sits outside the blocks the
+			// copied() bookkeeping indexes by. The copy works folded too:
+			// Raw is the block's text, nothing the fold hides.
+			label := copyLabel(front)
+			b := ui.ButtonBase(c).Label(label).Padding(4).Radius(5).
+				AlignItems(ui.Center).Tooltip(label)
+			if b.Hovered() {
+				b.Background(c.Theme().SurfaceHover)
+			}
+			b.Children(func() {
+				ui.Icon(c, copyIcon).Size(12, 12).TextColor(tk.muted)
+			})
+			if b.Clicked() {
 				copy(front.Raw)
 			}
 		})
+		if st.FrontCollapsed {
+			// Folded: the header alone. Copy still copies Raw, so nothing
+			// else survives the fold.
+			return
+		}
 		if front.Broken || front.Format == "toml" {
 			// No table for what has no key-value mapping: the raw lines
-			// as a monospace block, no token highlight (the fallback is
-			// a reader convenience, not an editor).
+			// as monospaced text at the code's size, no token highlight
+			// (the fallback is a reader convenience, not an editor).
 			text := strings.TrimRight(front.Raw, "\n")
 			if strings.TrimSpace(text) == "" {
 				text = " "
 			}
-			spans := []ui.Span{{Text: text, Color: t.TextMuted}}
-			ui.RichText(c, spans...).Font(fontMono).FontSize(13).NoWrap().MinWidth(0)
+			spans := []ui.Span{{Text: text, Color: tk.muted}}
+			ui.RichText(c, spans...).Font(tk.monoFamily()).FontSize(tk.monoSize).MinWidth(0)
 			return
 		}
-		rows(c, front, t)
+		rows(c, front, tk)
 	})
 }
 
@@ -95,11 +154,11 @@ func FrontmatterElement(c *ui.Context, front *doc.Frontmatter, copy func(string)
 // the rows share, so the values line up. A very wide key column is
 // capped at half the card, where the capped keys ellipsize rather than
 // crowd the values off the card.
-func rows(c *ui.Context, front *doc.Frontmatter, t *ui.Theme) {
+func rows(c *ui.Context, front *doc.Frontmatter, tk docTokens) {
 	keys := front.Order
 	widths := make([]float32, len(keys))
 	for i, key := range keys {
-		w, _ := ui.ShapeText(key, ui.Font{Family: fontMono, Size: 13}, 10000).Size()
+		w, _ := ui.ShapeText(key, ui.Font{Family: tk.monoFamily(), Size: tk.monoSize}, 10000).Size()
 		widths[i] = w
 	}
 	keyWidth := slices.Max(widths)
@@ -108,10 +167,12 @@ func rows(c *ui.Context, front *doc.Frontmatter, t *ui.Theme) {
 		r := ui.Row(c).Gap(fmKeyGap).AlignItems(ui.Start).AlignSelf(ui.Stretch).MinWidth(0)
 		r.Children(func() {
 			// The key in muted mono, its own fixed column: the value of
-			// every row starts at the same x.
-			ui.Text(c, key).Font(fontMono).FontSize(13).Width(keyWidth).TextColor(t.TextMuted).
+			// every row starts at the same x. The value keeps the mono
+			// face too, as the Rust version draws the card in mono.
+			ui.Text(c, key).Font(tk.monoFamily()).FontSize(tk.monoSize).Width(keyWidth).TextColor(tk.muted).
 				Shrink(0).MaxWidthPercent(50).SingleLine()
-			ui.Text(c, valueText(val)).FontSize(13).Grow(1).MinWidth(0).Tooltip(valueFull(val))
+			ui.Text(c, valueText(val)).Font(tk.monoFamily()).FontSize(tk.monoSize).TextColor(tk.text).
+				Grow(1).MinWidth(0).Tooltip(valueFull(val))
 		})
 	}
 }

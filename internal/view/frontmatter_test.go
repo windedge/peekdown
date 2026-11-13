@@ -182,6 +182,29 @@ func TestFrontmatterCopyButton(t *testing.T) {
 	}
 }
 
+// TestFrontmatterCopyButtonIsIconOnly checks the card's copy button
+// draws as a square icon, matching the code block's copy button: the
+// user read the "Copy YAML" word as noise next to the tooltip. The label
+// keeps naming it for clicks and the screen reader, so the size is the
+// only guard against the word growing back: a 12 icon, 4 padding and a
+// 1 border put it at 22x22, and a text label would blow the width past
+// 28.
+func TestFrontmatterCopyButtonIsIconOnly(t *testing.T) {
+	_, tt, st := frontCard(t, "---\ntitle: Note\n---\n\nbody\n")
+	st.CopyFrontmatter = func(string) {}
+	tt.Frame()
+	r, ok := tt.Find("Copy YAML")
+	if !ok {
+		t.Fatalf("texts %v: no copy button", texts(tt))
+	}
+	if d := r.W - r.H; d < -8 || d > 8 {
+		t.Fatalf("copy button %v: not square within 8 DIPs", r)
+	}
+	if r.W > 28 {
+		t.Fatalf("copy button %v wide, want the icon-only 28 cap", r)
+	}
+}
+
 // TestFrontmatterHiddenWithoutFront keeps the card out of documents that
 // open plainly.
 func TestFrontmatterHiddenWithoutFront(t *testing.T) {
@@ -193,5 +216,115 @@ func TestFrontmatterHiddenWithoutFront(t *testing.T) {
 	}, 480, 200)
 	if len(texts(tt)) != 0 {
 		t.Fatalf("texts %v: the empty card drew something", texts(tt))
+	}
+}
+
+// TestFrontmatterFoldToggle drives the card's fold button: open by
+// default, the click hides the rows and keeps the header, a second click
+// brings the rows back, and the flag rides the State so a per-tab fold
+// survives switching tabs.
+func TestFrontmatterFoldToggle(t *testing.T) {
+	_, tt, st := frontCard(t, "---\ntitle: Note\ndraft: true\n---\n\n# Body\n")
+	st.CopyFrontmatter = func(string) {}
+	tt.Frame()
+
+	// Open by default: the rows show and the flag is down.
+	if !has(tt, "Note") {
+		t.Fatalf("texts %v: the open card misses its rows", texts(tt))
+	}
+	if st.FrontCollapsed {
+		t.Fatal("the card starts folded")
+	}
+	full, ok := tt.Find("Frontmatter card")
+	if !ok {
+		t.Fatalf("texts %v: no card", texts(tt))
+	}
+
+	if err := tt.Click("Toggle frontmatter"); err != nil {
+		t.Fatalf("no fold button: %v in %v", err, texts(tt))
+	}
+	tt.Frame()
+	if has(tt, "Note") {
+		t.Fatalf("texts %v: the folded card still shows its rows", texts(tt))
+	}
+	if !has(tt, "Toggle frontmatter") || !has(tt, "Copy YAML") {
+		t.Fatalf("texts %v: the folded card lost its header", texts(tt))
+	}
+	folded, ok := tt.Find("Frontmatter card")
+	if !ok {
+		t.Fatalf("texts %v: the folded card vanished", texts(tt))
+	}
+	// Folded is the header row plus the card's padding and border: a
+	// chunk below the full card's height, at the same spot.
+	if folded.H >= full.H-8 {
+		t.Fatalf("folded card %v barely shrunk from %v", folded, full)
+	}
+	if folded.X != full.X || folded.Y != full.Y {
+		t.Fatalf("folded card %v moved from %v", folded, full)
+	}
+	if !st.FrontCollapsed {
+		t.Fatal("the fold click did not set FrontCollapsed")
+	}
+
+	// A second click unfolds: the rows come back where they were.
+	if err := tt.Click("Toggle frontmatter"); err != nil {
+		t.Fatalf("no unfold button: %v in %v", err, texts(tt))
+	}
+	tt.Frame()
+	if !has(tt, "Note") {
+		t.Fatalf("texts %v: the unfolded card misses its rows", texts(tt))
+	}
+	back, ok := tt.Find("Frontmatter card")
+	if !ok {
+		t.Fatalf("texts %v: the unfolded card vanished", texts(tt))
+	}
+	if back.H < full.H-8 {
+		t.Fatalf("unfolded card %v shorter than the original %v", back, full)
+	}
+	if st.FrontCollapsed {
+		t.Fatal("the unfold click did not clear FrontCollapsed")
+	}
+}
+
+// TestFrontmatterCopyWorksFolded keeps the copy button alive while the
+// card is folded: the raw text is not the rows the fold hides.
+func TestFrontmatterCopyWorksFolded(t *testing.T) {
+	m, tt, st := frontCard(t, "---\ntitle: Note\n---\n\n# Body\n")
+	var got string
+	st.CopyFrontmatter = func(s string) { got = s }
+	tt.Frame()
+	if err := tt.Click("Toggle frontmatter"); err != nil {
+		t.Fatalf("no fold button: %v in %v", err, texts(tt))
+	}
+	tt.Frame()
+	if !st.FrontCollapsed {
+		t.Fatal("the card did not fold")
+	}
+	if err := tt.Click("Copy YAML"); err != nil {
+		t.Fatalf("texts %v: no copy button folded: %v", texts(tt), err)
+	}
+	if got != m.Front.Raw {
+		t.Fatalf("folded copy got %q, want Raw %q", got, m.Front.Raw)
+	}
+}
+
+// TestFrontmatterTomlFoldsToo covers the code-block fallback: the fold
+// hides the raw lines, not only the key-value rows.
+func TestFrontmatterTomlFoldsToo(t *testing.T) {
+	_, tt, st := frontCard(t, "+++\ntitle = \"TOML Note\"\n+++\n\n# Body\n")
+	st.CopyFrontmatter = func(string) {}
+	tt.Frame()
+	if !has(tt, "title = \"TOML Note\"") {
+		t.Fatalf("texts %v: the TOML card misses its raw text", texts(tt))
+	}
+	if err := tt.Click("Toggle frontmatter"); err != nil {
+		t.Fatalf("no fold button: %v in %v", err, texts(tt))
+	}
+	tt.Frame()
+	if has(tt, "title = \"TOML Note\"") {
+		t.Fatalf("texts %v: the folded TOML card still shows its raw text", texts(tt))
+	}
+	if !has(tt, "toml") {
+		t.Fatalf("texts %v: the folded TOML card lost its tag", texts(tt))
 	}
 }
