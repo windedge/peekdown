@@ -36,8 +36,14 @@ type Model struct {
 	sliceByIndex    map[int]Block
 	// leafRun maps each leaf block that contributes text to a run to the
 	// run's index and the rune offset of its text within the run's text.
+	// A split table's repeated header cells are absent: the header is a
+	// visual copy each slice renders, so RunAt of a header cell would
+	// answer whichever slice appended last, not the slice it shows in.
 	leafRun map[int]leafOffset
-	version uint64
+	// linkTargets caches the blocks one link wraps, for LinkTargetOf; nil
+	// until the first ask after a scan.
+	linkTargets []linkTarget
+	version     uint64
 
 	// The search's state: the query it ran with, the matches in reading
 	// order and the one the user is on, -1 for none. Matches address the
@@ -125,6 +131,11 @@ func empty(ext parser.Extensions) *Model {
 	return wrap(d, nil)
 }
 
+// emptyModel is an empty model over the same extension set, for a Set
+// that panicked part way: the caller keeps its *Model, its state reset
+// to a consistent one.
+func emptyModel() *Model { return empty(parser.GFM | parser.ExtFootnotes) }
+
 // stripped returns src's frontmatter and the body after it: the one
 // place the header comes off the source, so the parser, the blocks and
 // the runs see the body alone.
@@ -152,17 +163,28 @@ func (m *Model) Set(src string) (err error) {
 		}
 	}()
 	front, body := stripped(src)
-	m.setBody(front, body)
-	return nil
+	return m.setBody(front, body)
 }
 
 // setBody swaps the source and its frontmatter in one step, the search
-// dropping: its matches name text the new document need not have.
-func (m *Model) setBody(front *Frontmatter, body string) {
+// dropping: its matches name text the new document need not have. A
+// panic inside the parser's incremental Set leaves the Model half
+// updated (new source and frontmatter, stale scan), so the recover
+// rewraps from scratch and reports it: the shell then holds a
+// self-consistent empty model that answers Len, RunOf and Plain, not one
+// whose caches name the text it no longer has.
+func (m *Model) setBody(front *Frontmatter, body string) (err error) {
 	m.Front = front
+	defer func() {
+		if r := recover(); r != nil {
+			*m = *emptyModel()
+			err = fmt.Errorf("parse failed: %v", r)
+		}
+	}()
 	m.doc.Set(body)
 	m.scan()
 	m.ClearSearch()
+	return nil
 }
 
 // Offset contract: the model's source is the body, whose line 1 is the
@@ -265,16 +287,6 @@ func (m *Model) AnchorBySlug(slug string) (int, bool) {
 	return 0, false
 }
 
-// HeadingBySlug returns the block of the heading whose anchor is slug.
-func (m *Model) HeadingBySlug(slug string) (int, bool) {
-	for _, h := range m.headings {
-		if m.anchors[h.BlockIndex] == slug {
-			return h.BlockIndex, true
-		}
-	}
-	return 0, false
-}
-
 // Plain returns the text of block i without its markup, breaks as spaces.
 func (m *Model) Plain(i int) string {
 	return parser.PlainText(m.doc.Inlines(i))
@@ -289,15 +301,6 @@ func (m *Model) Images(i int) []Image { return m.images[i] }
 
 // Lines returns the lines of block i, as a code block's.
 func (m *Model) Lines(i int) string { return m.doc.Lines(i) }
-
-// LineCount returns the number of lines of block i.
-func (m *Model) LineCount(i int) int { return m.doc.LineCount(i) }
-
-// Line returns line k of block i.
-func (m *Model) Line(i, k int) (string, int) { return m.doc.Line(i, k) }
-
-// Info returns a fenced code block's info string.
-func (m *Model) Info(i int) string { return m.doc.Block(i).Info() }
 
 // Language returns the language a fenced code block names.
 func (m *Model) Language(i int) string { return m.doc.Block(i).Language() }
@@ -382,6 +385,7 @@ func (m *Model) scan() {
 	m.tableRowBySlice = nil
 	m.sliceByIndex = nil
 	m.leafRun = nil
+	m.linkTargets = nil
 	seen := map[string]bool{}
 	for i := range m.doc.Children(root) {
 		if b := m.doc.Block(i); b.Kind == parser.Table && m.splitsTable(i, b) {
@@ -462,7 +466,18 @@ func (m *Model) appendTableSlices(i int, b *parser.Block) {
 				leaves = append(leaves, leafText{cell, m.Plain(cell)})
 			}
 		}
-		m.appendRun(idx, joined(leaves, " "), leaves)
+		// The header repeats in every window but its cells are one parser
+		// block apiece, so leafRun holds them once and the last write wins:
+		// RunAt of a header cell would then name the last slice's run and
+		// cut every other slice's header highlight at the wrong runes. The
+		// header is the same visual copy every slice draws, so no slice
+		// maps it: a header cell's RunAt misses and the view's overlay
+		// leaves it unhighlighted rather than cutting another slice's run.
+		skip := map[int]bool{}
+		for _, cell := range m.TableCells(header) {
+			skip[cell] = true
+		}
+		m.appendRunAt(idx, 0, skip, joined(leaves, " "), leaves)
 		first = end
 	}
 }
@@ -695,6 +710,17 @@ func (m *Model) collectLeaves(i int, leaves *[]leafText) {
 }
 
 func (m *Model) appendRun(block int, text string, leaves []leafText) {
+	m.appendRunAt(block, 0, nil, text, leaves)
+}
+
+// appendRunAt is appendRun with the run's rune offset in an enclosing
+// run, the offset a nested table slice's leaves already carry: the text
+// still lands in the run table whole, the leaves record where in it
+// their own text starts. skip records the leaves whose mapping the run
+// does not take: a split table's repeated header cells, which the view
+// renders as a visual copy and overlays address per slice through the
+// slice's own run (see appendTableSlices).
+func (m *Model) appendRunAt(block, at int, skip map[int]bool, text string, leaves []leafText) {
 	if text == "" {
 		return
 	}
@@ -705,12 +731,13 @@ func (m *Model) appendRun(block int, text string, leaves []leafText) {
 		m.leafRun = map[int]leafOffset{}
 	}
 	run := len(m.runs) - 1
-	at := 0
 	for k, l := range leaves {
 		if k > 0 {
 			at++
 		}
-		m.leafRun[l.block] = leafOffset{run: run, offset: at}
+		if !skip[l.block] {
+			m.leafRun[l.block] = leafOffset{run: run, offset: at}
+		}
 		at += len([]rune(l.text))
 	}
 }

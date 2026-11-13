@@ -165,17 +165,6 @@ func TestAnchor(t *testing.T) {
 	}
 }
 
-func TestHeadingBySlug(t *testing.T) {
-	m := parseSample(t)
-	i, ok := m.HeadingBySlug("second-heading")
-	if !ok || m.Block(i).Kind != parser.Heading {
-		t.Fatalf("HeadingBySlug: %v %v", i, ok)
-	}
-	if _, ok := m.HeadingBySlug("nope"); ok {
-		t.Fatal("unknown slug found")
-	}
-}
-
 func TestBlockSourceAndText(t *testing.T) {
 	m := parseSample(t)
 	i := m.Blocks()[3].Index // the paragraph with the link
@@ -274,5 +263,44 @@ func TestNewWithParsesBadgeSource(t *testing.T) {
 	}
 	if m.Source() == "" {
 		t.Fatal("empty source on a healthy parse")
+	}
+}
+
+// TestSetRecoveryLeavesConsistentModel forces the panic a broken parse
+// would raise, by taking the parser document away: setBody's recover must
+// leave a Model that still answers the reader's questions, and Set must
+// report the failure rather than a silent success over an empty document.
+func TestSetRecoveryLeavesConsistentModel(t *testing.T) {
+	m := New("# title\n\nbody text\n")
+	m.doc = nil
+	err := m.Set("# other\n\nmore text\n")
+	if err == nil {
+		t.Fatal("Set over a broken parse returned nil")
+	}
+	if got := m.Len(); got != 0 {
+		t.Fatalf("Len after recovery = %d, want 0", got)
+	}
+	if m.Source() != "" {
+		t.Fatalf("Source after recovery = %q, want empty", m.Source())
+	}
+	if blocks := m.Blocks(); len(blocks) != 0 {
+		t.Fatalf("Blocks after recovery = %v, want none", blocks)
+	}
+	if _, ok := m.AnchorBySlug("other"); ok {
+		t.Fatal("a recovered model kept the failed parse's anchors")
+	}
+	if run := m.RunOf(0); run != nil {
+		t.Fatalf("RunOf(0) after recovery = %q, want nil", run.Text)
+	}
+	// And the model still works: the next open reads a document again.
+	if err := m.Set("# fresh\n"); err != nil {
+		t.Fatalf("Set after recovery: %v", err)
+	}
+	blocks := m.Blocks()
+	if len(blocks) != 1 {
+		t.Fatalf("%d blocks after the next Set, want 1", len(blocks))
+	}
+	if got := m.Plain(blocks[0].Index); got != "fresh" {
+		t.Fatalf("Plain after the next Set = %q, want fresh", got)
 	}
 }
