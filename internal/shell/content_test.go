@@ -176,7 +176,10 @@ func TestContentWiresLoadImage(t *testing.T) {
 
 	// A failing loader keeps the description up: a fresh tab, so the
 	// cache is empty, frame after frame.
-	if err := s.OpenFile(filepath.Join(dir, "pic.md")); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte("![a pic](pic.png)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(filepath.Join(dir, "bad.md")); err != nil {
 		t.Fatal(err)
 	}
 	fail := s.ActiveTab()

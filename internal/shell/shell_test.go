@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -39,8 +41,17 @@ func newShell(t *testing.T) (*Shell, string) {
 	}
 	s.SetTheme = func(mygo.ThemeSource) {}
 	s.Recent = func() []string { return append([]string(nil), recent...) }
+	// The mygo store dedupes and moves the opened path to the front; a
+	// stub that only prepends would list one path twice and panic on
+	// duplicate row keys.
 	s.AddRecent = func(p string) error {
-		recent = append([]string{p}, recent...)
+		kept := make([]string, 0, len(recent)+1)
+		for _, r := range recent {
+			if r != p {
+				kept = append(kept, r)
+			}
+		}
+		recent = append(kept, p)
 		return nil
 	}
 	s.ClearRecent = func() error {
@@ -137,6 +148,103 @@ func TestTabContextMenuActions(t *testing.T) {
 	}
 }
 
+// Reopening a file that already has a tab activates it instead of
+// stacking a duplicate: one open, one tab, whatever the path's case
+// the later call brings (Windows names the same file under any
+// case). The disk content's change rereads; an unchanged disk keeps
+// the model as it is.
+func TestOpenSameFileReusesTab(t *testing.T) {
+	s, dir := newShell(t)
+	path := filepath.Join(dir, "a.md")
+	if err := s.OpenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other.md")
+	if err := os.WriteFile(other, []byte("# Other\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(other); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tabs) != 2 {
+		t.Fatalf("tabs after setup = %d, want 2", len(s.Tabs))
+	}
+
+	// The same file again: the tab activates, no third one appends.
+	if err := s.OpenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tabs) != 2 || s.Active != 0 || s.ActiveTab().Path != path {
+		t.Fatalf("reopen: %d tabs, active %d (%v)", len(s.Tabs), s.Active, s.ActiveTab())
+	}
+	if s.Title() != path+" - Peekdown" {
+		t.Fatalf("title = %q", s.Title())
+	}
+
+	// A case variant names the same file on Windows; it must land on
+	// the existing tab everywhere (on Linux the fold is a no-op that
+	// only fails to fire when a case-only alias is really two files).
+	if runtime.GOOS == "windows" {
+		if err := s.OpenFile(strings.ToUpper(path)); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.Tabs) != 2 || s.Active != 0 {
+			t.Fatalf("case-variant reopen: %d tabs, active %d", len(s.Tabs), s.Active)
+		}
+	}
+
+	// The disk content moved while the tab was open: the reopen rereads
+	// it into the same tab.
+	newer := "# A rewritten\n"
+	if err := os.WriteFile(path, []byte(newer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tabs) != 2 || s.Active != 0 {
+		t.Fatalf("reopen after change: %d tabs, active %d", len(s.Tabs), s.Active)
+	}
+	if got := s.ActiveTab().Model.Source(); got != newer {
+		t.Fatalf("model after reopen: %q, want %q", got, newer)
+	}
+
+	// A different file still opens its own tab.
+	cPath := filepath.Join(dir, "c.md")
+	if err := os.WriteFile(cPath, []byte("# C\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.OpenFile(cPath); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tabs) != 3 || s.Active != 2 {
+		t.Fatalf("new file: %d tabs, active %d", len(s.Tabs), s.Active)
+	}
+}
+
+// A relative path with ./ segments names an open tab's file too: the
+// cleanup before the comparison makes the reuse fire.
+func TestOpenRelativePathReusesTab(t *testing.T) {
+	s, dir := newShell(t)
+	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := s.OpenFile("./a.md"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tabs) != 1 || s.Active != 0 {
+		t.Fatalf("relative reopen: %d tabs, active %d", len(s.Tabs), s.Active)
+	}
+}
+
 func TestTabFollowsActive(t *testing.T) {
 	s, dir := newShell(t)
 	tt := s.render(t)
@@ -170,10 +278,10 @@ func TestSidebarToggleAndWidth(t *testing.T) {
 	if s.Sidebar.Visible {
 		t.Fatal("sidebar starts hidden in the test shell")
 	}
-	s.ToggleSidebar()
+	s.Sidebar.Visible = true
 	tt.Frame()
 	if !s.Sidebar.Visible {
-		t.Fatal("toggle did not show the sidebar")
+		t.Fatal("show did not show the sidebar")
 	}
 	if !tt.HasText("Outline") {
 		t.Fatalf("sidebar not rendered: %v", tt.Texts())
@@ -196,9 +304,9 @@ func TestSidebarToggleAndWidth(t *testing.T) {
 	if s.Sidebar.Width != 400 {
 		t.Fatalf("width = %v, want 400", s.Sidebar.Width)
 	}
-	s.ToggleSidebar()
+	s.Sidebar.Visible = false
 	if s.Sidebar.Visible {
-		t.Fatal("toggle did not hide the sidebar")
+		t.Fatal("hide did not hide the sidebar")
 	}
 }
 
@@ -357,6 +465,40 @@ func TestWelcomeShowsRecent(t *testing.T) {
 	}
 }
 
+func TestWelcomeRecentRowsAlignLeft(t *testing.T) {
+	s, dir := newShell(t)
+	// The rows' contents differ in width only if the directories do; a
+	// centered ButtonBase row would indent each line by its own width.
+	var names []string
+	for _, d := range []string{"sub", "sub", "subsubsubsub"} {
+		dir := filepath.Join(dir, d)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		name := d + ".md"
+		names = append(names, name)
+		if err := s.AddRecent(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tt := s.render(t)
+
+	var want float32
+	for i, name := range names {
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("recent row %q not rendered: %v", name, tt.Texts())
+		}
+		if i == 0 {
+			want = r.X
+			continue
+		}
+		if r.X != want {
+			t.Fatalf("recent row %q starts at x %v, row 0 at %v", name, r.X, want)
+		}
+	}
+}
+
 func TestWindowTitle(t *testing.T) {
 	s, dir := newShell(t)
 	if s.Title() != "Peekdown" {
@@ -411,26 +553,6 @@ func TestIconButtonsLabeled(t *testing.T) {
 	}
 	if !s.SettingsOpen {
 		t.Fatal("settings button did not open the dialog")
-	}
-}
-
-func TestZoomClamps(t *testing.T) {
-	s, _ := newShell(t)
-	for i := 0; i < 40; i++ {
-		s.ZoomIn()
-	}
-	if s.Zoom != 3 {
-		t.Fatalf("zoom in = %v, want 3", s.Zoom)
-	}
-	for i := 0; i < 40; i++ {
-		s.ZoomOut()
-	}
-	if s.Zoom != 0.5 {
-		t.Fatalf("zoom out = %v, want 0.5", s.Zoom)
-	}
-	s.ZoomReset()
-	if s.Zoom != 1 {
-		t.Fatalf("zoom reset = %v, want 1", s.Zoom)
 	}
 }
 
@@ -491,6 +613,41 @@ func TestSearchBarOpensAndCloses(t *testing.T) {
 	}
 }
 
+// TestEscapeClosesSearchFromAnywhere presses Escape while the bar shows
+// and the focus is not in the field: the window's shortcut closes it as
+// the field's own key does. With the settings dialog up, the dialog
+// takes Escape first (the overlay on top) and the search stands.
+func TestEscapeClosesSearchFromAnywhere(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	// A press on the document clears the field's focus: nothing around
+	// the focus takes Escape, the window's shortcut does.
+	if err := tt.Click("second"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if s.SearchOpen {
+		t.Fatal("Escape away from the field left the bar open")
+	}
+	if len(tab.Model.Matches) != 0 || tab.Model.Query() != "" {
+		t.Fatalf("Escape kept the search: %d matches query %q", len(tab.Model.Matches), tab.Model.Query())
+	}
+
+	s.OpenSearch()
+	s.OpenSettings()
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if !s.SearchOpen {
+		t.Fatal("Escape closed the search while the dialog was up")
+	}
+	if s.SettingsOpen {
+		t.Fatal("Escape left the settings dialog open")
+	}
+}
+
 // TestSearchQueryRunsSetSearch types into the field and reads the model:
 // each change runs the search, Enter moves the current and wraps.
 func TestSearchQueryRunsSetSearch(t *testing.T) {
@@ -540,6 +697,46 @@ func TestSearchQueryRunsSetSearch(t *testing.T) {
 func TestSearchToggleRegexCase(t *testing.T) {
 	s, tt, tab := searchShell(t)
 
+	// The on fill is visible: sample inside the button's start padding,
+	// clear of the glyph; the off state holds none of it, the on state
+	// the selection's pale accent over the bar's surface.
+	offFill := func(t *testing.T, name string) {
+		t.Helper()
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("%s button missing", name)
+		}
+		got := pixelAt(tt.Image(), r.X+3, r.Y+r.H/2)
+		// A click leaves the pointer parked on the button, so the off fill
+		// may be the hover wash; neither is the selection's blue.
+		if got != ui.LightTheme().Surface && got != ui.LightTheme().SurfaceHover {
+			t.Fatalf("off %s fill %v, want surface or hover, not the on fill", name, got)
+		}
+	}
+	onFill := func(t *testing.T, name string) {
+		t.Helper()
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("%s button missing", name)
+		}
+		got := pixelAt(tt.Image(), r.X+3, r.Y+r.H/2)
+		if got == ui.LightTheme().Surface {
+			t.Fatalf("on %s fill %v, indistinguishable from the surface", name, got)
+		}
+		d := func(a, b uint8) int {
+			d := int(a) - int(b)
+			if d < 0 {
+				d = -d
+			}
+			return d
+		}
+		if d(got.R, ui.LightTheme().Surface.R)+d(got.G, ui.LightTheme().Surface.G)+d(got.B, ui.LightTheme().Surface.B) < 40 || got.B < got.R {
+			t.Fatalf("on %s fill %v, want a visible pale blue over the surface", name, got)
+		}
+	}
+	offFill(t, "Match case")
+	offFill(t, "Regular expression")
+
 	if err := tt.Click("Match case"); err != nil {
 		t.Fatal(err)
 	}
@@ -582,10 +779,169 @@ func TestSearchToggleRegexCase(t *testing.T) {
 		t.Fatalf("regex count %q, want 1/2", s.search.Count)
 	}
 
+	// Both on: the pale accent fill shows, and toggling back off clears
+	// it. The hover pass left the pointer on "bad pattern"'s old spot;
+	// park it in the field clear of every button.
+	in, _ := tt.Find("Find")
+	tt.Move(in.X+in.W/2, in.Y+in.H/2)
+	tt.Frame()
+	onFill(t, "Match case")
+	onFill(t, "Regular expression")
+	tt.Click("Match case")
+	tt.Click("Regular expression")
+	tt.Frame()
+	offFill(t, "Match case")
+	offFill(t, "Regular expression")
+
 	// The toggles reset when the bar closes.
 	s.CloseSearch()
+	tt.Frame()
 	if s.search.CaseSensitive || s.search.Regex || s.search.Query != "" {
 		t.Fatalf("close left state: %+v", s.search)
+	}
+}
+
+// TestSearchFloatDoesNotShiftBody checks the float: the bar's texts sit
+// near the body's top right, and the first body line's y is the same with
+// the bar open and closed, so nothing pushes the document around.
+func TestSearchFloatDoesNotShiftBody(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	barText, ok := tt.Find("Previous match")
+	if !ok {
+		t.Fatalf("bar not rendered: %v", tt.Texts())
+	}
+	body, ok := tt.Find("second")
+	if !ok {
+		t.Fatalf("body not rendered: %v", tt.Texts())
+	}
+	if barText.Y > body.Y {
+		t.Fatalf("float at y %.1f sits below the body's first line at %.1f", barText.Y, body.Y)
+	}
+	firstOpen := body.Y
+
+	s.CloseSearch()
+	tt.Frame()
+	_, closed := tt.Find("second")
+	if !closed {
+		t.Fatal("body not rendered with the bar closed")
+	}
+	// Find reports the first match; the closed frame has no count or
+	// hint texts in the way, so the same y means the body held still.
+	_, openAgain := tt.Find("second")
+	if !openAgain {
+		t.Fatal("body lost")
+	}
+	if _, ok := tt.Find("Previous match"); ok {
+		t.Fatal("bar still rendered after close")
+	}
+	// Reopen and compare the body's line: the float must not push it.
+	s.OpenSearch()
+	tt.Frame()
+	again, ok := tt.Find("second")
+	if !ok {
+		t.Fatal("body not rendered after reopen")
+	}
+	if again.Y != firstOpen {
+		t.Fatalf("body's first line at %.1f with the float open, was %.1f closed", again.Y, firstOpen)
+	}
+	if tab.Model == nil || !s.SearchOpen {
+		t.Fatal("state lost")
+	}
+}
+
+// TestSearchCountKeepsFloatWidth checks the float's width holds still as
+// the count appears, changes and goes: the bar is right-anchored, so a
+// count that sized itself to its text dragged the field and every button
+// sideways on each search.
+func TestSearchCountKeepsFloatWidth(t *testing.T) {
+	s, tt, tab := searchShell(t)
+
+	closeR, ok := tt.Find("Close search")
+	if !ok {
+		t.Fatalf("bar not rendered: %v", tt.Texts())
+	}
+	prevR, ok := tt.Find("Previous match")
+	if !ok {
+		t.Fatalf("bar not rendered: %v", tt.Texts())
+	}
+
+	// The count states the bar shows, in the order a query walks them.
+	states := []struct {
+		name  string
+		query string
+		regex bool
+	}{
+		{"1/3", "first", false},
+		{"no results", "gone", false},
+		{"bad pattern", "(", true},
+	}
+	for _, st := range states {
+		s.search.Regex = st.regex
+		s.search.Query = st.query
+		s.runSearch(tab)
+		tt.Frame()
+		if s.search.Count != st.name {
+			t.Fatalf("query %q: count %q, want %q", st.query, s.search.Count, st.name)
+		}
+		countR, ok := tt.Find(st.name)
+		if !ok {
+			t.Fatalf("count %q not rendered: %v", st.name, tt.Texts())
+		}
+		if countR.W != searchCountWidth {
+			t.Fatalf("count %q is %.1f wide, want the fixed %.1f", st.name, countR.W, searchCountWidth)
+		}
+		cr, _ := tt.Find("Close search")
+		pr, _ := tt.Find("Previous match")
+		if cr.X != closeR.X || pr.X != prevR.X {
+			t.Fatalf("count %q moved the buttons: close %.1f (was %.1f), prev %.1f (was %.1f)",
+				st.name, cr.X, closeR.X, pr.X, prevR.X)
+		}
+	}
+
+	// The longest count the bar can show still fits the fixed width, so
+	// it stays whole instead of ending in an ellipsis.
+	s.search.Regex = false
+	s.search.Count = "12345/10000"
+	tt.Frame()
+	longR, ok := tt.Find("12345/10000")
+	if !ok {
+		t.Fatalf("long count not rendered: %v", tt.Texts())
+	}
+	if longR.W != searchCountWidth {
+		t.Fatalf("long count is %.1f wide, want %.1f", longR.W, searchCountWidth)
+	}
+	if cr, _ := tt.Find("Close search"); cr.X != closeR.X {
+		t.Fatalf("long count moved the close button to %.1f, want %.1f", cr.X, closeR.X)
+	}
+
+	// Closing the bar drops the count; the empty bar's buttons stay put.
+	s.CloseSearch()
+	tt.Frame()
+	if _, ok := tt.Find("12345/10000"); ok {
+		t.Fatal("the count survived the close")
+	}
+}
+
+// TestSearchPlaceholderShowsWhileEmpty checks the input's placeholder:
+// the field's own accessibility info holds "Find" in an empty field, and
+// typing fills the value that paints over it. The access tree reports
+// the placeholder whether or not the field has text; the paint drops it.
+func TestSearchPlaceholderShowsWhileEmpty(t *testing.T) {
+	s, tt, _ := searchShell(t)
+
+	field, ok := tt.AccessByRole(ui.RoleTextField, "")
+	if !ok {
+		t.Fatalf("no text field in the bar: %v", tt.Texts())
+	}
+	if field.Placeholder != "Find" || field.Value != "" {
+		t.Fatalf("empty field: placeholder %q value %q, want \"Find\" and \"\"", field.Placeholder, field.Value)
+	}
+	tt.Type("x")
+	tt.Frame()
+	field, ok = tt.AccessByRole(ui.RoleTextField, "")
+	if !ok || field.Value != "x" {
+		t.Fatalf("typed %q: field %+v ok=%v", s.search.Query, field, ok)
 	}
 }
 

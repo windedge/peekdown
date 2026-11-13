@@ -2,12 +2,13 @@ package shell
 
 import (
 	"context"
-	"fmt"
 	"image"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -36,6 +37,10 @@ type Tab struct {
 type Shell struct {
 	Tabs   []Tab
 	Active int
+	// Home shows the welcome page while the tabs stay open: the click on
+	// the bar's brand returns there, and any tab activation leaves it.
+	// The tabs keep their models, so nothing reloads on the way back.
+	Home bool
 	// ContentHook, when set, runs at the head of Content with the frame's
 	// Context: tests read element Bounds out of band with it. Production
 	// wiring leaves it nil.
@@ -53,11 +58,27 @@ type Shell struct {
 		Tab     int // 0 files, 1 outline
 		Visible bool
 	}
+	tree         treeState
 	SettingsOpen bool
 	Draft        settings.Settings
 	Saved        settings.Settings
-	Zoom         float64
-	saveErr      string
+	// before is the draft as the dialog opened it: a popover's outside
+	// press lands on the settings backdrop, so a dismissal that carries
+	// one restores this instead of Saved.
+	before settings.Settings
+	// fontPickOpen shows the content font's popover, fontPickMonoOpen the
+	// mono one; fontSearch is the open one's field text. fontList is
+	// the virtual list's state across frames.
+	fontPickOpen     bool
+	fontPickMonoOpen bool
+	fontSearch       string
+	fontList         ui.ListState
+	// Zoom is the document text's runtime zoom in percent, 100 drawing at
+	// the settings' font sizes. It is session state only: Rust writes its
+	// zoom into the config's font sizes, this build keeps settings.json
+	// untouched (ticket #25).
+	Zoom    int
+	saveErr string
 
 	// SearchOpen shows the search bar; search is its state.
 	SearchOpen bool
@@ -82,6 +103,20 @@ type Shell struct {
 	// OnOpenError reports a parse failure over an opened file: the host
 	// toasts it. Nil logs only.
 	OnOpenError func(string)
+	// ShowItemInFolder reveals a file in the OS file manager, selecting
+	// it; nil uses mygo's system shell. Tests stub it: a headless run has
+	// no app to hand the call to.
+	ShowItemInFolder func(string)
+	// OpenURL opens the Help menu's pages in the browser; nil skips it.
+	OpenURL func(string)
+	// CloseWindow quits the app: the host closes its window, which ends
+	// the run loop. Nil skips it.
+	CloseWindow func()
+
+	// tabScroll tracks the tab strip's sideways offset: the strip's wheel
+	// handler scrolls with it, and the strip's ScrollIntoView glides against
+	// the notches it holds.
+	tabScroll ui.ScrollState
 
 	// openError is the last failed open's parse error; the window title
 	// carries it until the next successful open clears it.
@@ -91,17 +126,16 @@ type Shell struct {
 	synced     bool
 
 	// Frame scratch state for the settings dialog bindings.
-	draftLayout      int
-	draftExplorer    int
-	markersText      string
-	lastActiveOnOpen int
+	draftLayout   int
+	draftExplorer int
+	markersText   string
 }
 
 // New returns a shell with sane defaults.
 func New() *Shell {
 	s := &Shell{
 		Load:         settings.Default,
-		Zoom:         1,
+		Zoom:         zoomReset,
 		mermaidCache: mermaid.NewCache(16),
 	}
 	s.Active = -1
@@ -110,9 +144,32 @@ func New() *Shell {
 	return s
 }
 
-// OpenFile reads path, parses it and appends it as a new tab.
+// OpenFile shows path as a tab: an existing tab over the same file is
+// activated and reread if the disk content moved (the watcher may be
+// off), otherwise the file parses into a new tab.
 func (s *Shell) OpenFile(path string) error {
-	data, err := os.ReadFile(path)
+	abs := path
+	if a, err := filepath.Abs(path); err == nil {
+		abs = a
+	}
+	// The open dialog and the tree hand back different cases for the
+	// same file; Windows paths differ in case for the same file, so the
+	// dedupe folds case. Clean also strips ./ and trailing separators a
+	// drag or a forwarded command line may carry.
+	if i := s.tabIndex(abs); i >= 0 {
+		tab := &s.Tabs[i]
+		s.showTab(i)
+		// reloadTab compares the disk bytes against the model and keeps
+		// the tab untouched when they match.
+		s.reloadTab(tab)
+		if s.AddRecent != nil {
+			_ = s.AddRecent(tab.Path)
+		}
+		s.openError = ""
+		s.emitTitle()
+		return nil
+	}
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		return err
 	}
@@ -127,10 +184,6 @@ func (s *Shell) OpenFile(path string) error {
 			s.OnOpenError(parseErr.Error())
 		}
 	}
-	abs := path
-	if a, err := filepath.Abs(path); err == nil {
-		abs = a
-	}
 	s.Tabs = append(s.Tabs, Tab{Path: abs, Model: m})
 	if parseErr != nil {
 		// The error title sticks until the next successful open; a plain
@@ -139,7 +192,7 @@ func (s *Shell) OpenFile(path string) error {
 	} else {
 		s.openError = ""
 	}
-	s.Active = len(s.Tabs) - 1
+	s.showTab(len(s.Tabs) - 1)
 	if s.AddRecent != nil {
 		_ = s.AddRecent(abs)
 	}
@@ -273,6 +326,19 @@ func (s *Shell) emitTitle() {
 	}
 }
 
+// ShowHome shows the welcome page and keeps the open tabs.
+func (s *Shell) ShowHome() { s.Home = true }
+
+// showTab points the shell at tab i and leaves the welcome page: every
+// path that activates a tab goes through it, so none of them forgets.
+func (s *Shell) showTab(i int) {
+	if i < 0 || i >= len(s.Tabs) {
+		return
+	}
+	s.Active = i
+	s.Home = false
+}
+
 // ActiveTab returns the active tab or nil.
 func (s *Shell) ActiveTab() *Tab {
 	if s.Active < 0 || s.Active >= len(s.Tabs) {
@@ -327,19 +393,29 @@ func (s *Shell) SelectAll() bool {
 	return true
 }
 
-// tabIndex returns the index of the first tab with path, or -1.
+// tabIndex returns the index of the first tab with path.
 func (s *Shell) tabIndex(path string) int {
 	for i := range s.Tabs {
-		if s.Tabs[i].Path == path {
+		if sameFile(s.Tabs[i].Path, path) {
 			return i
 		}
 	}
 	return -1
 }
 
-// ToggleSidebar flips sidebar visibility.
-func (s *Shell) ToggleSidebar() {
-	s.Sidebar.Visible = !s.Sidebar.Visible
+// sameFile reports whether an existing tab already shows path's file.
+// Windows names one file under any letter case, and the tree, the
+// dialog and a forwarded command line need not agree with the case the
+// first open recorded, so the match folds there. macOS's default APFS
+// and every Linux filesystem are case sensitive, where a.md and A.md
+// are two files; folding there would merge them. Clean strips the ./
+// and trailing separators a drag may carry.
+func sameFile(tabPath, path string) bool {
+	tabPath, path = filepath.Clean(tabPath), filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(tabPath, path)
+	}
+	return tabPath == path
 }
 
 // SetSidebarTab selects the sidebar segment and shows the sidebar.
@@ -349,12 +425,6 @@ func (s *Shell) SetSidebarTab(i int) {
 	}
 	s.Sidebar.Tab = i
 	s.Sidebar.Visible = true
-}
-
-// SidebarTabIndex maps a saved sidebar tab name to the segment index:
-// an unknown name is the explorer.
-func SidebarTabIndex(tab string) int {
-	return sidebarTabIndex(tab)
 }
 
 // SetSidebarWidth clamps the sidebar width to a usable range.
@@ -384,29 +454,86 @@ func (s *Shell) RestoreFromSettings(t settings.Settings) {
 	}
 }
 
-// ZoomIn increases the content zoom.
-func (s *Shell) ZoomIn() {
-	s.Zoom += 0.1
-	if s.Zoom > 3 {
-		s.Zoom = 3
-	}
+// The zoom's limits and step, in percent. Rust's Ctrl+= adds 2px to the
+// persisted font_size and Ctrl+0 puts the sizes back (config.rs's
+// zoom_font_size / reset_font_size, workspace/mod.rs's handlers); a 2px
+// step on the 16px base is 12.5 percent. This build keeps a runtime
+// multiplier instead, so settings.json stays untouched and the status
+// bar can read whole percents: 5 percent steps span 50 to 300 percent,
+// which on the default 16px base is the 8 to 48px Rust clamps to.
+const (
+	zoomReset = 100
+	zoomStep  = 5
+	zoomMin   = 50
+	zoomMax   = 300
+)
+
+// defaultFontSize and defaultMonoFontSize back the zoom when the saved
+// settings name no size: the same values a first run loads.
+const (
+	defaultFontSize     = 16
+	defaultMonoFontSize = 13
+)
+
+// ZoomIn increases the document text's zoom one step.
+func (s *Shell) ZoomIn() { s.setZoom(s.zoomPercent() + zoomStep) }
+
+// ZoomOut decreases the document text's zoom one step.
+func (s *Shell) ZoomOut() { s.setZoom(s.zoomPercent() - zoomStep) }
+
+// ZoomReset restores 100 percent: the settings' font sizes.
+func (s *Shell) ZoomReset() { s.setZoom(zoomReset) }
+
+// setZoom clamps the zoom to its range and stores it.
+func (s *Shell) setZoom(percent int) {
+	s.Zoom = min(max(percent, zoomMin), zoomMax)
 }
 
-// ZoomOut decreases the content zoom.
-func (s *Shell) ZoomOut() {
-	s.Zoom -= 0.1
-	if s.Zoom < 0.5 {
-		s.Zoom = 0.5
+// zoomPercent is Zoom with an unset zero standing for 100 percent, so a
+// Shell built by hand still draws at the settings' sizes.
+func (s *Shell) zoomPercent() int {
+	if s.Zoom <= 0 {
+		return zoomReset
 	}
+	return s.Zoom
 }
 
-// ZoomReset restores 100 percent.
-func (s *Shell) ZoomReset() { s.Zoom = 1 }
+// ZoomLabel is the status bar's readout of the zoom, as in "125%".
+func (s *Shell) ZoomLabel() string { return strconv.Itoa(s.zoomPercent()) + "%" }
+
+// baseFonts returns the settings' font sizes, the base the zoom scales: a
+// zero setting means the same defaults a first run loads.
+func (s *Shell) baseFonts() (body, mono float32) {
+	body = float32(s.Saved.FontSize)
+	if body <= 0 {
+		body = defaultFontSize
+	}
+	mono = float32(s.Saved.MonoFontSize)
+	if mono <= 0 {
+		mono = defaultMonoFontSize
+	}
+	return body, mono
+}
+
+// zoomFactor is the zoom as a multiplier: 1 at 100 percent.
+func (s *Shell) zoomFactor() float64 { return float64(s.zoomPercent()) / 100 }
+
+// fontSizes returns the body and mono sizes the document draws at: the
+// settings' sizes scaled by the zoom. Headings, tables and the code's
+// panel ride the two through the view's own ratios (ticket #19).
+func (s *Shell) fontSizes() (body, mono float32) {
+	body, mono = s.baseFonts()
+	f := float32(s.zoomFactor())
+	return body * f, mono * f
+}
 
 // Apply persists t and syncs the draft plus the host theme.
 func (s *Shell) Apply(t settings.Settings) error {
 	s.Saved = t
 	s.Draft = t
+	// The root mode, the markers and the sort mode all decide what the
+	// tree lists: drop the listings so the next frame reads them again.
+	s.invalidateTree()
 	if t.SidebarWidth > 0 {
 		s.SetSidebarWidth(float32(t.SidebarWidth))
 	}
@@ -422,36 +549,81 @@ func (s *Shell) Apply(t settings.Settings) error {
 	return nil
 }
 
-// OpenSettings opens the dialog with a pristine draft.
+// OpenSettings opens the dialog with a pristine draft, and the snapshot
+// a font popover's outside press hands the draft back to.
 func (s *Shell) OpenSettings() {
 	s.Draft = s.Saved
+	s.before = s.Draft
 	s.draftLayout = layoutIndex(s.Draft.Layout)
 	s.draftExplorer = explorerIndex(s.Draft.ExplorerRootMode)
 	s.markersText = strings.Join(s.Draft.ProjectRootMarkers, ", ")
 	s.SettingsOpen = true
 }
 
+// RegisterShortcuts binds the chords the menu bar cannot carry to the
+// window's shortcuts: mygo gives a menu item one accelerator, and a
+// second item would print the same label twice. Ctrl+R reloads as the
+// browser does, Ctrl+F4 is the window manager's close chord, and Ctrl++
+// (Ctrl+Shift+=) is zoom in's second key, as Ctrl+Plus. Escape closes
+// the search bar wherever the focus is; a key the focused field or an
+// overlay (menu, dialog) takes never reaches the window, so it cannot
+// fight the dialog's own Escape either.
+func (s *Shell) RegisterShortcuts(c *ui.Context) {
+	c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() {
+		s.RefreshActiveTab()
+		c.Invalidate()
+	})
+	c.OnWindowShortcut(0, ui.KeyEscape, func() {
+		if s.SearchOpen && !s.SettingsOpen {
+			s.CloseSearch()
+			c.Invalidate()
+		}
+	})
+	c.OnWindowShortcut(ui.Ctrl, ui.KeyF4, func() {
+		s.CloseTab(s.Active)
+		c.Invalidate()
+	})
+	c.OnWindowShortcut(ui.Ctrl|ui.Shift, ui.KeyEqual, func() {
+		s.ZoomIn()
+		c.Invalidate()
+	})
+}
+
 // View renders the whole shell.
 func (s *Shell) View(c *ui.Context) {
-	c.SetZoom(float32(s.Zoom))
+	s.RegisterShortcuts(c)
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
-		if len(s.Tabs) == 0 {
+		// The bar is the window's title bar, so it draws on the welcome
+		// page too: without it a window with a hidden title bar has no
+		// place to drag from and no room for the window controls.
+		s.titleBar(c)
+		// The welcome page backs both the empty window and Home, so the two
+		// paths render the same view; the status bar stays off it.
+		if s.Home || len(s.Tabs) == 0 {
 			s.welcome(c)
 			return
 		}
-		s.tabBar(c)
+		// The bar floats over the body's top right inside the clipped body
+		// container, so opening it never pushes the document around.
 		body := func() {
+			s.content(c)
 			if s.SearchOpen {
 				s.searchView(c)
 			}
-			s.content(c)
 		}
+		// The body grows into the room the bars leave instead of asking
+		// for the whole column: a Fill here is a hundred percent of the
+		// window, which with a long document's natural height overflowing
+		// its floor carries the status bar off the bottom edge. Grow takes
+		// the free space and drops the content-based minimum (mygo's
+		// flexLayout leaves a growing item's minimum at zero), so the
+		// document's list meets a bounded box and scrolls inside it.
 		if s.Sidebar.Visible {
 			s.SetSidebarWidth(s.Sidebar.Width)
-			ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Fill()
+			ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
 		} else {
-			ui.Box(c).Fill().Children(func() { body() })
+			ui.Box(c).Grow(1).Clip().Children(func() { body() })
 		}
 		s.statusBar(c)
 	})
@@ -484,26 +656,79 @@ func (s *Shell) Content(c *ui.Context) {
 		c.WriteClipboard(raw)
 		c.Toast("Copied frontmatter")
 	}
+	// A code block's copy button, the same clipboard and a toast of its own.
+	tab.State.CopyText = func(text string) {
+		c.WriteClipboard(text)
+		c.Toast("Copied code")
+	}
+	// The document area's context menu: the commands act on the open
+	// document, whichever row the click landed on. Rebound every frame like
+	// the loaders, so the closures carry this frame's context.
+	tab.State.Menu = &view.MenuActions{
+		HasSelection: tab.State.HasSelection,
+		Copy:         func() { s.CopySelection(c.WriteClipboard) },
+		SelectAll:    func() { s.SelectAll() },
+		Find:         func() { s.OpenSearch() },
+		Refresh:      func() { s.RefreshActiveTab() },
+		Reveal:       func() { s.RevealFile(tab.Path) },
+		OpenInFileManager: func() {
+			s.OpenInFileManager(tab.Path)
+		},
+		CopyPath: func() {
+			c.WriteClipboard(tab.Path)
+			c.Toast("Copied path")
+		},
+	}
 	// The diagrams render through the shared cache, keyed by source,
 	// theme and scale: a theme switch or a zoom past 2x re-renders once
 	// and every tab shares the result.
 	tab.State.LoadMermaid = func(src string, theme mermaid.Theme, scale float64) (image.Image, error) {
 		return s.mermaidCache.Render(src, theme, scale)
 	}
+	// Links open in the system's browser; a failure toasts. Set each
+	// frame like the loaders, so a tab opened elsewhere finds it too.
+	// LinksWired marks the tab as shell-drawn: the outline reads it to
+	// gate the scroll-follow highlight on a view that is really wired,
+	// not on OpenURL happening to be set.
+	tab.State.OpenURL = func(url string) {
+		if err := mygo.Shell.OpenExternal(url); err != nil {
+			c.Toast("Could not open the link")
+		}
+	}
+	// A link that names a local file opens here, as a tab of its own;
+	// the view hands the raw destination over, anchor tail included.
+	tab.State.OpenLocalLink = func(dest string) {
+		s.openLocalLink(tab.Path, dest)
+	}
+	tab.State.LinksWired = true
+	// The fonts and families ride the saved settings, topped up every
+	// frame like the loaders: a settings save lands on the next frame
+	// without further wiring, and a tab opened elsewhere finds them too.
+	// The zoom scales the settings' sizes rather than the whole window:
+	// a listener holding a small window at 125% gets a bigger page, not a
+	// bigger toolbar (ticket #25).
+	tab.State.FontSize, tab.State.MonoFontSize = s.fontSizes()
+	tab.State.Zoom = s.zoomFactor()
+	tab.State.FontFamily = s.Saved.FontFamily
+	tab.State.MonoFontFamily = s.Saved.MonoFontFamily
+	// not wired: mygo has no scroll-speed or inertia API. ScrollSpeed and
+	// InertiaScroll stay settings-only, hidden from the dialog (ticket
+	// #21); the engine's wheel glide is fixed (input.go scroll,
+	// ReduceMotion is the only switch).
 	// The right edge is 0 so the list's own scrollbar sits at the window's
 	// edge instead of floating 24 DIPs in; the rows give the text its
 	// clearance on the right themselves.
 	ui.Box(c).Fill().Padding(16, 0, 16, 24).Children(func() {
-		// Mirrors the Rust reader: centered caps the column at 900 DIPs,
-		// full_width lets it follow the window; the left padding keeps the
-		// text off the window's edge and the rows pad the right.
-		col := ui.Column(c).Grow(1)
+		// Mirrors the Rust reader: centered caps the text column at 900
+		// DIPs, full_width lets it follow the window. The column itself
+		// spans the window either way, so the bar keeps hugging the
+		// window's edge; the view caps and centers the lines inside it.
 		if s.Saved.Layout == "full_width" {
-			col.AlignSelf(ui.Stretch)
+			tab.State.ContentWidth = 0
 		} else {
-			col.MaxWidth(900).AlignSelf(ui.Center)
+			tab.State.ContentWidth = centeredWidth
 		}
-		col.Children(func() {
+		ui.Column(c).Grow(1).AlignSelf(ui.Stretch).Children(func() {
 			view.Frontmatter(c, tab.Model, &tab.State)
 			view.ScrollView(c, tab.Model, &tab.State)
 		})
@@ -512,18 +737,77 @@ func (s *Shell) Content(c *ui.Context) {
 
 func (s *Shell) content(c *ui.Context) { s.Content(c) }
 
+// openLocalLink resolves dest, as a document's link wrote it, against
+// base's directory and shows the target as a tab: an absolute path
+// stands as it is, anything else joins the document's directory. Only
+// markdown opens - directories and other files silently do nothing,
+// as do unreadable ones - so an image link never yanks the reader out
+// of the document. A "#anchor" tail scrolls the target file to that
+// heading once its model is ready; a missing anchor lands on top.
+func (s *Shell) openLocalLink(base, dest string) {
+	path, anchor, _ := strings.Cut(dest, "#")
+	if path == "" {
+		return
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(base), path)
+	}
+	path = filepath.Clean(path)
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		return
+	}
+	abs := path
+	if a, err := filepath.Abs(abs); err == nil {
+		abs = a
+	}
+	if err := s.OpenFile(abs); err != nil {
+		return
+	}
+	if anchor == "" {
+		return
+	}
+	// The reopened tab may be an old one whose model already holds the
+	// heading; the fresh one gets its model this call. Resolve at once
+	// when possible, else leave the slug pending: the view retries it
+	// per frame and drops it if no heading shows up.
+	tab := s.ActiveTab()
+	if tab == nil {
+		return
+	}
+	if block, ok := tab.Model.AnchorBySlug(anchor); ok {
+		tab.State.ScrollTargetBlock = block
+		return
+	}
+	tab.State.ResetPendingAnchor(anchor)
+}
+
 func (s *Shell) welcome(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Center().Gap(12).Children(func() {
+	// The greeting, the button and the list's header take some 260 DIPs of
+	// the window; the list scrolls in the rest, up to its 300 DIP cap, so
+	// a short window still shows the list whole instead of running its
+	// last rows past the bottom edge.
+	winW, winH := c.Size()
+	recentMax := min(300, max(winH-welcomeRoom, 80))
+	// The list takes recentWidth where the window has the room, and gives
+	// way to the window's own margins below that: a fixed width would spill
+	// past a narrow window's edge.
+	recentW := max(min(recentWidth, winW-2*welcomeMargin), 120)
+	ui.Column(c).Fill().Center().Gap(16).Children(func() {
 		ui.Text(c, "Welcome to Peekdown").FontSize(24).Bold()
-		if ui.Button(c, "Open File").Clicked() {
+		ui.Text(c, "Open a Markdown file to get started").FontSize(12).TextColor(t.TextMuted)
+		if ui.PrimaryButton(c, "Open File").Clicked() {
 			if s.OpenDialog != nil {
 				if paths, err := s.OpenDialog(); err == nil {
 					s.OpenPaths(paths)
 				}
 			}
 		}
-		ui.Text(c, "Drop a Markdown file here").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "Or drag and drop files \u2022 Ctrl+O to open").FontSize(11).TextColor(t.TextMuted)
 
 		var recent []string
 		if s.Recent != nil {
@@ -532,29 +816,90 @@ func (s *Shell) welcome(c *ui.Context) {
 		if len(recent) == 0 {
 			return
 		}
-		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "Recent").FontSize(12).TextColor(t.TextMuted)
-			for _, p := range recent {
-				path := p
-				if ui.Button(c, filepath.Base(path)).Clicked() {
-					_ = s.OpenFile(path)
+		ui.Column(c).Gap(6).Width(recentW).Children(func() {
+			// FillWidth, not Fill: the column is as high as its rows, so a
+			// hundred percent of that height would have each row take the
+			// whole list's height and the next one start below the window.
+			ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Recent Files").FontSize(11).Bold().TextColor(t.TextMuted)
+				if ui.Button(c, "Clear").Clicked() && s.ClearRecent != nil {
+					_ = s.ClearRecent()
 				}
-			}
-			if ui.Button(c, "Clear").Clicked() && s.ClearRecent != nil {
-				_ = s.ClearRecent()
-			}
+			})
+			// The list caps its height so a long Recent cannot push the
+			// greeting off the window; the overflow scrolls. Its width is
+			// fixed, so the bar's strip and the rows' padding line up.
+			ui.Scroll(c).Label("Recent Files list").MaxHeight(recentMax).Children(func() {
+				ui.Column(c).Gap(2).Children(func() {
+					for _, p := range recent {
+						path := p
+						// ButtonBase centers its children; a recent row's text block
+						// must hug the row's left edge or each line starts elsewhere.
+						row := ui.ButtonBase(c.Key("recent-row-"+path)).Label("Recent row "+path).FillWidth().Justify(ui.Start).Padding(8, recentRowPadEnd).Radius(6)
+						if row.Hovered() {
+							row.Background(t.SurfaceHover)
+						}
+						row.Children(func() {
+							// Grow, not shrink to the text: the block takes the row's
+							// width, so MaxLines cuts the path at the row's padding
+							// instead of letting it run under the scroll bar.
+							ui.Column(c).Grow(1).AlignItems(ui.Start).Children(func() {
+								ui.Text(c, filepath.Base(path)).FontSize(13).MaxLines(1)
+								ui.Text(c, filepath.Dir(path)).FontSize(11).TextColor(t.TextMuted).MaxLines(1)
+							})
+						})
+						if row.Clicked() {
+							_ = s.OpenFile(path)
+						}
+					}
+				})
+			})
 		})
 	})
 }
 
+// statusBar renders the strip under the body: the sidebar's toggles on
+// the left, the search and settings entries on the right. mygo exposes
+// no frame-rate API (a surface's refresh rate only, not a counter), so
+// the Rust version's optional FPS readout has no counterpart here.
+// welcomeRoom is the height the welcome page spends above its recent
+// list: the greeting, the open button, the hint and the list's caption,
+// with their gaps.
+const welcomeRoom = 260
+
+// recentWidth is the recent list's widest: a folder path ends well left
+// of the list's scroll bar instead of being cut at it, and the list still
+// sits as a column under the greeting. welcomeMargin is the space the
+// list keeps from the window's edges in a window narrower than that.
+const (
+	recentWidth   = 560
+	welcomeMargin = 16
+)
+
+// centeredWidth is the text column's widest in the centered layout: the
+// Rust reader's 900 DIPs, the length a line of prose stays readable at.
+// The list, and its scroll bar, still span the window.
+const centeredWidth = float32(900)
+
+// recentRowPadEnd is a recent row's right padding. The list's overlay
+// scroll bar paints 6 DIPs wide with a 3 DIP inset, so the row's text
+// must end at least 12 DIPs before the container's right edge to clear
+// it.
+const recentRowPadEnd = 14
+
 func (s *Shell) statusBar(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Height(26).Padding(2, 6).Gap(6).Background(t.Surface).Children(func() {
+	ui.Row(c).Height(28).Padding(2, 8).Gap(6).Background(t.Surface).
+		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).AlignItems(ui.Center).Children(func() {
 		iconButton(c, "status-files", folderIcon, "Files", 24, 14, func() { s.SetSidebarTab(0) })
 		iconButton(c, "status-outline", chevronDownIcon, "Outline", 24, 14, func() { s.SetSidebarTab(1) })
 		ui.Box(c).Grow(1)
+		// The zoom readout sits beside the search and settings entries, a
+		// label rather than a control: the menu's chords drive the zoom.
+		ui.Text(c, s.ZoomLabel()).FontSize(11).TextColor(t.TextMuted).MarginX(6).
+			Tooltip("Zoom: Ctrl+= / Ctrl+- / Ctrl+0")
+		iconButton(c, "status-search", searchIcon, "Search", 24, 14, func() { s.OpenSearch() })
 		iconButton(c, "status-settings", gearIcon, "Settings", 24, 14, func() { s.OpenSettings() })
-		ui.Text(c, fmt.Sprintf("%d FPS", 0)).FontSize(11).TextColor(t.TextMuted) // TODO: real frame rate counter
 	})
 }
 
