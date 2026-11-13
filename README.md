@@ -16,6 +16,32 @@ The v0.3.0 target is parity with the Rust implementation:
 - Auto-refresh when files change, plus Windows file association for `.md` and `.markdown`.
 - Settings in `settings.json` under the app's user data directory.
 
+## Keyboard Shortcuts
+
+The native menu registers every chord, so each one is also listed there with its key.
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+O` | Open a file |
+| `Ctrl+W`, `Ctrl+F4` | Close the current tab |
+| `Ctrl+Tab`, `Ctrl+Shift+Tab` | Next tab, previous tab |
+| `Ctrl+C` | Copy the selected text |
+| `Ctrl+A` | Select the whole document |
+| `Ctrl+F` | Find |
+| `F3`, `Shift+F3` | Next match, previous match |
+| `Ctrl+Home`, `Ctrl+End` | Scroll to the top, the bottom |
+| `Ctrl+B` | Toggle the outline sidebar |
+| `Ctrl+Shift+E` | Toggle the files sidebar |
+| `F5`, `Ctrl+R` | Reread the document from disk |
+| `Ctrl+=`, `Ctrl++`, `Ctrl+-`, `Ctrl+0` | Zoom the text in, out, back to 100% |
+| `Ctrl+,` | Settings |
+
+On macOS the chords the menu registers as `CmdOrCtrl` use `Cmd`: `Cmd+O`, `Cmd+W`, `Cmd+F`, `Cmd+Home`, `Cmd+B` and the rest. `Ctrl+F4`, `Ctrl+R` and the function keys keep their keys there.
+
+Some actions answer to two chords (`Close Tab`: `Ctrl+W` and `Ctrl+F4`, `Refresh`: `F5` and `Ctrl+R`, `Zoom In`: `Ctrl+=` and `Ctrl++`). The menu shows the first one; the second rides mygo's window shortcuts, so the View menu lists each action once.
+
+Right-clicking the document area opens its menu: Copy (greyed out with no selection), Select All, Find, Refresh, Reveal in Sidebar, Open in File Manager and Copy Path. Right-clicking a tab opens Reveal in Sidebar, Open in File Manager, Copy File Path and the close commands.
+
 ## Requirements
 
 - Go 1.27.3 or later.
