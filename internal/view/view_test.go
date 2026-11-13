@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -204,7 +205,7 @@ func TestScrollTargetBlockScrolls(t *testing.T) {
 	b.WriteString("# Top\n\n")
 	for i := range 40 {
 		b.WriteString("Paragraph number ")
-		b.WriteString(itoa(i))
+		b.WriteString(strconv.Itoa(i))
 		b.WriteString(" of filler.\n\n")
 	}
 	b.WriteString("Target paragraph at the end.\n")
@@ -409,7 +410,8 @@ func TestLayoutUsesHeadingSize(t *testing.T) {
 // same widths.
 func TestTableColumnsConsistent(t *testing.T) {
 	m := doc.New("| a | bbbb... |\n|---|---|\n| 1 | 2 |\n")
-	widths := tableColumnWidths(m, m.Blocks()[0].Index)
+	var st State
+	widths := tableColumnWidths(&st, m, m.Blocks()[0].Index)
 	if len(widths) != 2 {
 		t.Fatalf("%d widths, want 2", len(widths))
 	}
@@ -427,9 +429,10 @@ func TestTableColumnsConsistent(t *testing.T) {
 // the bold weight its cells render at, so "Name" does not wrap.
 func TestTableHeaderWidthFitsBold(t *testing.T) {
 	m := doc.New("| Name | Value |\n|---|---|\n| a | b |\n")
-	widths := tableColumnWidths(m, m.Blocks()[0].Index)
-	bold, _ := ui.ShapeText("Name", ui.Font{Size: 14, Weight: 600}, 10000).Size()
-	regular, _ := ui.ShapeText("Name", ui.Font{Size: 14, Weight: 400}, 10000).Size()
+	var st State
+	widths := tableColumnWidths(&st, m, m.Blocks()[0].Index)
+	bold, _ := ui.ShapeText("Name", ui.Font{Size: st.bodySize() * 14 / 15, Weight: 600}, 10000).Size()
+	regular, _ := ui.ShapeText("Name", ui.Font{Size: st.bodySize() * 14 / 15, Weight: 400}, 10000).Size()
 	if bold > regular && widths[0] <= regular+20 {
 		t.Fatalf("width %v: header measured regular (bold %v, regular %v)", widths[0], bold, regular)
 	}

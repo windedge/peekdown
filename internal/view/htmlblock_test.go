@@ -217,9 +217,9 @@ func TestHTMLBlockSearchHighlightInQuote(t *testing.T) {
 	state.Current = -1
 	// htmlBlock must overlay the nested block's piece at its base in the
 	// quote's run, not at the run's start; assert the seam directly.
-	leaf, hbase := htmlLeaf(m, html)
+	leaf, hbase := runBase(m, html)
 	if leaf != quote || hbase != 7 {
-		t.Fatalf("htmlLeaf(%d) = %d, %d, want the quote %d at 7", html, leaf, hbase, quote)
+		t.Fatalf("runBase(%d) = %d, %d, want the quote %d at 7", html, leaf, hbase, quote)
 	}
 	// The paragraph's spans as htmlNode builds them, cut at the match
 	// through that base: the highlight lands on "search", not shifted

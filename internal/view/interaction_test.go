@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func wordMid(t *testing.T, tt *ui.Tester, want string) float32 {
 			continue
 		}
 		text := strings.SplitN(label, "\n", 2)[0]
-		layout := ui.ShapeText(text, ui.Font{Size: 15}, 10000)
+		layout := ui.ShapeText(text, ui.Font{Size: defaultBodySize}, 10000)
 		a, b := strings.Index(text, want), strings.Index(text, want)+len(want)
 		mid := (layout.Caret(a).X + layout.Caret(b).X) / 2
 		if mid <= 0 {
@@ -229,7 +230,7 @@ func TestDragSelectAfterScroll(t *testing.T) {
 	var b strings.Builder
 	for i := range 40 {
 		b.WriteString("Paragraph number ")
-		b.WriteString(itoa(i))
+		b.WriteString(strconv.Itoa(i))
 		b.WriteString(" of the long document.\n\n")
 	}
 	m := doc.New(b.String())
@@ -262,21 +263,26 @@ func TestSingleHandlerCoordinates(t *testing.T) {
 	// last row's end, still in document. (A press above the window's
 	// top comes as no press at all: the engine lets it go where the
 	// window does not take it.)
-	x, rowY := findText(t, tt, "Alpha", false)
+	x, _ := findText(t, tt, "Alpha", false)
+	// A move below the last row's box, in the list's empty room under it:
+	// the block gap makes a row taller than its line, so the spot comes
+	// from the last row's rectangle, not from a fixed offset.
+	_, lastY := findText(t, tt, "Gamma", false)
+	below := lastY + 40
 	tt.Press(x, 5)
-	tt.Move(x, rowY+50)
-	tt.Release(x, rowY+50)
+	tt.Move(x, below)
+	tt.Release(x, below)
 	got := state.SelectionText(m)
 	want := "Alpha beta.\nGamma delta."
 	if got != want {
 		t.Fatalf("selected %q, want %q", got, want)
 	}
-	if !state.HasSelection() || !state.HasCaret() {
-		t.Fatalf("HasSelection %v, HasCaret %v", state.HasSelection(), state.HasCaret())
+	if !state.HasSelection() || !state.Selection.set {
+		t.Fatalf("HasSelection %v, caret %v", state.HasSelection(), state.Selection.set)
 	}
 	// A collapsed selection is no selection, but still a caret.
 	state.SetSelection(selection.Point{Block: 0}, selection.Point{Block: 0})
-	if state.HasSelection() || !state.HasCaret() {
-		t.Fatalf("collapsed: HasSelection %v, HasCaret %v", state.HasSelection(), state.HasCaret())
+	if state.HasSelection() || !state.Selection.set {
+		t.Fatalf("collapsed: HasSelection %v, caret %v", state.HasSelection(), state.Selection.set)
 	}
 }

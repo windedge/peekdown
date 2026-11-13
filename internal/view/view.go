@@ -7,8 +7,11 @@ import (
 	"cmp"
 	"fmt"
 	"image"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -27,6 +30,12 @@ type State struct {
 	// List is the virtual list of the document's blocks.
 	List ui.ListState
 
+	// ContentWidth caps the text column and centers it while the list,
+	// and its overlay scrollbar, keep spanning the window: the bar stays
+	// at the window's edge and only the lines that would grow too long
+	// for reading pull in. 0 leaves the column at the list's width.
+	ContentWidth float32
+
 	// Selection is the text selection over the document's blocks.
 	Selection selectionRange
 	// Caret blinks at the selection's caret while the view has the focus.
@@ -37,6 +46,11 @@ type State struct {
 	dragging bool
 	// press is where the drag began.
 	press selection.Point
+	// pressXY is the press's window position and moved reports whether a
+	// drag moved past the click's threshold: a release inside it is a
+	// click, which opens a link the press landed on.
+	pressXY      ui.Point
+	clickedALink bool
 
 	// rowHandles bind each block's row as it builds, so the handler's
 	// hit reads the committed frame's rectangles out of band, after the
@@ -52,12 +66,24 @@ type State struct {
 	Matches []doc.Match
 	Current int
 
+	// FrontCollapsed folds the frontmatter card to its header row. It
+	// lives per tab, so each file keeps its own fold; session only, never
+	// saved to settings.
+	FrontCollapsed bool
+
 	// Anchor scrolls the heading of this slug into view; AnchorVersion
 	// asks for the same anchor again.
-	Anchor         string
-	AnchorVersion  uint64
-	anchorDone     string
-	anchorVersions uint64
+	Anchor        string
+	AnchorVersion uint64
+	anchorDone    string
+
+	// PendingAnchor holds a cross-document anchor a file link asked for
+	// before its document was known to hold the heading: each frame
+	// retries, a hit promotes the slug to Anchor, a miss counts against
+	// pendingAnchorTries and then drops, so a dead anchor cannot jump on
+	// a later edit that happens to add the heading.
+	PendingAnchor       string
+	pendingAnchorMisses int
 
 	// ScrollTargetBlock is the block the search found the current match
 	// in, which the view scrolls into view; -1 for none. The search bar
@@ -65,6 +91,24 @@ type State struct {
 	// value survives one scroll, so the next sets it again.
 	ScrollTargetBlock int
 	scrollTargetDone  int
+
+	// OpenURL opens a link's destination in the browser; nil makes the
+	// links inert. The view calls it with http/https/mailto only; an
+	// anchor (#slug) scrolls the heading into view instead.
+	OpenURL func(string)
+	// LinksWired reports that OpenURL is in place: the shell sets it
+	// when it injects OpenURL each frame. The outline reads it to skip
+	// the scroll-follow work before the first frame wired a tab, where
+	// OpenURL alone was a guess: a caller may leave OpenURL nil on
+	// purpose, which is "inert", not "not yet wired".
+	LinksWired bool
+
+	// OpenLocalLink runs when a release lands on a link that is no
+	// anchor and no web scheme: a file path, whose "#fragment" tail
+	// rides along raw. The view knows no document directory, so the
+	// shell resolves the destination against the open file and shows it
+	// as a tab; nil leaves such links inert.
+	OpenLocalLink func(string)
 
 	// AnchorOf returns the anchor of top-level block i, as the model
 	// makes them, so the view can find the row to scroll to.
@@ -77,6 +121,46 @@ type State struct {
 	// clicked, with the block's Raw text; nil hides the button. The shell
 	// writes the clipboard and toasts; the view keeps out of the host.
 	CopyFrontmatter func(string)
+
+	// CopyText runs when a code block's copy button is clicked, with the
+	// block's source text; nil hides the buttons. The shell writes the
+	// clipboard and toasts, as it does for the frontmatter.
+	CopyText func(string)
+
+	// Menu holds the document area's context menu commands; nil leaves the
+	// area without a menu. The shell injects them, so the view keeps out of
+	// the clipboard, the search bar and the file manager.
+	Menu *MenuActions
+	// copiedBlock and copiedAt hold the block whose copy button shows that
+	// it copied, and when; a zero copiedAt is none.
+	copiedBlock int
+	copiedAt    time.Time
+	// copyHandles are the copy buttons' rectangles, which the handler
+	// reads out of band to leave their presses to the buttons.
+	copyHandles map[int]*ui.Handle
+
+	// FontSize is the body's size, from the font_size setting; 0 draws
+	// at defaultBodySize. The shell injects it every frame, so a save
+	// re-renders without further wiring.
+	FontSize float32
+	// MonoFontSize is the size of the code's monospaced text, the code
+	// blocks, the inline code and the frontmatter's; 0 draws at
+	// defaultMonoSize. The shell injects it every frame too.
+	MonoFontSize float32
+	// FontFamily is the prose family, from the font_family setting; ""
+	// keeps the theme's default. Empty is the common case: mygo resolves
+	// an element's family, a span's, against the system's list and falls
+	// back to its sans.
+	FontFamily string
+	// MonoFontFamily is the code's family, from mono_font_family; ""
+	// keeps "monospace".
+	MonoFontFamily string
+	// Zoom is the shell's runtime text zoom as a multiplier, 1 at 100
+	// percent; 0 draws as 1. The sizes above are already scaled by it, so
+	// only the mermaid diagrams, rendered rather than shaped, read it:
+	// they follow the text into a sharper raster. It is not a window zoom
+	// (ticket #25).
+	Zoom float64
 
 	// LoadMermaid renders a mermaid diagram to a picture; nil shows
 	// mermaid blocks as plain source code. The shell wires the shared
@@ -99,6 +183,20 @@ type State struct {
 
 	// Theme of the view's code: the window's by default.
 	CodeTheme *editor.Theme
+}
+
+// MenuActions are the document area's context menu commands, bound by the
+// shell to the active tab. A nil func does nothing; HasSelection greys Copy
+// out when there is nothing to copy.
+type MenuActions struct {
+	HasSelection      func() bool
+	Copy              func()
+	SelectAll         func()
+	Find              func()
+	Refresh           func()
+	Reveal            func()
+	OpenInFileManager func()
+	CopyPath          func()
 }
 
 // selectionRange is the selection as the view sees it: a half-open run of
@@ -139,6 +237,11 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			if ev.Button != 0 {
 				return false
 			}
+			if st.copyButtonAt(ev) {
+				// The press belongs to the copy button, not to a selection
+				// drag: leaving it undelivered lets the button take it.
+				return false
+			}
 			st.invalidateStale(m)
 			// A press above the window's top comes clamped below zero
 			// (the engine keeps the element hit), as the first row.
@@ -147,6 +250,8 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 				return false
 			}
 			st.press = p
+			st.pressXY = st.listXY(ev)
+			st.clickedALink = st.linkAt(m, ev) != ""
 			st.dragging = true
 			switch {
 			case ev.Clicks == 2:
@@ -167,6 +272,12 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			if !ok {
 				return false
 			}
+			// Past the click's threshold this is a drag: the release then
+			// selects and opens nothing.
+			d := st.listXY(ev)
+			if dx, dy := d.X-st.pressXY.X, d.Y-st.pressXY.Y; dx*dx+dy*dy > clickThreshold*clickThreshold {
+				st.clickedALink = false
+			}
 			st.SetSelection(st.press, p)
 			return true
 		case ui.InputPointerUp:
@@ -174,6 +285,9 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 				return false
 			}
 			st.dragging = false
+			if st.clickedALink {
+				st.openLinkAt(m, ev)
+			}
 			return true
 		}
 		return false
@@ -191,8 +305,116 @@ func (st *State) invalidateStale(m *doc.Model) {
 		st.Selection.set = false
 		st.Matches = nil
 		st.Current = -1
+		st.copyHandles = nil
 		st.docVersion = v
 	}
+}
+
+// copyButtonAt reports whether the pointer event lands on a code block's
+// copy button. The view's handler takes every press over the list, so it
+// has to let the buttons have their own.
+func (st *State) copyButtonAt(ev ui.InputEvent) bool {
+	if st.ctx == nil || len(st.copyHandles) == 0 {
+		return false
+	}
+	p := st.listXY(ev)
+	for _, h := range st.copyHandles {
+		r := h.Bounds(st.ctx)
+		if p.X >= r.X && p.X <= r.X+r.W && p.Y >= r.Y && p.Y <= r.Y+r.H {
+			return true
+		}
+	}
+	return false
+}
+
+// clickThreshold is the drag distance in DIPs under which a press and
+// release still count as a click, one that opens a link.
+const clickThreshold = float32(4)
+
+// listXY returns the event's position in window coordinates: the
+// handler's events are the list's, and the list's rectangle turns the
+// local point into a window one.
+func (st *State) listXY(ev ui.InputEvent) ui.Point {
+	if st.ctx == nil {
+		return ui.Point{X: ev.X, Y: ev.Y}
+	}
+	listRect := st.List.Handle.Bounds(st.ctx)
+	return ui.Point{X: listRect.X + ev.X, Y: listRect.Y + ev.Y}
+}
+
+// linkAt returns the link destination the pointer event lands on, or "":
+// the point's block and rune offset read out of band like the selection's,
+// and the block's inlines name the link that run position sits in. Images
+// wrapped in one link answer the outer link's destination, which the walk
+// never marks.
+func (st *State) linkAt(m *doc.Model, ev ui.InputEvent) string {
+	p, ok := st.pointAt(m, ev, false)
+	if !ok {
+		return ""
+	}
+	if dest := m.LinkTargetOf(p.Block); dest != "" {
+		return dest
+	}
+	return linkDestOf(m, p.Block, p.Offset)
+}
+
+// openLinkAt acts on the link the release landed on: an anchor scrolls
+// its heading into view, a safe URL the view hands to OpenURL, the shell
+// then opens it in the browser, and anything else is a file link the
+// shell resolves against the document's directory. Unsafe schemes and
+// unknown anchors do nothing.
+func (st *State) openLinkAt(m *doc.Model, ev ui.InputEvent) {
+	dest := st.linkAt(m, ev)
+	if dest == "" {
+		return
+	}
+	if anchor, ok := strings.CutPrefix(dest, "#"); ok {
+		if anchor == "" {
+			return
+		}
+		if block, ok := m.AnchorBySlug(anchor); ok {
+			st.ScrollTargetBlock = block
+		}
+		return
+	}
+	if urlSafe(dest) {
+		if st.OpenURL != nil {
+			st.OpenURL(dest)
+		}
+		return
+	}
+	// Neither anchor nor scheme: a local path, markdown or not. Whether
+	// the target exists is the shell's call, which knows the document's
+	// directory and what it can open.
+	if st.OpenLocalLink != nil {
+		st.OpenLocalLink(dest)
+	}
+}
+
+// urlSafe reports whether the view may hand url to OpenURL: http, https
+// and mailto, the set the HTML whitelist keeps; javascript:, file:, data:
+// and friends open nothing.
+func urlSafe(url string) bool {
+	l := strings.ToLower(url)
+	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") ||
+		strings.HasPrefix(l, "mailto:")
+}
+
+// linkDestOf returns the destination of the link whose text covers rune
+// offset off of block i's run, or "" when the offset sits outside any
+// link. The walk flattens the inlines to the run text the offsets
+// address, so it is the one authority for which runes a link owns.
+func linkDestOf(m *doc.Model, i, off int) string {
+	var dest string
+	walk(m.Inlines(i), style{}, func(text string, kind runKind, link bool, d string) {
+		if link && d != "" && off >= 0 && off < runeLen(text) {
+			dest = d
+		}
+		// Every run advances the offset, link or not: the run text the
+		// offsets address is all the runs joined.
+		off -= runeLen(text)
+	})
+	return dest
 }
 
 // pointAt returns the document point under the handler's event and
@@ -249,11 +471,12 @@ func (st *State) offsetAt(m *doc.Model, block int, rect, listRect ui.Rect, x, y 
 	if width <= 0 {
 		width = 10000
 	}
-	// A heading shapes at its level's size, the body at 15; rows move
-	// between the two as the document edits, so the size rides the key.
-	size := float32(15)
+	// A heading shapes at its level's size, the body at its setting;
+	// rows move between the two as the document edits, so the size rides
+	// the key.
+	size := st.bodySize()
 	if m.Block(block).Kind == parser.Heading {
-		size = headingSize(m.Block(block).Level)
+		size = headingSize(st.bodySize(), m.Block(block).Level)
 	}
 	layout := st.layout(block, text, width, size)
 	if layout == nil {
@@ -287,11 +510,54 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	// The handler takes the pointer for the drag selection and returns
 	// false for the rest, the wheel among it, so the list keeps scrolling.
 	list.HandleInput(st.Handler(m))
+	if st.Menu != nil {
+		list.ContextMenu(func(menu *ui.Menu) { st.documentMenu(menu) })
+	}
 	if st.AnchorOf == nil {
 		st.AnchorOf = anchorsOf(m)
 	}
 	st.scrollPendingAnchor(m)
 	st.scrollPendingMatch(m)
+}
+
+// documentMenu fills the document area's context menu, in the Rust
+// version's order: the editing commands, then the search and the reload,
+// then the commands that act on the open file. The whole document is the
+// menu's subject, wherever the click landed. The items stay the same with
+// a nil action, which is what keeps the choice's place among them stable.
+func (st *State) documentMenu(menu *ui.Menu) {
+	a := st.Menu
+	copyOn := a.HasSelection != nil && a.HasSelection()
+	if menu.Item("Copy").Disabled(!copyOn).Chosen() {
+		callAction(a.Copy)
+	}
+	if menu.Item("Select All").Chosen() {
+		callAction(a.SelectAll)
+	}
+	menu.Separator()
+	if menu.Item("Find").Chosen() {
+		callAction(a.Find)
+	}
+	if menu.Item("Refresh").Chosen() {
+		callAction(a.Refresh)
+	}
+	menu.Separator()
+	if menu.Item("Reveal in Sidebar").Chosen() {
+		callAction(a.Reveal)
+	}
+	if menu.Item("Open in File Manager").Chosen() {
+		callAction(a.OpenInFileManager)
+	}
+	if menu.Item("Copy Path").Chosen() {
+		callAction(a.CopyPath)
+	}
+}
+
+// callAction runs a menu action unless the shell left it nil.
+func callAction(fn func()) {
+	if fn != nil {
+		fn()
+	}
 }
 
 // scrollPendingMatch scrolls to the block the search's current match is
@@ -329,12 +595,31 @@ func (st *State) Row(c *ui.Context, m *doc.Model, r int) {
 		handle = &ui.Handle{}
 		st.rowHandles[block] = handle
 	}
-	// The end padding keeps the row's text clear of the scrollbar: the
+	// The right padding keeps the row's text clear of the scrollbar: the
 	// shell pads the content's right edge 0 so the scrollbar hugs the
-	// window's edge, and the clearance happens here instead.
-	row := ui.Column(c).Padding(0, 16, 0, 0)
-	row.Bind(handle)
-	row.Children(func() {
+	// window's edge, and the clearance happens here instead. The bottom
+	// padding is the gap every block-level row shares, the Rust version's
+	// paragraph_gap: 1rem of air under each block. The handle binds the
+	// padded column, whose width the hit shapes the text at.
+	newColumn := func() ui.Element {
+		col := ui.Column(c).Padding(0, rowClearance, blockGap, 0)
+		col.Bind(handle)
+		return col
+	}
+	if st.ContentWidth > 0 {
+		// The row still spans the window, so the bar keeps to its edge;
+		// only the column inside pulls in and centers. Grow with the cap,
+		// not the cap alone: a column without a width shrinks to its
+		// content, which would center each block by its own length. The
+		// row is built before the column, which then attaches inside it.
+		ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
+			newColumn().Grow(1).MaxWidth(st.ContentWidth).Children(func() {
+				Render(c, m, st, block)
+			})
+		})
+		return
+	}
+	newColumn().Children(func() {
 		Render(c, m, st, block)
 	})
 }
@@ -365,7 +650,7 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 	case parser.List:
 		st.list(c, m, i, b, 0)
 	case parser.ThematicBreak:
-		ui.Box(c).Height(1).Background(c.Theme().Border).AlignSelf(ui.Stretch).MarginY(8)
+		ui.Box(c).Height(2).Background(st.tokens(c).border).AlignSelf(ui.Stretch)
 	case parser.HTMLBlock:
 		st.htmlBlock(c, m, i)
 	case parser.FootnoteDefinition:
@@ -382,7 +667,151 @@ func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 
 const (
 	fontMono = "monospace"
+
+	// defaultBodySize is the body's size without a setting: the Rust
+	// reader's base, the font_size setting rides over it.
+	defaultBodySize = float32(15)
+
+	// blockGap is the air under every block-level row: the Rust version's
+	// paragraph_gap, 1rem. A container spaces its own children, so only a
+	// block-level element takes it.
+	blockGap = float32(16)
+
+	// rowClearance is the room a row keeps clear on the right for the
+	// list's overlay scrollbar: the shell gives the content no right
+	// padding so the bar hugs the window's edge, and the row carries the
+	// clearance itself. The frontmatter card, which sits above the list
+	// rather than in it, takes the same room as its right margin.
+	rowClearance = float32(16)
+
+	// codeBlockPadding is the room inside a code block's panel: the Rust
+	// version's p_3.
+	codeBlockPadding = float32(12)
+
+	// inlineCodeScale shrinks inline code a little, a monospaced run
+	// reading wider than the text around it at the same size;
+	// inlineCodePadding and inlineCodeRadius are the chip's inline box.
+	inlineCodeScale   = 0.95
+	inlineCodePadding = float32(3)
+	inlineCodeRadius  = float32(3)
+	// inlineCodeTint is how far the accent tints the inline code's chip
+	// off the page: the Rust version's accent highlight, kept readable on
+	// the light and the dark page alike.
+	inlineCodeTint = 0.12
+	// quoteBarTint is how far the accent tints the quote's bar off the
+	// border's gray: the Rust version's secondary_active, low in
+	// saturation.
+	quoteBarTint = 0.55
+
+	// tableBaseSize is the table text's size at the default body: both
+	// docTokens.tableSize and tableColumnWidths measure scale from it.
+	tableBaseSize = float32(14)
+
+	// defaultMonoSize and defaultRadius stand in for a theme or a state
+	// that names neither.
+	defaultMonoSize = float32(13)
+	defaultRadius   = float32(6)
 )
+
+// docTokens is the document's slice of the theme: the tokens the blocks
+// draw with, mapped once instead of scattered over the builders. The
+// Rust version reads the same roles out of gpui-component's Theme, whose
+// token names differ from mygo's:
+//
+//	body text   theme.Text            (Rust foreground)
+//	muted text  theme.TextMuted       (Rust muted_foreground)
+//	panels      theme.Surface         (Rust muted: code blocks, table heads)
+//	inline code accent tinted into the page (Rust accent)
+//	quote bar   accent faded into the border (Rust secondary_active)
+//	links       theme.Accent         (Rust link)
+//	grid, rules theme.Border         (Rust border)
+type docTokens struct {
+	text     ui.Color
+	muted    ui.Color
+	panel    ui.Color
+	inline   ui.Color
+	quote    ui.Color
+	link     ui.Color
+	border   ui.Color
+	radius   float32
+	body     float32
+	monoSize float32
+	sans     string
+	mono     string
+}
+
+// tokens maps the window's theme and the document's settings onto the
+// document's roles.
+func (st *State) tokens(c *ui.Context) docTokens {
+	t := c.Theme()
+	radius := t.Radius
+	if radius <= 0 {
+		radius = defaultRadius
+	}
+	monoSize := st.MonoFontSize
+	if monoSize <= 0 {
+		monoSize = defaultMonoSize
+	}
+	body := st.FontSize
+	if body <= 0 {
+		body = defaultBodySize
+	}
+	return docTokens{
+		text:     t.Text,
+		muted:    t.TextMuted,
+		panel:    t.Surface,
+		inline:   t.Background.Mix(t.Accent, inlineCodeTint),
+		quote:    t.Border.Mix(t.Accent, quoteBarTint),
+		link:     t.Accent,
+		border:   t.Border,
+		radius:   radius,
+		body:     body,
+		monoSize: monoSize,
+		sans:     st.FontFamily,
+		mono:     st.MonoFontFamily,
+	}
+}
+
+// bodySize is the body's size without a context, for hit testing: the
+// setting's, over the default.
+func (st *State) bodySize() float32 {
+	if st.FontSize > 0 {
+		return st.FontSize
+	}
+	return defaultBodySize
+}
+
+// inlineCode dresses a span as inline code: a monospaced run in a rounded
+// chip, the Rust version's highlight on the accent.
+func (tk docTokens) inlineCode(sp ui.Span) ui.Span {
+	sp.Font = tk.monoFamily()
+	sp.Size *= inlineCodeScale
+	sp.Background = tk.inline
+	sp.Radius = inlineCodeRadius
+	sp.PaddingX = inlineCodePadding
+	return sp
+}
+
+// monoFamily is the family the mono text draws with: the setting's, or
+// the hardcoded monospace default.
+func (tk docTokens) monoFamily() string {
+	if tk.mono != "" {
+		return tk.mono
+	}
+	return fontMono
+}
+
+// tableSize is the table text's size: 14 at the default body, riding
+// the body's scale as the headings do. tableColumnWidths measures at
+// the same ratio.
+func (tk docTokens) tableSize() float32 { return tableSizeAt(tk.body) }
+
+// tableSizeAt is the table's font size for a body of the given size: the
+// base table size scaled the way the headings scale, the one expression
+// tableSize and tableColumnWidths share.
+func tableSizeAt(body float32) float32 {
+	return tableBaseSize * body / defaultBodySize
+}
 
 // style is the base style of a run of spans.
 type style struct {
@@ -396,7 +825,7 @@ type style struct {
 
 func (st *State) heading(c *ui.Context, m *doc.Model, i, level int) {
 	s := style{weight: 700}
-	s.size, s.color = headingStyle(c, level)
+	s.size, s.color = headingStyle(c, st, level)
 	st.richParagraph(c, m, i, s, true)
 }
 
@@ -404,28 +833,37 @@ func (st *State) paragraph(c *ui.Context, m *doc.Model, i int, s style) {
 	st.richParagraph(c, m, i, s, false)
 }
 
-// headingSize is the font size of a heading's level, the same numbers
-// headingStyle colors with, without a context: the pointer's hit shaping
-// reads it out of band.
-func headingSize(level int) float32 {
+// headingSize is the font size of a heading's level, for a body of the
+// given size. Ticket #19 keeps ticket #18's absolute 28/22/18/16/15/14
+// (a body of 15) and scales them by body/15, so the whole page grows
+// with the font_size setting: h1 is 1.87x, h2 1.47x, h3 1.2x, h4 1.07x,
+// h5 1x and h6 0.93x of the body. A body of 15 reproduces the old
+// numbers; headingStyle colors with the same function.
+func headingSize(body float32, level int) float32 {
+	if body <= 0 {
+		body = defaultBodySize
+	}
+	scale := body / defaultBodySize
+	var size float32
 	switch level {
 	case 1:
-		return 28
+		size = 28
 	case 2:
-		return 22
+		size = 22
 	case 3:
-		return 18
+		size = 18
 	case 4:
-		return 16
+		size = 16
 	case 5:
-		return 15
+		size = 15
 	default:
-		return 14
+		size = 14
 	}
+	return size * scale
 }
 
-func headingStyle(c *ui.Context, level int) (float32, ui.Color) {
-	size := headingSize(level)
+func headingStyle(c *ui.Context, st *State, level int) (float32, ui.Color) {
+	size := headingSize(st.bodySize(), level)
 	if level > 5 || level <= 0 {
 		return size, c.Theme().TextMuted
 	}
@@ -435,22 +873,22 @@ func headingStyle(c *ui.Context, level int) (float32, ui.Color) {
 // richParagraph builds block i's text as styled spans, heading when it is
 // one, so it gets its role.
 func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, heading bool) {
-	t := c.Theme()
+	tk := st.tokens(c)
 	if s.size == 0 {
-		s.size = 15
+		s.size = tk.body
 	}
 	if s.weight == 0 {
 		s.weight = 400
 	}
 	if s.color == (ui.Color{}) {
-		s.color = t.Text
+		s.color = tk.text
 	}
 	if images := m.Images(i); len(images) > 0 {
 		st.images(c, i, images)
 		return
 	}
 	spans := st.spans(c, m, i, s)
-	el := ui.RichText(c, spans...).FontFeatures("tnum").AlignSelf(ui.Stretch).MinWidth(0)
+	el := ui.RichText(c, spans...).Font(tk.sans).FontFeatures("tnum").AlignSelf(ui.Stretch).MinWidth(0)
 	if heading {
 		el.Role(ui.RoleHeading).Level(m.Block(i).Level)
 	}
@@ -459,39 +897,60 @@ func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, head
 // spans walks block i's inlines into styled spans, drawing the selection
 // and the matches over the text.
 func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
-	t := c.Theme()
+	tk := st.tokens(c)
 	spans := []ui.Span{}
-	walk(m.Inlines(i), s, func(text string, mark, link bool, dest string) {
+	walk(m.Inlines(i), s, func(text string, kind runKind, link bool, dest string) {
 		if text == "" {
 			return
 		}
 		base := s
 		if base.color == (ui.Color{}) {
-			base.color = t.Text
+			base.color = tk.text
 		}
 		if link {
 			// A link reads as ui.Link does, the accent color underlined;
 			// full link interaction is later work.
-			base.color = t.Accent
+			base.color = tk.link
 			base.underline = true
 		}
-		if mark {
-			base.color = t.TextMuted
-			base.size = s.size * 0.95
+		sp := ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color, Underline: base.underline}
+		switch kind {
+		case runCode:
+			// Code is the chip: the Rust version highlights it on the
+			// theme's accent.
+			sp = tk.inlineCode(sp)
+		case runLiteral:
+			// Inline HTML, math and a footnote's mark are source, not
+			// prose: muted, a touch smaller, no chip.
+			sp.Color = tk.muted
+			sp.Size *= inlineCodeScale
 		}
-		spans = append(spans, ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color, Underline: base.underline})
+		spans = append(spans, sp)
 	})
 	return st.overlay(c, m, i, spans)
 }
 
-// walk flattens inlines to runs of text in style s, marking code and
-// links. The spans' texts joined are the block's run text in doc's run
+// runKind says how a run of inline text reads.
+type runKind uint8
+
+const (
+	// runPlain is prose, the body text.
+	runPlain runKind = iota
+	// runCode is inline code: a monospaced run on its chip.
+	runCode
+	// runLiteral is source the view shows but does not typeset: inline
+	// HTML, math, a footnote's mark. It reads muted.
+	runLiteral
+)
+
+// walk flattens inlines to runs of text in style s, marking code, literals
+// and links. The spans' texts joined are the block's run text in doc's run
 // table, rune for rune: the offsets of the selection, the cuts and the
 // search all address that text. LineBreak and FootnoteRef follow
 // parser.PlainText (a break is a space, a note is "[^label]"); an
 // image's alt text stays in the text, as PlainText's flat walk over the
 // inline array emits it too.
-func walk(in []parser.Inline, s style, fn func(text string, code, link bool, dest string)) {
+func walk(in []parser.Inline, s style, fn func(text string, kind runKind, link bool, dest string)) {
 	walkRange(in, 0, len(in), s, fn)
 }
 
@@ -504,7 +963,7 @@ func walk(in []parser.Inline, s style, fn func(text string, code, link bool, des
 // past the subtree's own (a malformed table the streaming parser has
 // not healed yet) clamps too, so a bad index can never reach out of the
 // array the walk was handed.
-func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, code, link bool, dest string)) {
+func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, kind runKind, link bool, dest string)) {
 	for k := from; k < to; k++ {
 		n := &in[k]
 		end := n.Next
@@ -516,30 +975,30 @@ func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, c
 		}
 		switch n.Kind {
 		case parser.Text:
-			fn(n.Text, false, false, "")
+			fn(n.Text, runPlain, false, "")
 		case parser.SoftBreak:
-			fn(" ", false, false, "")
+			fn(" ", runPlain, false, "")
 		case parser.LineBreak:
-			fn(" ", false, false, "")
+			fn(" ", runPlain, false, "")
 		case parser.Code:
-			fn(n.Text, true, false, "")
+			fn(n.Text, runCode, false, "")
 		case parser.Emphasis:
 			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, fn)
 		case parser.Strong:
 			walkRange(in, k+1, end, style{size: s.size, weight: 700, color: s.color, underline: s.underline}, fn)
 		case parser.Link:
-			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
-				fn(text, code, true, n.Dest)
+			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, kind runKind, link bool, dest string) {
+				fn(text, kind, true, n.Dest)
 			})
 		case parser.Image:
 			// Its description stands for it within the text.
-			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, code, link bool, dest string) {
-				fn(text, code, false, "")
+			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, kind runKind, link bool, dest string) {
+				fn(text, kind, false, "")
 			})
 		case parser.HTML, parser.Math:
-			fn(n.Text, true, false, "")
+			fn(n.Text, runLiteral, false, "")
 		case parser.FootnoteRef:
-			fn("[^"+n.Text+"]", true, false, "")
+			fn("[^"+n.Text+"]", runLiteral, false, "")
 		}
 		if n.Next > k {
 			k = n.Next - 1
@@ -552,10 +1011,7 @@ func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, c
 // the row draws, often a cell or a quote's paragraph; its run and the
 // leaf's offset in it come from the run table.
 func (st *State) overlay(c *ui.Context, m *doc.Model, i int, spans []ui.Span) []ui.Span {
-	leaf, off := i, 0
-	if run, at := m.RunAt(i); run != nil {
-		leaf, off = run.Block, at
-	}
+	leaf, off := runBase(m, i)
 	return st.overlayRun(c, leaf, off, spans)
 }
 
@@ -566,8 +1022,19 @@ func (st *State) overlayRun(c *ui.Context, leaf, off int, spans []ui.Span) []ui.
 	var cuts []cut
 	if st.Selection.set {
 		start, end := st.Selection.start, st.Selection.end
-		if start.Block == end.Block && start.Block == leaf && start.Offset < end.Offset {
-			cuts = append(cuts, cut{start.Offset, end.Offset, cutSelection})
+		// A leaf between the endpoints is wholly selected: its cut spans
+		// the leaf's whole text, which splitSpans clamps to the leaf's
+		// ends. Only the endpoint leaves cut at their endpoint's offset.
+		// Offsets shift by off first, per-leaf as before.
+		if start.Block <= leaf && leaf <= end.Block && start.Before(end) {
+			from, to := 0, math.MaxInt
+			if leaf == start.Block {
+				from = start.Offset
+			}
+			if leaf == end.Block {
+				to = end.Offset
+			}
+			cuts = append(cuts, cut{from, to, cutSelection})
 		}
 	}
 	for k, match := range st.Matches {
@@ -748,8 +1215,7 @@ func mergeCuts(cuts []cut, total int) []segment {
 
 // images builds a row of pictures for the images of block i.
 func (st *State) images(c *ui.Context, i int, images []doc.Image) {
-	t := c.Theme()
-	ui.Row(c).Gap(8).PaddingY(6).AlignSelf(ui.Stretch).Children(func() {
+	ui.Row(c).Gap(8).AlignSelf(ui.Stretch).Children(func() {
 		for _, img := range images {
 			src := st.source(img.Dest)
 			if src != nil {
@@ -760,7 +1226,7 @@ func (st *State) images(c *ui.Context, i int, images []doc.Image) {
 			if label == "" {
 				label = img.Dest
 			}
-			ui.Text(c, label).FontSize(13).TextColor(t.TextMuted)
+			ui.Text(c, label).FontSize(st.tokens(c).monoSize).TextColor(st.tokens(c).muted)
 		}
 	})
 }
@@ -804,7 +1270,7 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 	// injecting system Microsoft YaHei (internal/mermaid/font.go); other
 	// platforms may still tofu (TODO macOS PingFang, Linux fontconfig).
 	if isMermaid(m.Language(i)) && st.LoadMermaid != nil {
-		b, err := st.mermaidBitmap(strings.Trim(m.Lines(i), "\n"), mermaidTheme(c), mermaidScale(c))
+		b, err := st.mermaidBitmap(strings.Trim(m.Lines(i), "\n"), mermaidTheme(c), mermaidScale(st))
 		if err == nil {
 			mermaidImage(c, b)
 			return
@@ -823,27 +1289,101 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 		}
 		spans = append(spans, codeSpans(line, toks, ct, t.Text)...)
 	}
-	st.monoPanel(c, i, spans)
+	st.monoPanel(c, i, strings.TrimRight(m.Lines(i), "\n"), spans)
 }
 
 // monoPanel wraps spans in the surface box the source-like blocks share:
 // a code block's tokenized lines, a math block's TeX, the source of any
-// kind the view does not map.
-func (st *State) monoPanel(c *ui.Context, i int, spans []ui.Span) {
-	t := c.Theme()
-	box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6).Gap(0).AlignSelf(ui.Stretch).MinWidth(0)
-	box.Children(func() { st.monoBox(c, i, 0, spans) })
+// kind the view does not map. text is what the copy button copies; an
+// empty text hides the button, and so does a view without CopyText.
+func (st *State) monoPanel(c *ui.Context, i int, text string, spans []ui.Span) {
+	tk := st.tokens(c)
+	// The bottom padding sits inside the scroller rather than on the panel:
+	// the horizontal scroll bar overlays the scroll box's last 9 DIPs, and
+	// the block's whole bottom padding puts the last line above it instead
+	// of under the thumb. The panel keeps its 12 DIPs either way.
+	box := ui.Column(c).Background(tk.panel).Radius(tk.radius).
+		Padding(codeBlockPadding, codeBlockPadding, 0, codeBlockPadding).
+		AlignSelf(ui.Stretch).MinWidth(0)
+	box.Children(func() {
+		st.copyButton(c, i, text)
+		// The line scrolls sideways rather than wrapping: a wrapped line
+		// breaks the code's shape, and the source keeps its own line
+		// breaks. A line that fits leaves the scroller idle.
+		ui.ScrollHorizontal(c).Label("Code block").AlignSelf(ui.Stretch).Direction(ui.LeftToRight).Children(func() {
+			col := ui.Column(c).Shrink(0).Padding(0, 0, codeBlockPadding, 0)
+			col.Children(func() { st.monoBox(c, i, 0, spans) })
+		})
+	})
 }
 
-// monoBox lays spans out as one no-wrap monospaced text in a surface box,
-// cutting the overlays into them at off, the leaf's base in its run.
+// monoBox lays spans out as one monospaced text in a surface box, cutting
+// the overlays into them at off, the leaf's base in its run. NoWrap keeps
+// every line whole: the panel around it scrolls the long ones.
 func (st *State) monoBox(c *ui.Context, i, off int, spans []ui.Span) {
 	if len(spans) == 0 {
 		spans = append(spans, ui.Span{Text: " "})
 	}
+	tk := st.tokens(c)
 	spans = st.overlayRun(c, i, off, spans)
-	el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
-	el.NoWrap()
+	ui.RichText(c, spans...).Font(tk.monoFamily()).FontSize(tk.monoSize).
+		MinWidth(0).NoWrap().Shrink(0)
+}
+
+// copyFeedback is how long a code block's copy button shows that it
+// copied, as the Rust version's two seconds.
+const copyFeedback = 2 * time.Second
+
+// copyButton builds the code block's copy button in the panel's top-right
+// corner, off the layout so the code keeps its place under it. It copies
+// text through CopyText, shows the accent check for copyFeedback, then
+// asks for the frame that puts it back. The label stays for the tester
+// and assistive technology; the tooltip names the action, which the icon
+// alone no longer says.
+func (st *State) copyButton(c *ui.Context, i int, text string) {
+	if st.CopyText == nil || text == "" {
+		return
+	}
+	tk := st.tokens(c)
+	copied := st.copied(i, c)
+	label := "Copy"
+	tip := "Copy code"
+	color := tk.muted
+	if copied {
+		label, tip, color = "Copied", "Copied", c.Theme().AccentText
+	}
+	b := ui.ButtonBase(c).Label(label).Padding(4).Radius(5).
+		AlignItems(ui.Center).Absolute().Right(6).Top(6).Tooltip(tip)
+	if st.copyHandles == nil {
+		st.copyHandles = map[int]*ui.Handle{}
+	}
+	if h := st.copyHandles[i]; h != nil {
+		b.Bind(h)
+	} else {
+		h := &ui.Handle{}
+		st.copyHandles[i] = h
+		b.Bind(h)
+	}
+	if b.Hovered() {
+		b.Background(c.Theme().SurfaceHover)
+	}
+	b.Children(func() {
+		icon := copyIcon
+		if copied {
+			icon = checkIcon
+		}
+		ui.Icon(c, icon).Size(12, 12).TextColor(color)
+	})
+	if b.Clicked() {
+		st.CopyText(text)
+		st.copiedBlock, st.copiedAt = i, c.Now()
+		c.After(copyFeedback)
+	}
+}
+
+// copied reports whether block i's copy button still shows its feedback.
+func (st *State) copied(i int, c *ui.Context) bool {
+	return !st.copiedAt.IsZero() && st.copiedBlock == i && c.Now().Sub(st.copiedAt) < copyFeedback
 }
 
 // codeSpans splits one line of code into spans, one per token, colored
@@ -875,19 +1415,20 @@ func splitLines(s string) []string {
 // sourceBlock renders block i's raw lines as plain monospaced gray text:
 // an unmapped or unstyled block kind falls back to its source.
 func (st *State) sourceBlock(c *ui.Context, m *doc.Model, i int) {
-	spans := []ui.Span{{Text: strings.Trim(m.Lines(i), "\n"), Color: c.Theme().TextMuted}}
-	st.monoPanel(c, i, spans)
+	text := strings.TrimRight(m.Lines(i), "\n")
+	spans := []ui.Span{{Text: text, Color: st.tokens(c).muted}}
+	st.monoPanel(c, i, text, spans)
 }
 
 // mutedChildren draws the blocks nested in i in muted text, the note of
 // a footnote definition, styled like a quote's text without its bar.
 func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
-	t := c.Theme()
-	col := ui.Column(c).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	tk := st.tokens(c)
+	col := ui.Column(c).AlignSelf(ui.Stretch).MinWidth(0)
 	col.Children(func() {
 		for j := range m.Children(i) {
 			if m.Block(j).Kind == parser.Paragraph {
-				st.paragraph(c, m, j, style{color: t.TextMuted})
+				st.paragraph(c, m, j, style{color: tk.muted})
 			} else {
 				Render(c, m, st, j)
 			}
@@ -895,52 +1436,96 @@ func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
 	})
 }
 
-// table builds a Markdown table as a grid of rows. A split table's slice
-// renders as a table of its own: the header it carries opens bold on a
-// surface, and a "rows N-M of T" note when the table has more slices.
+// table builds a Markdown table as a grid of rows: a cell per column,
+// ruled along every row and between every column, the header on a surface
+// at weight 600. The grid takes the width its columns measure, not the
+// row's: the Rust version draws a table at its content's width and leaves
+// the page's right side empty rather than stretching short cells apart.
+// A split table's slice renders as a table of its own: the header it
+// carries opens bold on a surface, only the first slice carries one, and
+// a "rows N-M of T" note closes a slice when the table has more slices.
 // Slices measure their columns independently, so the widths can drift a
-// little between slices of one table; the header repeats, which keeps
-// the drift readable.
+// little between slices of one table; the header repeats, which keeps the
+// drift readable.
 func (st *State) table(c *ui.Context, m *doc.Model, i int) {
-	t := c.Theme()
-	widths := tableColumnWidths(m, i)
-	grid := ui.Column(c).Border(1, t.Border).Radius(4).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	tk := st.tokens(c)
+	widths := tableColumnWidths(st, m, i)
+	// The centered column leaves the table that room; mygo does not clamp
+	// a fixed-width cell inside a MaxWidth'd grid, so a 4-column table's
+	// ~1205 DIPs would spill past the column's right edge (shot: the last
+	// column drawn outside the centered 900). Shrink the ratios into the
+	// room, and the longest columns wrap harder instead of escaping.
+	if room := st.ContentWidth - 2*rowClearance; room > 0 {
+		widths = shrinkWidths(widths, room-float32(len(widths))-2)
+	}
+	// The frame owns the radius and clips its rows to it: the header's
+	// surface is one band across the row, so its square corners would
+	// otherwise poke out of the frame's rounded ones.
+	grid := ui.Column(c).Border(1, tk.border).Radius(tk.radius).Clip().
+		MaxWidth(tableGridWidth(widths)).AlignSelf(ui.Start).MinWidth(0)
+	aligns := m.Block(i).Align
 	grid.Children(func() {
-		first := true
-		for _, row := range m.TableRows(i) {
-			r := ui.Row(c)
-			if first {
-				r.Background(t.Surface)
+		rows := m.TableRows(i)
+		for r, row := range rows {
+			head, last := r == 0, r == len(rows)-1
+			line := ui.Row(c)
+			if head {
+				// One background for the whole row, so the header reads as
+				// a band: the cells carry no fill of their own.
+				line.Background(tk.panel)
 			}
-			r.Children(func() {
-				for k, cell := range m.TableCells(row) {
+			if !last {
+				// The row's grid line; the last row's is the grid's own
+				// bottom border.
+				line.BorderWidth(0, 0, 1, 0).BorderColor(tk.border)
+			}
+			line.Children(func() {
+				cells := m.TableCells(row)
+				for k, cell := range cells {
 					s := style{}
-					if first {
+					if head {
 						s.weight = 600
 					}
 					spans := st.spans(c, m, cell, s)
-					ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10).Children(func() {
-						ui.RichText(c, spans...).FontSize(14).MinWidth(0)
+					box := ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10)
+					if k < len(cells)-1 {
+						box.BorderWidth(0, 1, 0, 0).BorderColor(tk.border)
+					}
+					align := columnAlign(aligns, k)
+					box.Children(func() {
+						ui.RichText(c, spans...).Font(tk.sans).FontSize(tk.tableSize()).
+							MinWidth(0).AlignSelf(ui.Stretch).TextAlign(align)
 					})
 				}
 			})
-			first = false
 		}
 		if b := m.Block(i); b.TableSlice && b.TableSliceFirst > 0 {
-			from, to := b.TableSliceFirst+1, b.TableSliceFirst+len(m.TableRows(i))-1
+			from, to := b.TableSliceFirst+1, b.TableSliceFirst+len(rows)-1
 			ui.Text(c, fmt.Sprintf("rows %d-%d of %d", from, to, b.TableTotalRows)).
-				TextColor(t.TextMuted).FontSize(12).Padding(4, 10)
+				TextColor(tk.muted).FontSize(tk.monoSize).Padding(4, 10).
+				BorderWidth(1, 0, 0, 0).BorderColor(tk.border)
 		}
 	})
+}
+
+// tableGridWidth is the width a table's grid draws at: its columns plus
+// their right borders, inside the grid's own two side borders.
+func tableGridWidth(widths []float32) float32 {
+	w := float32(2)
+	for _, cw := range widths {
+		w += cw + 1
+	}
+	return w
 }
 
 // tableColumnWidths measures a table's cells to size each column to its
 // widest cell, one shared width per column, so rows line up instead of
 // stretching to share the row. A cell measures its plain text at the
-// table's 14 with 20 for the padding, capped at 300; a header cell measures
-// bold, as it renders at weight 600, and a table without text takes the
-// default 80.
-func tableColumnWidths(m *doc.Model, table int) []float32 {
+// table's 14 with 20 for the padding and 1 for the column's right rule,
+// capped at 300; a header cell measures bold, as it renders at weight 600,
+// and a table without text takes the default 80.
+func tableColumnWidths(st *State, m *doc.Model, table int) []float32 {
+	size := tableSizeAt(st.bodySize())
 	widths := []float32{}
 	for r, row := range m.TableRows(table) {
 		weight := 400
@@ -948,10 +1533,10 @@ func tableColumnWidths(m *doc.Model, table int) []float32 {
 			weight = 600
 		}
 		for k, cell := range m.TableCells(row) {
-			w := float32(80)
+			w := float32(81)
 			if text := m.Plain(cell); text != "" {
-				tw, _ := ui.ShapeText(text, ui.Font{Size: 14, Weight: weight}, 10000).Size()
-				w = tw + 20
+				tw, _ := ui.ShapeText(text, ui.Font{Family: st.FontFamily, Size: size, Weight: weight}, 10000).Size()
+				w = tw + 21
 			}
 			w = min(w, 300)
 			for len(widths) <= k {
@@ -963,17 +1548,52 @@ func tableColumnWidths(m *doc.Model, table int) []float32 {
 	return widths
 }
 
+// shrinkWidths scales the columns down to fit the budget, keeping their
+// ratios; a budget below the columns' count leaves them alone.
+func shrinkWidths(widths []float32, budget float32) []float32 {
+	total := float32(0)
+	for _, w := range widths {
+		total += w
+	}
+	if total <= budget || total <= 0 {
+		return widths
+	}
+	scale := budget / total
+	out := make([]float32, len(widths))
+	for i, w := range widths {
+		out[i] = w * scale
+	}
+	return out
+}
+
+// columnAlign maps a table column's delimiter row, :---: / ---: / :---,
+// onto the alignment its cells draw with; a column past the delimiter row
+// and one without colons read left, the markdown default.
+func columnAlign(aligns []parser.Align, k int) ui.Align {
+	if k >= len(aligns) {
+		return ui.Start
+	}
+	switch aligns[k] {
+	case parser.AlignCenter:
+		return ui.Center
+	case parser.AlignRight:
+		return ui.End
+	default:
+		return ui.Start
+	}
+}
+
 // quote builds a block quote with its bar.
 func (st *State) quote(c *ui.Context, m *doc.Model, i int) {
-	t := c.Theme()
-	box := ui.Row(c).PaddingStart(12).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
-	box.BorderStartWidth(3).BorderColor(t.Border)
+	tk := st.tokens(c)
+	box := ui.Row(c).PaddingStart(16).AlignSelf(ui.Stretch).MinWidth(0)
+	box.BorderStartWidth(3).BorderColor(tk.quote)
 	box.Children(func() {
 		col := ui.Column(c).Gap(4).Grow(1).MinWidth(0)
 		col.Children(func() {
 			for _, j := range m.QuoteBlocks(i) {
 				if m.Block(j).Kind == parser.Paragraph {
-					st.paragraph(c, m, j, style{color: t.TextMuted})
+					st.paragraph(c, m, j, style{color: tk.muted})
 				} else {
 					Render(c, m, st, j)
 				}
@@ -985,21 +1605,27 @@ func (st *State) quote(c *ui.Context, m *doc.Model, i int) {
 // list builds a list, its items with markers or numbers, nested one level
 // deeper.
 func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int) {
-	t := c.Theme()
-	col := ui.Column(c).Gap(2).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	tk := st.tokens(c)
+	col := ui.Column(c).Gap(2).AlignSelf(ui.Stretch).MinWidth(0)
 	col.Children(func() {
 		number := b.Number
 		for _, item := range m.ListItems(i) {
 			marker := "•"
 			width := float32(18)
 			if b.Ordered {
-				marker = itoa(number) + "."
+				marker = strconv.Itoa(number) + "."
 				number++
 				width = 28
 			}
 			row := ui.Row(c).Gap(4).AlignSelf(ui.Stretch).MinWidth(0).AlignItems(ui.Baseline)
 			row.Children(func() {
-				ui.Text(c, marker).Width(width).TextColor(t.TextMuted).TextAlign(ui.End)
+				if item.Task != parser.NoTask {
+					// A task item's box stands in for the bullet, as the Rust
+					// version's checkbox replaces the marker.
+					st.taskBox(c, item.Task, width)
+				} else {
+					ui.Text(c, marker).Width(width).TextColor(tk.muted).TextAlign(ui.End)
+				}
 				content := ui.Column(c).Gap(2).Grow(1).MinWidth(0)
 				content.Children(func() {
 					for j := range m.Children(item.Index) {
@@ -1007,7 +1633,6 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 						switch child.Kind {
 						case parser.Paragraph:
 							spans := st.spans(c, m, j, style{})
-							spans = st.taskSpan(c, child, spans)
 							ui.RichText(c, spans...)
 						case parser.List:
 							st.list(c, m, j, child, depth+1)
@@ -1021,46 +1646,66 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 	})
 }
 
-// taskSpan prefixes a task item's spans with its check box.
-func (st *State) taskSpan(c *ui.Context, item doc.Block, spans []ui.Span) []ui.Span {
-	switch item.Task {
-	case parser.Unchecked:
-		return append([]ui.Span{{Text: "☐ "}}, spans...)
-	case parser.Checked:
-		return append([]ui.Span{{Text: "☑ "}}, spans...)
-	}
-	return spans
+// taskBoxSize is the task item's check box, a square the border frames
+// when open and the accent fills with a check when done.
+const taskBoxSize = float32(12)
+
+// taskBox draws a task item's check box in the marker column, the width
+// the list gives its markers so the item text lines up with a bulleted
+// item's. The box aligns by its baseline, which an empty box takes from
+// its bottom: it sits on the item's first line, not the row's bottom.
+func (st *State) taskBox(c *ui.Context, task parser.Task, width float32) {
+	tk := st.tokens(c)
+	col := ui.Box(c).Width(width).AlignSelf(ui.Baseline)
+	col.Children(func() {
+		box := ui.Box(c).Size(taskBoxSize, taskBoxSize).Radius(3).Shrink(0)
+		if task != parser.Checked {
+			box.Border(1, tk.border)
+			return
+		}
+		box.Background(tk.link).AlignItems(ui.Center).Justify(ui.Center)
+		box.Children(func() {
+			ui.Icon(c, checkIcon).Size(9, 9).TextColor(c.Theme().AccentText)
+		})
+	})
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+// pendingAnchorTries is the frames a pending cross-document anchor
+// waits for its heading before the view gives up on it.
+const pendingAnchorTries = 3
+
+// ResetPendingAnchor arms slug as the cross-document anchor to scroll
+// to once the document holds the heading, clearing any earlier wait.
+func (st *State) ResetPendingAnchor(slug string) {
+	st.PendingAnchor = slug
+	st.pendingAnchorMisses = 0
 }
 
 // scrollPendingAnchor asks the list to scroll to the block the anchor
-// names, once per anchor or version bump.
+// names, once per anchor or version bump. A pending cross-document
+// anchor resolves first: a hit promotes it to Anchor, a miss rides
+// until pendingAnchorTries then drops.
 func (st *State) scrollPendingAnchor(m *doc.Model) {
+	if st.PendingAnchor != "" {
+		slug := st.PendingAnchor
+		if _, ok := m.AnchorBySlug(slug); ok {
+			st.Anchor = slug
+			st.PendingAnchor = ""
+		} else if st.pendingAnchorMisses++; st.pendingAnchorMisses > pendingAnchorTries {
+			st.PendingAnchor = ""
+		}
+	}
 	if st.Anchor == "" || st.AnchorOf == nil {
 		return
 	}
-	key := st.Anchor + "@" + itoa(int(st.AnchorVersion))
-	if st.anchorDone == key && st.anchorVersions == st.AnchorVersion {
+	key := st.Anchor + "@" + strconv.Itoa(int(st.AnchorVersion))
+	if st.anchorDone == key {
 		return
 	}
 	for r, b := range m.Blocks() {
 		if slug := st.AnchorOf(b.Index); slug == st.Anchor {
 			st.List.ScrollIntoView(r)
 			st.anchorDone = key
-			st.anchorVersions = st.AnchorVersion
 			return
 		}
 	}
@@ -1107,9 +1752,20 @@ func (st *State) layout(block int, text string, width, size float32) *ui.TextLay
 	return layout
 }
 
-// HasCaret reports a caret: a selection set, a drag or a click among
-// them, whether it selects anything or not.
-func (st *State) HasCaret() bool { return st.Selection.set }
+// RowRect returns the window rectangle the committed frame drew block i's
+// row in, and whether there is one: the outline reads it to highlight the
+// heading the view is scrolled to. Valid only while the shell builds a
+// frame (the hook's context lives), like Bounds of any handle.
+func (st *State) RowRect(block int) (ui.Rect, bool) {
+	if st.ctx == nil || st.rowHandles == nil {
+		return ui.Rect{}, false
+	}
+	h, ok := st.rowHandles[block]
+	if !ok || h == nil {
+		return ui.Rect{}, false
+	}
+	return h.Bounds(st.ctx), true
+}
 
 // HasSelection reports a selection to draw or copy: a non-empty one.
 func (st *State) HasSelection() bool {
@@ -1144,7 +1800,7 @@ func (st *State) htmlBlock(c *ui.Context, m *doc.Model, i int) {
 		ui.Box(c)
 		return
 	}
-	leaf, base := htmlLeaf(m, i)
+	leaf, base := runBase(m, i)
 	col := ui.Column(c).AlignSelf(ui.Stretch).MinWidth(0)
 	col.Children(func() {
 		at := base
@@ -1164,11 +1820,10 @@ func (st *State) htmlBlock(c *ui.Context, m *doc.Model, i int) {
 	})
 }
 
-// htmlLeaf returns the block the overlays address the HTML block's text
-// under, with the rune offset where its piece starts: the block itself
-// at 0 at the top level, or its place in the quote's or list's run when
-// nested.
-func htmlLeaf(m *doc.Model, i int) (leaf, base int) {
+// runBase returns the block the overlays address i's text under, with the
+// rune offset where the piece starts: the block itself at 0 at the top
+// level, or its place in the quote's or list's run when nested.
+func runBase(m *doc.Model, i int) (leaf, off int) {
 	if run, at := m.RunAt(i); run != nil {
 		return run.Block, at
 	}
@@ -1178,7 +1833,7 @@ func htmlLeaf(m *doc.Model, i int) (leaf, base int) {
 // htmlNode renders one semantic node, drawing its piece of the run's
 // text, the slice at off; i is the block the run table holds it under.
 func (st *State) htmlNode(c *ui.Context, m *doc.Model, i int, n htmlx.Node, off int) {
-	t := c.Theme()
+	tk := st.tokens(c)
 	switch n.Kind {
 	case htmlx.Para:
 		var spans []ui.Span
@@ -1191,14 +1846,14 @@ func (st *State) htmlNode(c *ui.Context, m *doc.Model, i int, n htmlx.Node, off 
 			el.Role(ui.RoleHeading).Level(n.Level)
 		}
 	case htmlx.Pre:
-		box := ui.Column(c).Background(t.Surface).Radius(6).Padding(10).MarginY(6)
+		// A pre shares the code block's panel, mono size and wrapping.
+		box := ui.Column(c).Background(tk.panel).Radius(tk.radius).Padding(codeBlockPadding).MinWidth(0)
 		box.Children(func() {
 			spans := st.overlayRun(c, i, off, []ui.Span{{Text: n.Text}})
-			el := ui.RichText(c, spans...).Font(fontMono).FontSize(13)
-			el.NoWrap()
+			ui.RichText(c, spans...).Font(tk.monoFamily()).FontSize(tk.monoSize).MinWidth(0)
 		})
 	case htmlx.Rule:
-		ui.Box(c).Height(1).Background(t.Border).AlignSelf(ui.Stretch).MarginY(8)
+		ui.Box(c).Height(2).Background(tk.border).AlignSelf(ui.Stretch)
 	case htmlx.Image:
 		// No overlays over the picture, as for a markdown image block.
 		st.images(c, i, []doc.Image{{Dest: n.Src, Alt: n.Alt}})
@@ -1209,15 +1864,15 @@ func (st *State) htmlNode(c *ui.Context, m *doc.Model, i int, n htmlx.Node, off 
 
 // htmlSeg styles one inline seg of a paragraph, headings by their
 // level's size, links in the accent color underlined and code as the
-// markdown walk styles it.
+// markdown walk styles it: the same chip, the same tokens.
 func (st *State) htmlSeg(c *ui.Context, seg htmlx.Seg, level int) ui.Span {
-	t := c.Theme()
+	tk := st.tokens(c)
 	s := style{}
 	if level > 0 {
 		s.weight = 700
-		s.size, s.color = headingStyle(c, level)
+		s.size, s.color = headingStyle(c, st, level)
 	} else {
-		s.size, s.color = 15, t.Text
+		s.size, s.color = tk.body, tk.text
 	}
 	if seg.Bold {
 		s.weight = 700
@@ -1231,47 +1886,54 @@ func (st *State) htmlSeg(c *ui.Context, seg htmlx.Seg, level int) ui.Span {
 	if seg.Underline {
 		s.underline = true
 	}
-	if seg.Code {
-		s.color = t.TextMuted
-		s.size *= 0.95
-	}
 	if seg.Link {
-		s.color = t.Accent
+		s.color = tk.link
 		s.underline = true
 	}
-	return ui.Span{Text: seg.Text, Size: s.size, Weight: s.weight, Italic: s.italic, Color: s.color, Underline: s.underline, Strikethrough: s.strike}
+	sp := ui.Span{Text: seg.Text, Size: s.size, Weight: s.weight, Italic: s.italic, Color: s.color, Underline: s.underline, Strikethrough: s.strike}
+	if seg.Code {
+		sp = tk.inlineCode(sp)
+	}
+	return sp
 }
 
 // htmlTable renders an HTML table as a grid of rows, the header on a
-// Surface background at weight 600. The run text of the cells is joined
-// with spaces, the markdown table's convention, so the overlays cut
-// each cell at its rune offset in the block's run.
+// Surface background at weight 600 and the same rules the markdown table
+// draws, its cells sharing the width the row gives them. The run text of
+// the cells is joined with spaces, the markdown table's convention, so the
+// overlays cut each cell at its rune offset in the block's run.
 func (st *State) htmlTable(c *ui.Context, i int, n htmlx.Node, off int) {
-	t := c.Theme()
-	grid := ui.Column(c).Border(1, t.Border).Radius(4).MarginY(6).AlignSelf(ui.Stretch).MinWidth(0)
+	tk := st.tokens(c)
+	grid := ui.Column(c).Border(1, tk.border).Radius(tk.radius).Clip().AlignSelf(ui.Stretch).MinWidth(0)
 	grid.Children(func() {
 		cellOff := off
-		first := true
-		for _, row := range n.Cells {
-			r := ui.Row(c)
-			if first {
-				r.Background(t.Surface)
+		for r, row := range n.Cells {
+			head, last := r == 0, r == len(n.Cells)-1
+			line := ui.Row(c)
+			if head {
+				line.Background(tk.panel)
 			}
-			r.Children(func() {
-				for _, cell := range row {
+			if !last {
+				line.BorderWidth(0, 0, 1, 0).BorderColor(tk.border)
+			}
+			line.Children(func() {
+				for k, cell := range row {
 					at := cellOff
 					weight := 400
-					if first {
+					if head {
 						weight = 600
 					}
-					spans := st.overlayRun(c, i, at, []ui.Span{{Text: cell, Size: 14, Weight: weight}})
-					ui.Box(c).Grow(1).Padding(6, 10).Children(func() {
-						ui.RichText(c, spans...).FontSize(14)
+					spans := st.overlayRun(c, i, at, []ui.Span{{Text: cell, Size: tk.tableSize(), Weight: weight}})
+					box := ui.Box(c).Grow(1).Padding(6, 10)
+					if k < len(row)-1 {
+						box.BorderWidth(0, 1, 0, 0).BorderColor(tk.border)
+					}
+					box.Children(func() {
+						ui.RichText(c, spans...).FontSize(tk.tableSize())
 					})
 					cellOff += runeLen(cell) + 1
 				}
 			})
-			first = false
 		}
 	})
 }

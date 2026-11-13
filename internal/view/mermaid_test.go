@@ -152,12 +152,14 @@ func TestMermaidThemeFollowsDark(t *testing.T) {
 func TestMermaidScaleRidesZoom(t *testing.T) {
 	ms := &mermaidState{}
 	tt, _ := renderMermaid(t, ms, mermaidDoc)
-	tt.SetZoom(1.5)
+	// The text's zoom is the state's: at 150 percent the diagram keeps
+	// its 2x floor.
+	ms.Zoom = 1.5
 	tt.Frame()
 	if ms.scale != 2 {
 		t.Fatalf("scale at zoom 1.5 = %v, want 2", ms.scale)
 	}
-	tt.SetZoom(3)
+	ms.Zoom = 3
 	tt.Frame()
 	if ms.scale != mermaid.MaxScale {
 		t.Fatalf("scale at zoom 3 = %v, want the %v cap", ms.scale, mermaid.MaxScale)

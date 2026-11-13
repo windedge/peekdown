@@ -29,11 +29,16 @@ func mermaidTheme(c *ui.Context) mermaid.Theme {
 
 // mermaidScale renders diagrams at no less than twice their intrinsic
 // size, so the picture stays crisp on high-DPI displays and under zoom;
-// below 2x the SVG's text turns soft. It caps at mermaid.MaxScale: pixel
-// count grows with the square of the scale, and past 2.5x the sharpness
-// a zoom gains is not worth the memory.
-func mermaidScale(c *ui.Context) float64 {
-	return min(max(float64(c.Zoom()), 2.0), mermaid.MaxScale)
+// below 2x the SVG's text turns soft. It follows the text's zoom past
+// that and caps at mermaid.MaxScale: pixel count grows with the square of
+// the scale, and past 2.5x the sharpness a zoom gains is not worth the
+// memory.
+func mermaidScale(st *State) float64 {
+	zoom := st.Zoom
+	if zoom <= 0 {
+		zoom = 1
+	}
+	return min(max(zoom, 2.0), mermaid.MaxScale)
 }
 
 // mermaidBitmap returns the bitmap of the diagram, making it once per
