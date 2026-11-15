@@ -7,6 +7,7 @@
   "publisher": "windedge",
   "license": "MIT",
   "out": "build",
+  "i18n": { "dir": "locales", "source": "en" },
   "fileAssociations": [
     {
       "ext": [

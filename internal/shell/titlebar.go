@@ -2,6 +2,8 @@ package shell
 
 import (
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // TitleBarHeight is the window's bar height in DIPs: a 30 DIP tab, the 9
@@ -49,19 +51,19 @@ func (s *Shell) titleBar(c *ui.Context) {
 		// flat button, hovered and labelled, and its press takes the pointer
 		// off the bar's drag (mygo drags from the deepest interactive node
 		// that is not otherwise interactive, which the button is not).
-		brand := ui.ButtonBase(c.Key("bar-brand")).Label("Home").
+		brand := ui.ButtonBase(c.Key("bar-brand")).Label(locales.BarHome()).
 			Gap(6).Padding(3, 6).Radius(6).FocusRing(false)
 		if brand.Hovered() {
 			brand.Background(t.SurfaceHover)
 		}
-		brand.Tooltip("Home")
+		brand.Tooltip(locales.BarHome())
 		brand.Children(func() {
 			// 18 DIPs: the size a Windows caption icon takes, small enough
 			// to sit in the band and large enough to read the P.
 			if logo, err := appLogo(); err == nil {
 				ui.Image(c, logo).Size(appLogoSize, appLogoSize).Label("App logo")
 			}
-			ui.Text(c, "Peekdown").FontSize(13).FontWeight(600).MaxLines(1)
+			ui.Text(c, locales.AppTitle()).FontSize(13).FontWeight(600).MaxLines(1)
 		})
 		if brand.Clicked() {
 			s.ShowHome()
@@ -81,22 +83,22 @@ func (s *Shell) titleBar(c *ui.Context) {
 // frame sharing a name leave the input target and the tests guessing.
 func (s *Shell) titleBarButtons(c *ui.Context) {
 	ui.Row(c).Gap(titleBarButton).Shrink(0).AlignItems(ui.Center).Children(func() {
-		iconButton(c, "bar-open", folderOpenIcon, "Open file", 24, 14, func() {
+		iconButton(c, "bar-open", folderOpenIcon, locales.BarOpenFile(), 24, 14, func() {
 			if s.OpenDialog == nil {
 				return
 			}
 			if paths, err := s.OpenDialog(); err == nil {
 				s.OpenPaths(paths)
 			}
-		}).Tooltip("Open (Ctrl+O)")
-		iconButton(c, "bar-find", searchIcon, "Find in document", 24, 14, s.OpenSearch).
-			Tooltip("Find (Ctrl+F)")
-		iconButton(c, "bar-files", folderTreeIcon, "Files panel", 24, 14, func() { s.SetSidebarTab(0) }).
-			Tooltip("Files (Ctrl+Shift+E)")
-		iconButton(c, "bar-outline", outlineIcon, "Outline panel", 24, 14, func() { s.SetSidebarTab(1) }).
-			Tooltip("Outline (Ctrl+B)")
-		iconButton(c, "bar-settings", gearIcon, "App settings", 24, 14, s.OpenSettings).
-			Tooltip("Settings (Ctrl+,)")
+		}).Tooltip(locales.BarOpenTooltip())
+		iconButton(c, "bar-find", searchIcon, locales.BarFind(), 24, 14, s.OpenSearch).
+			Tooltip(locales.BarFindTooltip())
+		iconButton(c, "bar-files", folderTreeIcon, locales.BarFilesPanel(), 24, 14, func() { s.SetSidebarTab(0) }).
+			Tooltip(locales.BarFilesTooltip())
+		iconButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(), 24, 14, func() { s.SetSidebarTab(1) }).
+			Tooltip(locales.BarOutlineTooltip())
+		iconButton(c, "bar-settings", gearIcon, locales.BarSettingsPanel(), 24, 14, s.OpenSettings).
+			Tooltip(locales.BarSettingsTooltip())
 		s.menuButton(c)
 	})
 }
@@ -105,8 +107,8 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 // hidden together with the title bar, so the same specs open as a popup
 // menu here.
 func (s *Shell) menuButton(c *ui.Context) ui.Element {
-	b := iconButton(c, "bar-menu", menuIcon, "Main menu", 24, 14, nil)
-	b.Tooltip("Menu")
+	b := iconButton(c, "bar-menu", menuIcon, locales.BarMainMenu(), 24, 14, nil)
+	b.Tooltip(locales.BarMenuTooltip())
 	b.Menu(func(m *ui.Menu) { drawMenu(c, m, MenuSpecs(s)) })
 	return b
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // tabShadow is the active tab's shadow on the bar's tray, per theme: dark
@@ -101,7 +103,7 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 					ui.Row(c).Gap(6).Children(func() {
 						ui.Text(c, filepath.Base(s.Tabs[i].Path)).FontSize(13)
 						close := ui.ButtonBase(c.Key(fmt.Sprintf("close-%s", path))).
-							Label("Close "+filepath.Base(path)).
+							Label(locales.CloseTabNamed(filepath.Base(path))).
 							Size(20, 20).Padding(0).Radius(4).
 							AlignItems(ui.Center).Justify(ui.Center).FocusRing(false)
 						if close.Hovered() {
@@ -118,27 +120,27 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 					clicked = i
 				}
 				tab.ContextMenu(func(m *ui.Menu) {
-					if m.Item("Reveal in Sidebar").Chosen() {
+					if m.Item(locales.TabRevealInSidebar()).Chosen() {
 						reveal = path
 					}
-					if m.Item("Open in File Manager").Chosen() {
+					if m.Item(locales.TabOpenInFileManager()).Chosen() {
 						s.OpenInFileManager(path)
 					}
-					if m.Item("Copy File Path").Chosen() {
+					if m.Item(locales.TabCopyFilePath()).Chosen() {
 						c.WriteClipboard(path)
 					}
 					m.Separator()
-					if m.Item("Close Tab").Chosen() {
+					if m.Item(locales.MenuCloseTab()).Chosen() {
 						if idx := s.tabIndex(path); idx >= 0 {
 							s.CloseTab(idx)
 						}
 					}
-					if m.Item("Close Other Tabs").Chosen() {
+					if m.Item(locales.TabCloseOtherTabs()).Chosen() {
 						if idx := s.tabIndex(path); idx >= 0 {
 							s.CloseOthers(idx)
 						}
 					}
-					if m.Item("Close All Tabs").Chosen() {
+					if m.Item(locales.TabCloseAllTabs()).Chosen() {
 						s.CloseAll()
 					}
 				})

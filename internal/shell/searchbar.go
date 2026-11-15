@@ -1,11 +1,12 @@
 package shell
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/windedge/peekdown/internal/doc"
+	"github.com/windedge/peekdown/locales"
 )
 
 // searchBar is the state of the search bar over the content: the query
@@ -38,13 +39,13 @@ func searchStatus(m *doc.Model) string {
 	}
 	if m.SearchOptions().Regex {
 		if _, err := doc.CompilePattern(m.Query(), m.SearchOptions().CaseSensitive); err != nil {
-			return "bad pattern"
+			return locales.SearchBadPattern()
 		}
 	}
 	if len(m.Matches) == 0 {
-		return "no results"
+		return locales.SearchNoResults()
 	}
-	return fmt.Sprintf("%d/%d", m.Current+1, len(m.Matches))
+	return locales.SearchCount(strconv.Itoa(m.Current+1), strconv.Itoa(len(m.Matches)))
 }
 
 // runSearch runs the bar's query and options over the tab's model and
@@ -152,7 +153,7 @@ func (s *Shell) searchView(c *ui.Context) {
 		Background(t.Surface).BorderWidth(1).BorderColor(t.Border).Radius(8).
 		Shadow(0, 2, 8, 0, t.Border).ZIndex(10).AlignItems(ui.Center)
 	bar.Children(func() {
-		in := ui.TextInput(c, &s.search.Query).Width(180).Grow(1).Placeholder("Find")
+		in := ui.TextInput(c, &s.search.Query).Width(180).Grow(1).Placeholder(locales.SearchPlaceholder())
 		// The keys that edit nothing go to the search: Enter and
 		// Shift+Enter move, Escape closes. A taken key does not reach
 		// the input, so Enter submits nothing and Escape clears not.
@@ -187,12 +188,12 @@ func (s *Shell) searchView(c *ui.Context) {
 			Width(searchCountWidth).Shrink(0).SingleLine().Ellipsis("…").
 			TextAlign(ui.End)
 
-		toggle(c, "search-case", "Match case", "Aa", s.search.CaseSensitive, s.flipCase)
-		toggle(c, "search-regex", "Regular expression", ".*", s.search.Regex, s.flipRegex)
+		toggle(c, "search-case", locales.SearchMatchCase(), "Aa", s.search.CaseSensitive, s.flipCase)
+		toggle(c, "search-regex", locales.SearchRegex(), ".*", s.search.Regex, s.flipRegex)
 
-		iconButton(c, "search-prev", chevronUpIcon, "Previous match", 24, 14, s.PrevSearchMatch)
-		iconButton(c, "search-next", chevronDownIcon, "Next match", 24, 14, s.NextSearchMatch)
-		iconButton(c, "search-close", closeIcon, "Close search", 24, 14, s.CloseSearch)
+		iconButton(c, "search-prev", chevronUpIcon, locales.SearchPrevious(), 24, 14, s.PrevSearchMatch)
+		iconButton(c, "search-next", chevronDownIcon, locales.SearchNext(), 24, 14, s.NextSearchMatch)
+		iconButton(c, "search-close", closeIcon, locales.SearchClose(), 24, 14, s.CloseSearch)
 	})
 }
 

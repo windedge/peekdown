@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // The project's pages the Help menu opens: the README carries the
@@ -57,8 +59,8 @@ func MenuSpecs(s *Shell) []MenuSpec {
 		repaint(w)
 	}
 	return []MenuSpec{
-		{Label: "File", Sub: []MenuSpec{
-			{Label: "Open...", Accel: "CmdOrCtrl+O", Run: func(w *mygo.Window) {
+		{Label: locales.MenuFile(), Sub: []MenuSpec{
+			{Label: locales.MenuOpen(), Accel: "CmdOrCtrl+O", Run: func(w *mygo.Window) {
 				if s.OpenDialog == nil {
 					return
 				}
@@ -70,15 +72,15 @@ func MenuSpecs(s *Shell) []MenuSpec {
 				repaint(w)
 			}},
 			{Sep: true},
-			{Label: "Close Tab", Accel: "CmdOrCtrl+W", Run: closeTab},
-			{Label: "Next Tab", Accel: "CmdOrCtrl+Tab", Run: func(w *mygo.Window) {
+			{Label: locales.MenuCloseTab(), Accel: "CmdOrCtrl+W", Run: closeTab},
+			{Label: locales.MenuNextTab(), Accel: "CmdOrCtrl+Tab", Run: func(w *mygo.Window) {
 				if len(s.Tabs) == 0 {
 					return
 				}
 				s.showTab((s.Active + 1) % len(s.Tabs))
 				repaint(w)
 			}},
-			{Label: "Previous Tab", Accel: "CmdOrCtrl+Shift+Tab", Run: func(w *mygo.Window) {
+			{Label: locales.MenuPreviousTab(), Accel: "CmdOrCtrl+Shift+Tab", Run: func(w *mygo.Window) {
 				if len(s.Tabs) == 0 {
 					return
 				}
@@ -86,89 +88,89 @@ func MenuSpecs(s *Shell) []MenuSpec {
 				repaint(w)
 			}},
 		}},
-		{Label: "Edit", Sub: []MenuSpec{
+		{Label: locales.MenuEdit(), Sub: []MenuSpec{
 			// The document's selection is the app's own model, so Copy
 			// and Select All live here; the menu accelerator is the only
 			// key route that works without focus in a text field.
-			{Label: "Copy", Accel: "CmdOrCtrl+C", Run: func(w *mygo.Window) {
+			{Label: locales.MenuCopy(), Accel: "CmdOrCtrl+C", Run: func(w *mygo.Window) {
 				s.CopySelection(nil)
 				repaint(w)
 			}},
-			{Label: "Select All", Accel: "CmdOrCtrl+A", Run: func(w *mygo.Window) {
+			{Label: locales.MenuSelectAll(), Accel: "CmdOrCtrl+A", Run: func(w *mygo.Window) {
 				s.SelectAll()
 				repaint(w)
 			}},
 		}},
-		{Label: "View", Sub: []MenuSpec{
-			{Label: "Find", Accel: "CmdOrCtrl+F", Run: func(w *mygo.Window) {
+		{Label: locales.MenuView(), Sub: []MenuSpec{
+			{Label: locales.MenuFind(), Accel: "CmdOrCtrl+F", Run: func(w *mygo.Window) {
 				s.OpenSearch()
 				repaint(w)
 			}},
-			{Label: "Find Next", Accel: "F3", Run: func(w *mygo.Window) {
+			{Label: locales.MenuFindNext(), Accel: "F3", Run: func(w *mygo.Window) {
 				s.NextSearchMatch()
 				repaint(w)
 			}},
-			{Label: "Find Previous", Accel: "Shift+F3", Run: func(w *mygo.Window) {
+			{Label: locales.MenuFindPrevious(), Accel: "Shift+F3", Run: func(w *mygo.Window) {
 				s.PrevSearchMatch()
 				repaint(w)
 			}},
 			{Sep: true},
-			{Label: "Scroll to Top", Accel: "CmdOrCtrl+Home", Run: func(w *mygo.Window) {
+			{Label: locales.MenuScrollToTop(), Accel: "CmdOrCtrl+Home", Run: func(w *mygo.Window) {
 				s.ScrollToStart()
 				repaint(w)
 			}},
-			{Label: "Scroll to Bottom", Accel: "CmdOrCtrl+End", Run: func(w *mygo.Window) {
+			{Label: locales.MenuScrollToBottom(), Accel: "CmdOrCtrl+End", Run: func(w *mygo.Window) {
 				s.ScrollToEnd()
 				repaint(w)
 			}},
 			{Sep: true},
-			{Label: "Toggle Outline", Accel: "CmdOrCtrl+B", Run: func(w *mygo.Window) {
+			{Label: locales.MenuToggleOutline(), Accel: "CmdOrCtrl+B", Run: func(w *mygo.Window) {
 				s.ToggleOutline()
 				repaint(w)
 			}},
-			{Label: "Toggle Files", Accel: "CmdOrCtrl+Shift+E", Run: func(w *mygo.Window) {
+			{Label: locales.MenuToggleFiles(), Accel: "CmdOrCtrl+Shift+E", Run: func(w *mygo.Window) {
 				s.ToggleFiles()
 				repaint(w)
 			}},
 			{Sep: true},
-			{Label: "Refresh", Accel: "F5", Run: refresh},
+			{Label: locales.MenuRefresh(), Accel: "F5", Run: refresh},
 			{Sep: true},
 			// Ctrl+=, the chord Rust binds; Ctrl++ rides the window
 			// shortcuts (it presses Ctrl+Shift+= on most layouts).
-			{Label: "Zoom In", Accel: "CmdOrCtrl+=", Run: func(w *mygo.Window) {
+			{Label: locales.MenuZoomIn(), Accel: "CmdOrCtrl+=", Run: func(w *mygo.Window) {
 				s.ZoomIn()
 				repaint(w)
 			}},
-			{Label: "Zoom Out", Accel: "CmdOrCtrl+-", Run: func(w *mygo.Window) {
+			{Label: locales.MenuZoomOut(), Accel: "CmdOrCtrl+-", Run: func(w *mygo.Window) {
 				s.ZoomOut()
 				repaint(w)
 			}},
 			// Reset Zoom, not Actual Size: the zoom scales the document's
 			// text, and 100 percent is the settings' sizes.
-			{Label: "Reset Zoom", Accel: "CmdOrCtrl+0", Run: func(w *mygo.Window) {
+			{Label: locales.MenuZoomReset(), Accel: "CmdOrCtrl+0", Run: func(w *mygo.Window) {
 				s.ZoomReset()
 				repaint(w)
 			}},
 		}},
-		{Label: "Help", Sub: []MenuSpec{
-			{Label: "Peekdown on GitHub", Run: func(*mygo.Window) {
+		{Label: locales.MenuHelp(), Sub: []MenuSpec{
+			{Label: locales.MenuOnGitHub(), Run: func(*mygo.Window) {
 				s.OpenLink(repoURL)
 			}},
-			{Label: "Keyboard Shortcuts", Run: func(*mygo.Window) {
+			{Label: locales.MenuKeyboardShortcuts(), Run: func(*mygo.Window) {
 				s.OpenLink(shortcutsURL)
 			}},
 		}},
 		// Settings and Exit are the app's own commands, not a submenu's:
 		// they sit where a reader looks for them, under the three menus.
 		{Sep: true},
-		{Label: "Settings...", Accel: "CmdOrCtrl+,", Run: func(w *mygo.Window) {
+		{Label: locales.MenuSettings(), Accel: "CmdOrCtrl+,", Run: func(w *mygo.Window) {
 			s.OpenSettings()
 			repaint(w)
 		}},
 		{Sep: true},
 		// Quitting is closing the window: the app is one window, and the
 		// host ends the run loop when its last window goes.
-		{Label: "Exit", Accel: "CmdOrCtrl+Q", Run: func(w *mygo.Window) {
+		{Label: locales.MenuExit(), Accel: "CmdOrCtrl+Q", Run: func(w *mygo.Window) {
 			s.CloseWindow()
 			repaint(w)
 		}},

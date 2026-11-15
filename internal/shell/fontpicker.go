@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // Which font setting the picker edits.
@@ -75,9 +77,9 @@ func (s *Shell) fontPicker(c *ui.Context, anchor ui.Element, open *bool, which i
 			Radius(10).Background(t.Surface).BorderWidth(1).BorderColor(t.Border).
 			Shadow(0, 8, 24, 0, t.Border).Clip().Margin(6, 0, 0, 0)
 		panel.Children(func() {
-			title := "Content Font"
+			title := locales.FontPickerContent()
 			if which == fontMono {
-				title = "Code Font"
+				title = locales.FontPickerCode()
 			}
 			ui.Column(c).FillWidth().Height(fontPickerHeight).Padding(12).Gap(8).Children(func() {
 				ui.Text(c, title).FontSize(14).Bold()
@@ -85,7 +87,7 @@ func (s *Shell) fontPicker(c *ui.Context, anchor ui.Element, open *bool, which i
 				// The picker's own field writes the search text;
 				// AutoFocus puts the keyboard here, as a font dialog's
 				// field expects.
-				ui.SearchField(c, &s.fontSearch).Placeholder("Search installed fonts...").AutoFocus()
+				ui.SearchField(c, &s.fontSearch).Placeholder(locales.FontPickerSearch()).AutoFocus()
 
 				// The hairline between the field and the list keeps its
 				// place while the list scrolls: the rows slide under the
@@ -93,7 +95,7 @@ func (s *Shell) fontPicker(c *ui.Context, anchor ui.Element, open *bool, which i
 				ui.Box(c).FillWidth().Height(1).Background(t.Border)
 
 				if len(visible) == 0 {
-					ui.Text(c, "No matching fonts").FontSize(13).TextColor(t.TextMuted).Padding(24, 16)
+					ui.Text(c, locales.FontPickerNoMatch()).FontSize(13).TextColor(t.TextMuted).Padding(24, 16)
 					return
 				}
 				ui.List(c, &s.fontList, len(visible), func(i int) {

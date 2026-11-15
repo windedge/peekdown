@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // treeRow is one line of the explorer: a directory or a Markdown file.
@@ -267,7 +269,7 @@ func (s *Shell) filesPane(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Children(func() {
 		if root == "" {
-			ui.Text(c, "No file open").FontSize(12).TextColor(t.TextMuted).
+			ui.Text(c, locales.NoFileOpen()).FontSize(12).TextColor(t.TextMuted).
 				Padding(4, 12)
 			return
 		}
@@ -278,7 +280,7 @@ func (s *Shell) filesPane(c *ui.Context) {
 			SingleLine().Ellipsis("...").Padding(4, 12).PaddingEnd(14)
 		rows := s.visibleRows(root)
 		if len(rows) == 0 {
-			ui.Text(c, "No Markdown files").FontSize(12).TextColor(t.TextMuted).
+			ui.Text(c, locales.NoMarkdownFiles()).FontSize(12).TextColor(t.TextMuted).
 				Padding(4, 12)
 			return
 		}

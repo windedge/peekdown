@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/windedge/peekdown/internal/doc"
+	"github.com/windedge/peekdown/locales"
 )
 
 // The frontmatter renders above the list, outside the virtualization: it
@@ -30,9 +31,9 @@ const fmKeyGap = float32(16)
 // and the broken fallback copy YAML, a TOML block copies TOML.
 func copyLabel(front *doc.Frontmatter) string {
 	if front.Format == "toml" {
-		return "Copy TOML"
+		return locales.CopyTOML()
 	}
-	return "Copy YAML"
+	return locales.CopyYAML()
 }
 
 // Frontmatter builds the frontmatter card the document opens with, when
@@ -91,8 +92,8 @@ func frontmatterCard(c *ui.Context, front *doc.Frontmatter, copy func(string), t
 			// flips a bool, but the flip must reach this build for the
 			// frame to change, and mygo rebuilds a pass when a click was
 			// taken, so the fold applies the same frame.
-			fold := ui.ButtonBase(c.Key("frontmatter-fold")).Label("Toggle frontmatter").Padding(4).Radius(5).
-				AlignItems(ui.Center).Tooltip("Toggle frontmatter")
+			fold := ui.ButtonBase(c.Key("frontmatter-fold")).Label(locales.ToggleFrontmatter()).Padding(4).Radius(5).
+				AlignItems(ui.Center).Tooltip(locales.ToggleFrontmatter())
 			if fold.Hovered() {
 				fold.Background(c.Theme().SurfaceHover)
 			}
