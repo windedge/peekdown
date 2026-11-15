@@ -3,6 +3,7 @@
 package htmlx
 
 import (
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -34,11 +35,16 @@ type Seg struct {
 // Node is one semantic block extracted from an HTML fragment.
 type Node struct {
 	Kind  Kind
-	Level int        // heading level for Para
-	Segs  []Seg      // inline content of a Para
-	Text  string     // visible text of the node ("" for Rule; alt for Image; cells joined by spaces for Table)
-	Src   string     // Image
-	Alt   string     // Image
+	Level int    // heading level for Para
+	Segs  []Seg  // inline content of a Para
+	Text  string // visible text of the node ("" for Rule; alt for Image; cells joined by spaces for Table)
+	Src   string // Image
+	Alt   string // Image
+	// Width and Height are the img's pixel sizes, 0 when absent: the
+	// view draws the picture at them, the Rust version's attr_width_height.
+	Width  float32
+	Height float32
+
 	Cells [][]string // Table rows, header first
 }
 
@@ -95,7 +101,8 @@ func (p *parser) block(n *html.Node) {
 	case atom.Img:
 		alt := attr(n, "alt")
 		if src := attr(n, "src"); src != "" && srcSafe(src) {
-			p.nodes = append(p.nodes, Node{Kind: Image, Src: src, Alt: alt, Text: alt})
+			p.nodes = append(p.nodes, Node{Kind: Image, Src: src, Alt: alt, Text: alt,
+				Width: pxAttr(n, "width"), Height: pxAttr(n, "height")})
 		} else if alt != "" {
 			p.nodes = append(p.nodes, Node{Kind: Para, Segs: []Seg{{Text: alt}}, Text: alt})
 		}
@@ -328,6 +335,18 @@ func attr(n *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+// pxAttr reads an img's width/height attribute as pixels: a bare number
+// or one with a px unit, 0 for the rest (percentages and junk left to the
+// default sizing).
+func pxAttr(n *html.Node, key string) float32 {
+	v := strings.TrimSuffix(strings.TrimSpace(attr(n, key)), "px")
+	f, err := strconv.ParseFloat(v, 32)
+	if err != nil || f <= 0 {
+		return 0
+	}
+	return float32(f)
 }
 
 func headingLevel(a atom.Atom) int {

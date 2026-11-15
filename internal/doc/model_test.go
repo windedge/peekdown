@@ -304,3 +304,18 @@ func TestSetRecoveryLeavesConsistentModel(t *testing.T) {
 		t.Fatalf("Plain after the next Set = %q, want fresh", got)
 	}
 }
+
+func TestImageWithLink(t *testing.T) {
+	m := New("[![alt](pic.png)](https://example.com/page)\n")
+	images := m.Images(m.Blocks()[0].Index)
+	if len(images) != 1 || images[0].Dest != "pic.png" || images[0].Alt != "alt" || images[0].Link != "https://example.com/page" {
+		t.Fatalf("linked image: %+v", images)
+	}
+}
+
+func TestLinkOverTextIsNoImageBlock(t *testing.T) {
+	m := New("[just text](https://example.com)\n")
+	if got := m.Images(m.Blocks()[0].Index); len(got) != 0 {
+		t.Fatalf("a link over text became an image block: %+v", got)
+	}
+}

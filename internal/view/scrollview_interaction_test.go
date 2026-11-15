@@ -32,8 +32,9 @@ func TestScrollViewDragSelects(t *testing.T) {
 	}
 }
 
-// The handler ScrollView wires leaves the wheel be: the list still
-// scrolls, the way ticket #5 asked for.
+// The handler ScrollView wires scrolls the wheel itself now (the
+// scroll_speed multiplier lives there): the default speed glides one
+// notch's worth, the same place the engine's own glide would land.
 func TestScrollViewWheelStillScrolls(t *testing.T) {
 	long := strings.Repeat("Paragraph of filler text to scroll past.\n\n", 60)
 	m := doc.New(long)
@@ -51,5 +52,24 @@ func TestScrollViewWheelStillScrolls(t *testing.T) {
 	}
 	if state.dragging {
 		t.Fatal("the wheel started a drag")
+	}
+}
+
+// At a speed past 1 the handler scrolls the notch itself, the multiplier
+// riding the offset write: a 2x speed lands twice a notch's travel.
+func TestScrollViewWheelSpeedMultiplies(t *testing.T) {
+	long := strings.Repeat("Paragraph of filler text to scroll past.\n\n", 60)
+	m := doc.New(long)
+	var state State
+	state.ScrollSpeed = 2
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		ScrollView(c, m, &state)
+	}, 400, 300)
+	tt.Frame()
+	tt.Wheel(200, 150, 0, 120)
+	tt.Advance(200 * time.Millisecond)
+	if got := state.Scroll.Y; !near(got, 240) {
+		t.Fatalf("scroll y = %v after one notch, want the 2x 240", got)
 	}
 }

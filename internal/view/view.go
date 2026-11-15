@@ -22,6 +22,7 @@ import (
 	"github.com/windedge/peekdown/internal/htmlx"
 	"github.com/windedge/peekdown/internal/mermaid"
 	"github.com/windedge/peekdown/internal/selection"
+	"github.com/windedge/peekdown/locales"
 )
 
 // State is the state of one document view: its list, the selection, the
@@ -92,6 +93,34 @@ type State struct {
 	ScrollTargetBlock int
 	scrollTargetDone  int
 
+	// Scroll tracks the list's offset: ScrollView wires the list to it,
+	// and the container writes Y and MaxY back as it lays out and
+	// scrolls. Progress, AtTop and AtBottom read it; a caller that builds
+	// its own list may wire it the same way. The shell draws the reading
+	// progress bar and the jump buttons from these, the window-level
+	// views of one scroll.
+	Scroll ui.ScrollState
+
+	// ScrollSpeed multiplies the wheel's travel, the scroll_speed
+	// setting; 0 draws as 1. The handler applies it to its own wheel
+	// notches (touchpad drags ride mygo's engine unmultiplied), so it
+	// only reaches the view when the shell injects it each frame. 1
+	// passes notches to the engine's own glide.
+	ScrollSpeed float32
+	// NoInertia is the inertia_scroll setting, unset: the handler takes
+	// wheel notches and scrolls them at once, mygo's glide being without
+	// a per-container switch to turn it off.
+	NoInertia bool
+
+	// Progress, AtTop and AtBottom are the last frame's scroll place,
+	// refreshed by ScrollView: the fraction 0..1 the list is scrolled
+	// through, and whether it stands at either end, where the Rust
+	// version hides its jump buttons. 0 progress with MaxY 0 is a list
+	// with no room to scroll, so short documents draw an empty bar.
+	Progress float32
+	AtTop    bool
+	AtBottom bool
+
 	// OpenURL opens a link's destination in the browser; nil makes the
 	// links inert. The view calls it with http/https/mailto only; an
 	// anchor (#slug) scrolls the heading into view instead.
@@ -113,6 +142,10 @@ type State struct {
 	// AnchorOf returns the anchor of top-level block i, as the model
 	// makes them, so the view can find the row to scroll to.
 	AnchorOf func(i int) string
+	// anchorModel is the model AnchorOf came from, when the shell wired
+	// it: a linked image's "#anchor" resolves through it. A bare State
+	// without it leaves the anchor inert.
+	anchorModel anchorIndex
 
 	// LoadImage loads the image at url; nil shows its description.
 	LoadImage func(url string) (ui.ImageSource, error)
@@ -233,6 +266,44 @@ func (st *State) ClearSelection() { st.Selection.set = false }
 func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 	return func(ev ui.InputEvent) bool {
 		switch ev.Kind {
+		case ui.InputScroll:
+			// The wheel dies on a vertical-only list unless a handler
+			// turns it (the engine only takes a notch for the axes the
+			// container scrolls), so the handler scrolls here: dy rides
+			// the scroll_speed multiplier, Shift swaps the axis sideways
+			// like the engine does, and touchpad drags (Precise) pass
+			// through unmultiplied to the engine. The default speed 1
+			// passes through too: with nothing to multiply, the engine's
+			// own glide is the better ride.
+			if ev.DY == 0 || ev.Precise {
+				return false
+			}
+			dy := ev.DY
+			if ev.Mods&ui.Shift != 0 && ev.DX == 0 {
+				dy, ev.DX = ev.DX, dy
+			}
+			if ev.DX != 0 {
+				return false
+			}
+			speed := st.ScrollSpeed
+			if speed <= 0 {
+				speed = 1
+			}
+			// The inertia setting off turns the engine's wheel glide off:
+			// mygo glides every notch and has no per-container switch, so
+			// the handler scrolls the notch at once instead, the instant
+			// ride the setting asks for. Windows never reports momentum,
+			// so this branch covers the whole wheel there.
+			if st.NoInertia || speed != 1 {
+				// A direct offset write: TrackScroll lands it next layout,
+				// and the wheelless list takes it from there. Scrolling at
+				// once rather than gliding keeps the multiplier predictable
+				// under repeated notches; a touchpad drag never reaches
+				// this branch.
+				st.Scroll.Y = max(0, min(st.Scroll.Y+dy*speed, st.Scroll.MaxY))
+				return true
+			}
+			return false
 		case ui.InputPointerDown:
 			if ev.Button != 0 {
 				return false
@@ -358,13 +429,18 @@ func (st *State) linkAt(m *doc.Model, ev ui.InputEvent) string {
 	return linkDestOf(m, p.Block, p.Offset)
 }
 
-// openLinkAt acts on the link the release landed on: an anchor scrolls
-// its heading into view, a safe URL the view hands to OpenURL, the shell
-// then opens it in the browser, and anything else is a file link the
-// shell resolves against the document's directory. Unsafe schemes and
-// unknown anchors do nothing.
+// openLinkAt acts on the link the release landed on: it hits the
+// document's links through the pointer, then dispatches the destination.
 func (st *State) openLinkAt(m *doc.Model, ev ui.InputEvent) {
-	dest := st.linkAt(m, ev)
+	st.dispatchLink(st.linkAt(m, ev))
+}
+
+// dispatchLink acts on dest: an anchor scrolls its heading into view, a
+// safe URL the view hands to OpenURL, the shell then opens it in the
+// browser, and anything else is a file link the shell resolves against
+// the document's directory. Unsafe schemes and unknown anchors do
+// nothing.
+func (st *State) dispatchLink(dest string) {
 	if dest == "" {
 		return
 	}
@@ -372,7 +448,7 @@ func (st *State) openLinkAt(m *doc.Model, ev ui.InputEvent) {
 		if anchor == "" {
 			return
 		}
-		if block, ok := m.AnchorBySlug(anchor); ok {
+		if block, ok := st.anchorLookup(anchor); ok {
 			st.ScrollTargetBlock = block
 		}
 		return
@@ -504,9 +580,11 @@ func runeLen(text string) int { return len([]rune(text)) }
 func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.Matches = m.Matches
 	st.Current = m.Current
+	st.anchorModel = m
 	list := ui.List(c, &st.List, m.Len(), func(r int) {
 		st.Row(c, m, r)
-	}).Grow(1)
+	}).Grow(1).TrackScroll(&st.Scroll)
+	st.updateScrollPlace(c, list)
 	// The handler takes the pointer for the drag selection and returns
 	// false for the rest, the wheel among it, so the list keeps scrolling.
 	list.HandleInput(st.Handler(m))
@@ -520,6 +598,21 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.scrollPendingMatch(m)
 }
 
+// updateScrollPlace reads the scroll place the last laid-out frame left
+// in st.Scroll into the fractions the shell draws from: the bar's fill
+// and the jump buttons' hiding. The values lag one frame behind the list
+// they read, as the Rust version's read of scroll_offset does its own
+// list; a frame's worth of lag at a wheel notch is invisible.
+func (st *State) updateScrollPlace(c *ui.Context, list ui.Element) {
+	if st.Scroll.MaxY <= 0 {
+		st.Progress, st.AtTop, st.AtBottom = 0, true, true
+		return
+	}
+	st.Progress = max(0, min(st.Scroll.Y/st.Scroll.MaxY, 1))
+	st.AtTop = st.Scroll.Y <= 0.5
+	st.AtBottom = st.Scroll.MaxY-st.Scroll.Y <= 0.5
+}
+
 // documentMenu fills the document area's context menu, in the Rust
 // version's order: the editing commands, then the search and the reload,
 // then the commands that act on the open file. The whole document is the
@@ -528,27 +621,27 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 func (st *State) documentMenu(menu *ui.Menu) {
 	a := st.Menu
 	copyOn := a.HasSelection != nil && a.HasSelection()
-	if menu.Item("Copy").Disabled(!copyOn).Chosen() {
+	if menu.Item(locales.DocCopy()).Disabled(!copyOn).Chosen() {
 		callAction(a.Copy)
 	}
-	if menu.Item("Select All").Chosen() {
+	if menu.Item(locales.DocSelectAll()).Chosen() {
 		callAction(a.SelectAll)
 	}
 	menu.Separator()
-	if menu.Item("Find").Chosen() {
+	if menu.Item(locales.DocFind()).Chosen() {
 		callAction(a.Find)
 	}
-	if menu.Item("Refresh").Chosen() {
+	if menu.Item(locales.DocRefresh()).Chosen() {
 		callAction(a.Refresh)
 	}
 	menu.Separator()
-	if menu.Item("Reveal in Sidebar").Chosen() {
+	if menu.Item(locales.DocRevealInSidebar()).Chosen() {
 		callAction(a.Reveal)
 	}
-	if menu.Item("Open in File Manager").Chosen() {
+	if menu.Item(locales.DocOpenInFileManager()).Chosen() {
 		callAction(a.OpenInFileManager)
 	}
-	if menu.Item("Copy Path").Chosen() {
+	if menu.Item(locales.DocCopyPath()).Chosen() {
 		callAction(a.CopyPath)
 	}
 }
@@ -633,6 +726,12 @@ func anchorsOf(m *doc.Model) func(int) string {
 	return func(i int) string { return slugByBlock[i] }
 }
 
+// anchorIndex is the anchor lookups a linked image's "#anchor" needs:
+// the model already answers it.
+type anchorIndex interface {
+	AnchorBySlug(slug string) (int, bool)
+}
+
 // Render builds the row of top-level block i.
 func Render(c *ui.Context, m *doc.Model, st *State, i int) {
 	b := m.Block(i)
@@ -702,6 +801,11 @@ const (
 	// border's gray: the Rust version's secondary_active, low in
 	// saturation.
 	quoteBarTint = 0.55
+
+	// maxImageHeight is the height cap an image draws under, the Rust
+	// version's max_h(px(2000)): a tall screenshot shows near whole
+	// instead of pressing the page into a letterbox (the old 400 did).
+	maxImageHeight = float32(2000)
 
 	// tableBaseSize is the table text's size at the default body: both
 	// docTokens.tableSize and tableColumnWidths measure scale from it.
@@ -1213,22 +1317,54 @@ func mergeCuts(cuts []cut, total int) []segment {
 	return out
 }
 
-// images builds a row of pictures for the images of block i.
+// images builds a row of pictures for the images of block i. An image
+// a link wraps opens the link on a click, cursor and tooltip saying so;
+// a bare picture does nothing.
 func (st *State) images(c *ui.Context, i int, images []doc.Image) {
 	ui.Row(c).Gap(8).AlignSelf(ui.Stretch).Children(func() {
 		for _, img := range images {
 			src := st.source(img.Dest)
 			if src != nil {
-				ui.Image(c, src).MaxHeight(400).MaxWidthPercent(100).Radius(4)
+				image := ui.Image(c, src).MaxWidthPercent(100).MaxHeight(maxImageHeight).Fit(ui.Contain).Radius(4)
+				if img.Width > 0 && img.Height > 0 {
+					// The HTML img's width/height attributes fix the box;
+					// the max caps stay for the attrs' absence.
+					image = image.Size(img.Width, img.Height)
+				}
+				if img.Link != "" {
+					tip := img.Link
+					image.Cursor(ui.CursorPointer).Tooltip(tip).OnClick(func() {
+						st.openImageLink(img.Link)
+					})
+				}
 				continue
 			}
 			label := img.Alt
 			if label == "" {
 				label = img.Dest
 			}
-			ui.Text(c, label).FontSize(st.tokens(c).monoSize).TextColor(st.tokens(c).muted)
+			text := ui.Text(c, label).FontSize(st.tokens(c).monoSize).TextColor(st.tokens(c).muted)
+			if img.Link != "" {
+				text.Cursor(ui.CursorPointer).Tooltip(img.Link)
+			}
 		}
 	})
+}
+
+// openImageLink opens a linked image's target as a text link does: the
+// same dispatch as openLinkAt, minus the hit testing, which the image
+// element has done.
+func (st *State) openImageLink(dest string) {
+	st.dispatchLink(dest)
+}
+
+// anchorLookup resolves a slug to a block through the anchor index, when
+// one is in place; a bare State misses and the anchor stays dead.
+func (st *State) anchorLookup(slug string) (int, bool) {
+	if st.AnchorOf == nil || st.anchorModel == nil {
+		return 0, false
+	}
+	return st.anchorModel.AnchorBySlug(slug)
 }
 
 // source loads and caches the image at url.
@@ -1272,10 +1408,12 @@ func (st *State) codeBlock(c *ui.Context, m *doc.Model, i int) {
 	if isMermaid(m.Language(i)) && st.LoadMermaid != nil {
 		b, err := st.mermaidBitmap(strings.Trim(m.Lines(i), "\n"), mermaidTheme(c), mermaidScale(st))
 		if err == nil {
-			mermaidImage(c, b)
+			st.mermaidImage(c, b)
 			return
 		}
-		mermaidErrorLine(c, err)
+		// A failed diagram shows the three Rust-branch facts, the header,
+		// the error and the kept source, then falls through to the block.
+		mermaidErrorPanel(c, err)
 	}
 	lines := splitLines(m.Lines(i))
 	spans := make([]ui.Span, 0, len(lines))
@@ -1347,10 +1485,10 @@ func (st *State) copyButton(c *ui.Context, i int, text string) {
 	tk := st.tokens(c)
 	copied := st.copied(i, c)
 	label := "Copy"
-	tip := "Copy code"
+	tip := locales.CopyCodeTooltip()
 	color := tk.muted
 	if copied {
-		label, tip, color = "Copied", "Copied", c.Theme().AccentText
+		label, tip, color = locales.Copied(), locales.Copied(), c.Theme().AccentText
 	}
 	b := ui.ButtonBase(c).Label(label).Padding(4).Radius(5).
 		AlignItems(ui.Center).Absolute().Right(6).Top(6).Tooltip(tip)
@@ -1603,28 +1741,27 @@ func (st *State) quote(c *ui.Context, m *doc.Model, i int) {
 }
 
 // list builds a list, its items with markers or numbers, nested one level
-// deeper.
+// deeper. The nesting column already shifts each level past its parent,
+// the Rust version's ml(rems(1.)) per nested list; depth drives the
+// markers, as its list_item_prefix does: bullets step through
+// listBullets, an ordered top level keeps numbers and its descendants
+// run through letters. Task boxes take the level's marker width so the
+// text lines up as it does beside a bullet.
 func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int) {
 	tk := st.tokens(c)
 	col := ui.Column(c).Gap(2).AlignSelf(ui.Stretch).MinWidth(0)
 	col.Children(func() {
 		number := b.Number
 		for _, item := range m.ListItems(i) {
-			marker := "•"
-			width := float32(18)
-			if b.Ordered {
-				marker = strconv.Itoa(number) + "."
-				number++
-				width = 28
-			}
+			marker, _ := listPrefix(b.Ordered, &number, depth)
 			row := ui.Row(c).Gap(4).AlignSelf(ui.Stretch).MinWidth(0).AlignItems(ui.Baseline)
 			row.Children(func() {
 				if item.Task != parser.NoTask {
 					// A task item's box stands in for the bullet, as the Rust
 					// version's checkbox replaces the marker.
-					st.taskBox(c, item.Task, width)
+					st.taskBox(c, item.Task, markerWidth(marker))
 				} else {
-					ui.Text(c, marker).Width(width).TextColor(tk.muted).TextAlign(ui.End)
+					ui.Text(c, marker).Width(markerWidth(marker)).TextColor(tk.muted).TextAlign(ui.End)
 				}
 				content := ui.Column(c).Gap(2).Grow(1).MinWidth(0)
 				content.Children(func() {
@@ -1644,6 +1781,49 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 			})
 		}
 	})
+}
+
+// listBullets is the bullet of each nesting level, the Rust version's
+// BULLETS. A level past the last keeps the last one's bullet.
+var listBullets = [5]string{"▪", "•", "◦", "‣", "⁃"}
+
+// listUpper and listLower name an ordered list's nested levels, the Rust
+// version's NUMBERED_PREFIXES.
+const (
+	listUpper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	listLower = "abcdefghijklmnopqrstuvwxyz"
+)
+
+// listPrefix is the marker of an item at depth, advancing *number: the
+// item's position. Numbers at the top, cycling letters below, bullets
+// elsewhere.
+func listPrefix(ordered bool, number *int, depth int) (string, int) {
+	if ordered {
+		var s string
+		ix := *number - 1
+		switch {
+		case depth <= 0:
+			s = strconv.Itoa(*number) + "."
+		case depth == 1:
+			s = string(listUpper[ix%len(listUpper)]) + "."
+		default:
+			s = string(listLower[ix%len(listLower)]) + "."
+		}
+		*number++
+		return s, 28
+	}
+	level := min(depth, len(listBullets)-1)
+	return listBullets[level], 18
+}
+
+// markerWidth is the width a marker's column takes: room for the widest
+// form the level's series reaches, so "10." and "27." keep their text
+// lined up with single-digit rows.
+func markerWidth(marker string) float32 {
+	if len(marker) > 3 {
+		return 28
+	}
+	return 18
 }
 
 // taskBoxSize is the task item's check box, a square the border frames
@@ -1855,8 +2035,9 @@ func (st *State) htmlNode(c *ui.Context, m *doc.Model, i int, n htmlx.Node, off 
 	case htmlx.Rule:
 		ui.Box(c).Height(2).Background(tk.border).AlignSelf(ui.Stretch)
 	case htmlx.Image:
-		// No overlays over the picture, as for a markdown image block.
-		st.images(c, i, []doc.Image{{Dest: n.Src, Alt: n.Alt}})
+		// No overlays over the picture, as for a markdown image block;
+		// the img's width/height attributes fix the box when set.
+		st.images(c, i, []doc.Image{{Dest: n.Src, Alt: n.Alt, Width: n.Width, Height: n.Height}})
 	case htmlx.Table:
 		st.htmlTable(c, i, n, off)
 	}

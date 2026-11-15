@@ -98,6 +98,14 @@ type Heading struct {
 type Image struct {
 	Dest string
 	Alt  string
+	// Link is the destination of a link wrapped around the image,
+	// [![alt](img)](href), "" for none: the view opens it on a click on
+	// the picture, as the Rust version does.
+	Link string
+	// Width and Height are the pixel sizes an HTML img's attributes
+	// give, 0 for none; Markdown images have none. Set, the view draws
+	// the picture at them; unset, it caps it at the Rust max sizes.
+	Width, Height float32
 }
 
 // New parses src with the app's extension set, GFM plus footnotes: the
@@ -503,6 +511,17 @@ func topLevelImages(in []parser.Inline) []Image {
 	for k := 0; k < len(in); {
 		n := &in[k]
 		switch n.Kind {
+		case parser.Link:
+			// [![alt](img)](href): the image is the link's only real
+			// content, so the block stays an image block and the link's
+			// destination rides on it; anything else leaves to the text path.
+			if n.Next > k+1 && in[k+1].Kind == parser.Image {
+				img := &in[k+1]
+				images = append(images, Image{Dest: img.Dest, Alt: parser.PlainText(in[k+2 : img.Next]), Link: n.Dest})
+				k = img.Next
+				continue
+			}
+			return nil
 		case parser.Image:
 			images = append(images, Image{Dest: n.Dest, Alt: parser.PlainText(in[k+1 : n.Next])})
 			k = n.Next

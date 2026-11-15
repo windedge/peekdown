@@ -82,6 +82,28 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name: "img width height attributes",
+			html: `<img src="https://example.com/a.png" alt="pic" width="200" height="100">`,
+			check: func(t *testing.T, nodes []Node) {
+				assertOne(t, nodes, func(n Node) {
+					if n.Kind != Image || n.Width != 200 || n.Height != 100 {
+						t.Fatalf("node = %+v, want 200x100", n)
+					}
+				})
+			},
+		},
+		{
+			name: "img px units and junk sizes",
+			html: `<img src="https://example.com/a.png" alt="pic" width="200px" height="auto">`,
+			check: func(t *testing.T, nodes []Node) {
+				assertOne(t, nodes, func(n Node) {
+					if n.Width != 200 || n.Height != 0 {
+						t.Fatalf("Width/Height = %v/%v, want 200/0", n.Width, n.Height)
+					}
+				})
+			},
+		},
+		{
 			name: "unsafe img falls back to alt para",
 			html: `<img src="/relative/a.png" alt="fallback">`,
 			check: func(t *testing.T, nodes []Node) {
