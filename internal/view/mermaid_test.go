@@ -212,3 +212,43 @@ func TestMermaidErrorSinglePrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestMermaidErrorPanelShowsThreeFacts checks the failed diagram's panel
+// names the failure, shows the error and keeps the source, all on a
+// danger-tinted face, the Rust version's render error branch.
+func TestMermaidErrorPanelShowsThreeFacts(t *testing.T) {
+	ms := &mermaidState{err: errors.New("mermaid: parse: bad diagram")}
+	tt, _ := renderMermaid(t, ms, mermaidDoc)
+	for _, want := range []string{"Diagram failed to render", "mermaid: parse: bad diagram", "graph TD; A-->B"} {
+		if !has(tt, want) {
+			t.Fatalf("texts %v: missing %q", texts(tt), want)
+		}
+	}
+	face := ui.LightTheme().Background.Mix(ui.LightTheme().Danger, mermaidErrorTint)
+	if n := countColor(tt.Image(), face); n < 100 {
+		t.Fatalf("%d danger-tinted pixels: the panel did not draw", n)
+	}
+}
+
+// TestMermaidWideDiagramScrolls checks a diagram wider than the column
+// scrolls sideways in its own box, the shape the code block keeps, under
+// the muted hint about the full SVG.
+func TestMermaidWideDiagramScrolls(t *testing.T) {
+	ms := &mermaidState{}
+	ms.img = image.NewRGBA(image.Rect(0, 0, 1200, 200))
+	tt, _ := renderMermaid(t, ms, mermaidDoc)
+	scroll, ok := tt.Find("Mermaid diagram")
+	if !ok {
+		t.Fatalf("texts %v: want the diagram's scroller", texts(tt))
+	}
+	if scroll.W >= 1200 {
+		t.Fatalf("scroller %v wide: the diagram fits without scrolling", scroll.W)
+	}
+	if !has(tt, "Diagram rendered. Open SVG for full view.") {
+		t.Fatalf("texts %v: want the SVG hint", texts(tt))
+	}
+}
+
+// mermaidDocWide is a mermaid document whose diagram comes back extra
+// wide, for the sideways scroller's shot and test.
+const mermaidDocWide = "# Wide\n\n```mermaid\ngraph LR; A-->B\n```\n\nafter\n"
