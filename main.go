@@ -2,7 +2,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/internal/shell"
+	"github.com/windedge/peekdown/locales"
 )
 
 // app glues the shell to the single window: it keeps the window handle and
@@ -171,9 +174,9 @@ func newShell(a *app) *shell.Shell {
 	s.ClearRecent = mygo.App.ClearRecentDocuments
 	s.OpenDialog = func() ([]string, error) {
 		return mygo.Dialog.Open(mygo.OpenDialogOptions{
-			Title:    "Open Markdown",
+			Title:    locales.DialogOpenMarkdown(),
 			Multiple: true,
-			Filters:  []mygo.FileFilter{{Name: "Markdown", Extensions: shell.MarkdownExtensions()}},
+			Filters:  []mygo.FileFilter{{Name: locales.FilterMarkdown(), Extensions: shell.MarkdownExtensions()}},
 		})
 	}
 	s.OnTitleChange = a.OnTitleChange
@@ -181,6 +184,8 @@ func newShell(a *app) *shell.Shell {
 	// the window, which ends the run loop, as the system's close button
 	// does.
 	s.OpenURL = func(url string) { mygo.Shell.OpenExternal(url) }
+	s.AppLocale = mygo.App.Locale
+	s.SetAppLocale = mygo.App.SetLocale
 	s.CloseWindow = func() {
 		if a.win != nil {
 			a.win.Close()
@@ -207,6 +212,22 @@ func newShell(a *app) *shell.Shell {
 }
 
 func main() {
+	// A portable install registers itself with --register and exits; it
+	// must not reach the single-instance lock or the GUI.
+	for _, arg := range os.Args[1:] {
+		if arg == "--register" {
+			if err := registerFileAssociations(); err != nil {
+				fmt.Fprintln(os.Stderr, "peekdown: register:", err)
+				os.Exit(1)
+			}
+			fmt.Println("Registered Peekdown for .md and .markdown files.")
+			return
+		}
+	}
+
+	// The locale file lives in the user data directory; reading it needs
+	// the app's name and paths, so this runs before anything asks the
+	// locale.
 	mygo.App.SetName("Peekdown")
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
@@ -220,6 +241,15 @@ func main() {
 	mygo.App.OnOpenFile(a.open)
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
 		a.openSecondInstance(args)
+	})
+	mygo.App.OnLocaleChanged(func(locale string) {
+		// The native menu takes its labels at build time and the title bar
+		// reads the messages every frame: rebuild the menu, the window
+		// repaints on its own.
+		mygo.App.SetMenu(shell.BuildMenu(a.shell))
+		if a.win != nil {
+			a.win.SetTitle(a.title())
+		}
 	})
 	mygo.App.WhenReady(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{
