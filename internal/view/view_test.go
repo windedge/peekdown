@@ -564,7 +564,7 @@ func TestNestedListBulletStaysOnFirstLine(t *testing.T) {
 	}, 320, 300)
 	tt.Frame()
 	wrapped := rectOf(t, tt, "a first bullet")
-	bullet := rectOf(t, tt, "•")
+	bullet := rectOf(t, tt, "▪")
 	if bullet.Y != wrapped.Y {
 		t.Fatalf("bullet at y %v, the wrapped item's first line at %v: the bullet fell off the first line", bullet.Y, wrapped.Y)
 	}
@@ -576,7 +576,7 @@ func TestNestedListBulletStaysOnFirstLine(t *testing.T) {
 	_, tt2, state2 := render(t, "- short one\n")
 	_ = state2
 	short := rectOf(t, tt2, "short one")
-	shortBullet := rectOf(t, tt2, "•")
+	shortBullet := rectOf(t, tt2, "▪")
 	if shortBullet.Y != short.Y {
 		t.Fatalf("short item's bullet at y %v, its text at %v", shortBullet.Y, short.Y)
 	}
