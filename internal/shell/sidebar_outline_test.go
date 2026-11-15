@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/internal/settings"
 )
 
 // openOutline writes a three-level document, opens it and shows the
@@ -182,5 +185,79 @@ func TestOutlineTextSmallerThanBody(t *testing.T) {
 	}
 	if pane.H >= body.H {
 		t.Fatalf("outline text height %.1f not smaller than the body's %.1f", pane.H, body.H)
+	}
+}
+
+// TestSidebarDragPersistsWidth drags the split's real divider and checks
+// the width settles into the settings only after the drag stops moving,
+// clamped, and the open settings draft rides along.
+func TestSidebarDragPersistsWidth(t *testing.T) {
+	s, _ := openOutline(t, 900)
+	var writes int
+	base := s.Save
+	s.Save = func(v settings.Settings) error {
+		writes++
+		return base(v)
+	}
+	tt := s.renderSize(t, 900, 600)
+	tt.Frame()
+
+	// The divider sits at the sidebar's right edge; grab it and drag.
+	w0 := s.Sidebar.Width
+	gx := w0 - 1
+	tt.Press(gx, 300)
+	tt.Frame()
+	tt.Move(gx+60, 300)
+	tt.Frame()
+	if s.Sidebar.Width <= w0 {
+		t.Fatalf("width after drag = %.0f, want more than %.0f", s.Sidebar.Width, w0)
+	}
+	if s.Saved.SidebarWidth == float64(s.Sidebar.Width) {
+		t.Fatal("saved width while the drag is still moving")
+	}
+	if writes != 0 {
+		t.Fatalf("%d saves mid-drag, want none", writes)
+	}
+
+	// Let go: one more frame closes the press, then the timer runs out.
+	tt.Release(gx+60, 300)
+	tt.Frame()
+	if writes != 0 {
+		t.Fatalf("%d saves at release, want the debounce to hold it", writes)
+	}
+	tt.Advance(widthSaveDelay + 50*time.Millisecond)
+	if writes != 1 {
+		t.Fatalf("saves after settle = %d, want 1", writes)
+	}
+	if s.Saved.SidebarWidth != float64(s.Sidebar.Width) {
+		t.Fatalf("saved %.0f, want the settled %.0f", s.Saved.SidebarWidth, s.Sidebar.Width)
+	}
+	if s.Draft.SidebarWidth != s.Saved.SidebarWidth {
+		t.Fatalf("draft %.0f not synced with saved %.0f", s.Draft.SidebarWidth, s.Saved.SidebarWidth)
+	}
+}
+
+// TestRestoreClampsSidebarWidth checks the saved width lands through
+// SetSidebarWidth, so an out-of-range file is clamped back into 120-400.
+func TestRestoreClampsSidebarWidth(t *testing.T) {
+	s := New()
+	var saved settings.Settings
+	saved.SidebarWidth = 5000
+	saved.SidebarVisible = true
+	s.RestoreFromSettings(saved)
+	if s.Sidebar.Width != 400 {
+		t.Fatalf("width = %v, want the max 400", s.Sidebar.Width)
+	}
+	if s.Saved.SidebarWidth != 5000 {
+		t.Fatalf("saved width = %v, restore must not rewrite the file", s.Saved.SidebarWidth)
+	}
+
+	s2 := New()
+	var low settings.Settings
+	low.SidebarWidth = 10
+	low.SidebarVisible = true
+	s2.RestoreFromSettings(low)
+	if s2.Sidebar.Width != 120 {
+		t.Fatalf("width = %v, want the min 120", s2.Sidebar.Width)
 	}
 }

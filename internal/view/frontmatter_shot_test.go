@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/windedge/peekdown/internal/testshot"
 )
 
 // TestFrontmatterCopyButtonShot writes the frontmatter card's copy button
@@ -25,11 +27,12 @@ func TestFrontmatterCopyButtonShot(t *testing.T) {
 	tt.Move(r.X+r.W/2, r.Y+r.H/2)
 	tt.Advance(650 * time.Millisecond)
 	tt.Frame()
-	writeShotPng(t, tt, "C:/tmp/fm-copy-full.png")
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fm-copy-full.png")
 
 	// Crop around the button and blow it up 3x nearest-neighbor, so the
 	// icon's shape is easy to judge against the code block's button.
-	writeImagePng(t, scale3x(shotCrop(tt.Image(), r)), "C:/tmp/fm-copy-icon.png")
+	cx, cy := int(r.X+r.W/2), int(r.Y+r.H/2)
+	testshot.WritePng(t, testshot.Scale3x(testshot.Crop(tt.Image(), cx-70, cy-70, 140, 140)), "C:/tmp/fm-copy-icon.png")
 }
 
 // TestFrontmatterFoldShot writes the card open and folded, for a human
@@ -42,11 +45,11 @@ func TestFrontmatterFoldShot(t *testing.T) {
 	_, tt, st := frontCard(t, "---\ntitle: Note\ndraft: true\ntags:\n  - a\n  - b\n---\n\nbody\n")
 	st.CopyFrontmatter = func(string) {}
 	tt.Frame()
-	writeShotPng(t, tt, "C:/tmp/fm-expanded.png")
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fm-expanded.png")
 
 	if err := tt.Click("Toggle frontmatter"); err != nil {
 		t.Fatalf("no fold button: %v", err)
 	}
 	tt.Frame()
-	writeShotPng(t, tt, "C:/tmp/fm-collapsed.png")
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fm-collapsed.png")
 }

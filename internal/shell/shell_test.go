@@ -544,7 +544,10 @@ func TestIconButtonsLabeled(t *testing.T) {
 	s.OpenFile(filepath.Join(dir, "a.md"))
 	s.Sidebar.Visible = true
 	tt.Frame()
-	for _, label := range []string{"Close sidebar", "Files", "Outline", "Settings"} {
+	// The status bar is labels now, its zoom readout included: the
+	// remaining icons live in the sidebar header and the title bar. The
+	// tabs go before the close, which takes the sidebar off the window.
+	for _, label := range []string{"Files", "Outline", "Close sidebar", "Find in document", "App settings"} {
 		if err := tt.Click(label); err != nil {
 			t.Fatalf("%q is not the input target: %v", label, err)
 		}

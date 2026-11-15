@@ -1,11 +1,10 @@
 package shell
 
 import (
-	"image/png"
 	"os"
 	"testing"
 
-	"github.com/egoist/mygo/ui"
+	"github.com/windedge/peekdown/internal/testshot"
 )
 
 // TestFontPickerScreenshot writes the popover's screenshots for a human
@@ -25,7 +24,7 @@ func TestFontPickerScreenshot(t *testing.T) {
 		t.Fatalf("content font trigger: %v", err)
 	}
 	tt.Frame()
-	writePng(t, tt, "C:/tmp/fontpicker-popover.png")
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fontpicker-popover.png")
 
 	// Hover the list: the bar shows while the pointer is over the
 	// container, and at the top its thumb stands beside the checked
@@ -33,25 +32,9 @@ func TestFontPickerScreenshot(t *testing.T) {
 	panel, _ := tt.Find("Font picker")
 	tt.Move(panel.X+panel.W/2, panel.Y+panel.H/2)
 	tt.Frame()
-	writePng(t, tt, "C:/tmp/fontpicker-popover-scrollbar.png")
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fontpicker-popover-scrollbar.png")
 
 	tt.Type("ari")
 	tt.Frame()
-	writePng(t, tt, "C:/tmp/fontpicker-popover-filtered.png")
-}
-
-func writePng(t *testing.T, tt *ui.Tester, path string) {
-	t.Helper()
-	img := tt.Image()
-	if img == nil {
-		t.Fatalf("no image for %s", path)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		t.Fatalf("encode %s: %v", path, err)
-	}
+	testshot.WritePng(t, tt.Image(), "C:/tmp/fontpicker-popover-filtered.png")
 }

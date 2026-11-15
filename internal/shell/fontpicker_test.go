@@ -109,9 +109,10 @@ func TestFontPickerSearchFilters(t *testing.T) {
 	if !tt.HasText("No matching fonts") {
 		t.Fatalf("no empty state for a query nothing matches: %v", tt.Texts())
 	}
-	// Both triggers under the panel still read "System Default"; a third
+	// "System Default" now comes from three places: the two font triggers
+	// under the panel and the Language select's system choice; a fourth
 	// would be the row the filter should have dropped.
-	if texts := tt.Texts(); strings.Count(strings.Join(texts, "|"), "System Default") != 2 {
+	if texts := tt.Texts(); strings.Count(strings.Join(texts, "|"), "System Default") != 3 {
 		t.Fatalf("the default row survived a filter that keeps nothing: %v", texts)
 	}
 
