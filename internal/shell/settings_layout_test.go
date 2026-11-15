@@ -58,13 +58,19 @@ func TestSettingsSegmentedFitsContent(t *testing.T) {
 }
 
 // TestSettingsMarkersInputClearsScrollbar checks the Project Root Markers
-// input against the dialog's content column. Left free it filled the row
-// and its text ran under the fields' scroll bar, cut off mid-marker.
+// input against the dialog's content column, in the project root mode that
+// shows it. Left free it filled the row and its text ran under the fields'
+// scroll bar, cut off mid-marker.
 func TestSettingsMarkersInputClearsScrollbar(t *testing.T) {
 	s, _ := newShell(t)
 	s.markersText = "Cargo.toml, package.json, pyproject.toml, go.mod"
 	tt := s.renderSize(t, 1400, 880)
 	s.OpenSettings()
+	tt.Frame()
+	// The row exists only while the explorer's root is the project.
+	if err := tt.Click("Project Directory"); err != nil {
+		t.Fatalf("no Project Directory choice in %q", tt.Texts())
+	}
 	tt.Frame()
 
 	title, ok := tt.Find("Settings")
@@ -233,5 +239,65 @@ func TestSettingsFooterButtonsRightAligned(t *testing.T) {
 			t.Errorf("%dx%d: Cancel starts at %v, not left of Save at %v",
 				size.w, size.h, cancel.X, save.X)
 		}
+	}
+}
+
+// TestSettingsMarkersRowFollowsExplorerRoot checks the Project Root
+// Markers row shows only while the explorer's root is the project
+// directory. Toggling the segmented shows and hides the row, and the
+// draft keeps the typed markers throughout, so a round trip does not
+// lose what was in the input.
+func TestSettingsMarkersRowFollowsExplorerRoot(t *testing.T) {
+	s, _ := newShell(t)
+	tt := s.renderSize(t, 1400, 880)
+	s.OpenSettings()
+	tt.Frame()
+
+	// The saved mode is current_dir: no markers row in the tree.
+	if _, ok := tt.AccessByRole(ui.RoleTextField, "Project Root Markers"); ok {
+		t.Fatal("markers input shown while the root is the current directory")
+	}
+
+	// Switch the root to the project directory: the row appears, seeded
+	// with the saved markers. The user then edits the text.
+	if err := tt.Click("Project Directory"); err != nil {
+		t.Fatalf("no Project Directory choice in %q", tt.Texts())
+	}
+	tt.Frame()
+	if s.Draft.ExplorerRootMode != "project_root" {
+		t.Fatalf("ExplorerRootMode = %q after the switch, want project_root", s.Draft.ExplorerRootMode)
+	}
+	if _, ok := tt.AccessByRole(ui.RoleTextField, "Project Root Markers"); !ok {
+		t.Fatalf("no markers input after switching the root, in %q", tt.Texts())
+	}
+	const typed = "Cargo.toml, package.json"
+	s.markersText = typed
+
+	// Switch back: the row goes, and the input's text survives for the
+	// next showing since the draft never dropped it.
+	if err := tt.Click("Current Directory"); err != nil {
+		t.Fatalf("no Current Directory choice in %q", tt.Texts())
+	}
+	tt.Frame()
+	if s.Draft.ExplorerRootMode != "current_dir" {
+		t.Fatalf("ExplorerRootMode = %q after switching back, want current_dir", s.Draft.ExplorerRootMode)
+	}
+	if _, ok := tt.AccessByRole(ui.RoleTextField, "Project Root Markers"); ok {
+		t.Fatal("markers input still shown after switching back to the current directory")
+	}
+	if s.markersText != typed {
+		t.Fatalf("markersText = %q, the draft lost the typed markers", s.markersText)
+	}
+
+	// Once more to the project: the row is back with the typed text.
+	if err := tt.Click("Project Directory"); err != nil {
+		t.Fatalf("no Project Directory choice in %q", tt.Texts())
+	}
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleTextField, "Project Root Markers"); !ok {
+		t.Fatal("no markers input after the second switch to the project root")
+	}
+	if s.markersText != typed {
+		t.Fatalf("markersText = %q after re-showing, want the typed %q", s.markersText, typed)
 	}
 }
