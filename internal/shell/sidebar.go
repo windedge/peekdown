@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/locales"
 )
 
 // sidebar renders the file list or the outline of the active tab. The
@@ -19,10 +21,10 @@ func (s *Shell) sidebar(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
 		ui.Row(c).Padding(4, 8).Gap(2).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-			s.sidebarTab(c, "sidebar-files-tab", 0, "Files")
-			s.sidebarTab(c, "sidebar-outline-tab", 1, "Outline")
+			s.sidebarTab(c, "sidebar-files-tab", 0, locales.SidebarFiles())
+			s.sidebarTab(c, "sidebar-outline-tab", 1, locales.SidebarOutline())
 			ui.Box(c).Grow(1)
-			iconButton(c, "close-sidebar", closeIcon, "Close sidebar", 20, 10, func() { s.Sidebar.Visible = false })
+			iconButton(c, "close-sidebar", closeIcon, locales.SidebarClose(), 20, 10, func() { s.Sidebar.Visible = false })
 		})
 		if s.Sidebar.Tab == 0 {
 			s.filesPane(c)
@@ -70,26 +72,86 @@ func (s *Shell) explorerRoot(path string) string {
 	return dir
 }
 
-// findProjectRoot walks from dir upward to the first directory holding
-// any marker, a plain stat per marker per level, as the Rust version
-// does. Returns "" when none matches above dir.
+// bottomUpVCS and recurringVCS mirror Rust's workspace module: a VCS
+// marker claims the whole repo, so the closest ancestor wins, while .svn
+// and CVS repeat per subdirectory and resolve to the topmost contiguous
+// run instead.
+var (
+	bottomUpVCS  = []string{".git", ".hg", ".pijul", "_darcs", ".bzr", ".jj"}
+	recurringVCS = []string{".svn", "CVS"}
+)
+
+// findProjectRoot walks from dir up to the drive root once, collecting
+// three candidates: the closest bottom-up VCS root, the bottom of the
+// topmost contiguous recurring-VCS run, and the outermost configured
+// marker. The VCS roots win over configured markers because a repo
+// boundary is stronger than a stray build file; configured markers stay
+// outermost because that is where a whole project starts. Returns ""
+// when nothing matches, and the caller falls back to the document dir.
 func findProjectRoot(dir string, markers []string) string {
+	var bottomUp, topDown string
+	var recurringHits []string
+
 	for {
+		// First hit wins: it is the closest ancestor as we walk up.
+		for _, vcs := range bottomUpVCS {
+			if exists(filepath.Join(dir, vcs)) {
+				if bottomUp == "" {
+					bottomUp = dir
+				}
+				break
+			}
+		}
+		for _, vcs := range recurringVCS {
+			if exists(filepath.Join(dir, vcs)) {
+				recurringHits = append(recurringHits, dir)
+				break
+			}
+		}
+		// Outermost level wins: keep overwriting while walking up.
 		for _, m := range markers {
 			m = strings.TrimSpace(m)
 			if m == "" {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
-				return dir
+			if exists(filepath.Join(dir, m)) {
+				topDown = dir
+				break
 			}
 		}
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			break
 		}
 		dir = parent
 	}
+
+	if bottomUp != "" {
+		return bottomUp
+	}
+	if len(recurringHits) > 0 {
+		slices.Reverse(recurringHits)
+		// After reversing, walk down while each hit is a child of the
+		// previous one; the first gap ends the topmost run.
+		result := recurringHits[0]
+		for i := 1; i < len(recurringHits); i++ {
+			if filepath.Dir(recurringHits[i]) == recurringHits[i-1] {
+				result = recurringHits[i]
+			} else {
+				break
+			}
+		}
+		return result
+	}
+	return topDown
+}
+
+// exists is a plain stat, matching Rust's Path::exists: directories and
+// files both count as a marker hit.
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // readSortedEntries lists dir and orders it as the sort setting asks:
@@ -157,13 +219,13 @@ func (s *Shell) outlinePane(c *ui.Context) {
 	tab := s.ActiveTab()
 	ui.Column(c).Fill().Children(func() {
 		if tab == nil || tab.Model == nil {
-			ui.Text(c, "No headings").FontSize(13).TextColor(t.TextMuted).
+			ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
 				Padding(4, 12)
 			return
 		}
 		headings := tab.Model.Headings()
 		if len(headings) == 0 {
-			ui.Text(c, "No headings").FontSize(13).TextColor(t.TextMuted).
+			ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
 				Padding(4, 12)
 			return
 		}

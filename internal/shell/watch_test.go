@@ -237,13 +237,10 @@ func TestFindProjectRoot(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The marker list trims and skips blanks; .git here comes from the
-	// list itself, not any hardcoded VCS set.
-	if got := findProjectRoot(deep, []string{"go.mod", " package.json ", ".git"}); got != root {
-		t.Fatalf("findProjectRoot = %q, want %q", got, root)
-	}
-	if got := findProjectRoot(deep, nil); got != "" {
-		t.Fatalf("findProjectRoot without markers = %q, want empty", got)
+	// Hardcoded VCS finds the .git fixture even with an empty marker
+	// list now; the empty fallback is covered in projectroot_test.go.
+	if got := findProjectRoot(deep, nil); got != root {
+		t.Fatalf("findProjectRoot without markers = %q, want %q", got, root)
 	}
 }
 

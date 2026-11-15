@@ -18,8 +18,53 @@ func TestDefault(t *testing.T) {
 	if !s.InertiaScroll || !s.AutoRefresh || s.SidebarWidth != 200 || s.SidebarTab != "explorer" {
 		t.Fatalf("default behavior: %+v", s)
 	}
-	if len(s.ProjectRootMarkers) == 0 {
-		t.Fatal("default project root markers are empty")
+	// The Rust implementation's default_project_root_markers(); VCS
+	// markers stay hardcoded there and out of this list.
+	want := []string{
+		"Cargo.toml",
+		"package.json",
+		"pyproject.toml",
+		"go.mod",
+		"pom.xml",
+		"build.gradle",
+		"build.gradle.kts",
+		"CMakeLists.txt",
+	}
+	if !reflect.DeepEqual(s.ProjectRootMarkers, want) {
+		t.Fatalf("default markers: got %q, want %q", s.ProjectRootMarkers, want)
+	}
+}
+
+// The markers field follows serde's default semantics: a file that leaves
+// it out gets the defaults, and an old file that pinned the shorter
+// historic list keeps exactly what the user saved.
+func TestLoadProjectRootMarkers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"theme":"dark"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.ProjectRootMarkers, Default().ProjectRootMarkers) {
+		t.Fatalf("markers field omitted: got %q, want defaults", got.ProjectRootMarkers)
+	}
+
+	kept := []string{"Cargo.toml", "package.json", "pyproject.toml", "go.mod"}
+	if err := Save(path, func() Settings {
+		s := Default()
+		s.ProjectRootMarkers = kept
+		return s
+	}()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.ProjectRootMarkers, kept) {
+		t.Fatalf("markers field saved: got %q, want the user's %q", got.ProjectRootMarkers, kept)
 	}
 }
 
@@ -41,6 +86,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	want.FontSize = 18
 	want.ExpandedDirs = []string{"/a", "/b"}
 	want.SidebarVisible = true
+	want.SidebarWidth = 321
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
