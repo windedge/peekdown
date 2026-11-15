@@ -86,9 +86,9 @@ func TestZoomScalesTextNotWindow(t *testing.T) {
 	if !ok {
 		t.Fatalf("texts %v: want the body line", tt.Texts())
 	}
-	chromeBefore, ok := tt.Find("Settings")
+	chromeBefore, ok := tt.Find("100%")
 	if !ok {
-		t.Fatalf("texts %v: want the settings button", tt.Texts())
+		t.Fatalf("texts %v: want the status bar's zoom readout", tt.Texts())
 	}
 
 	m := BuildMenu(s)
@@ -123,15 +123,15 @@ func TestZoomScalesTextNotWindow(t *testing.T) {
 	}
 
 	// The window itself did not zoom: the frame's own zoom stays 1, its
-	// size stays the window's, and the status bar's fixed-size button
-	// draws in the same box.
+	// size stays the window's, and the status bar's readout draws in the
+	// same box.
 	if frame.zoom != 1 {
 		t.Fatalf("window zoom = %v during the zoomed frame, want 1", frame.zoom)
 	}
 	if frame.w != w || frame.h != h {
 		t.Fatalf("frame size = %vx%v, want the window's %dx%d", frame.w, frame.h, w, h)
 	}
-	chromeAfter, ok := tt.Find("Settings")
+	chromeAfter, ok := tt.Find("125%")
 	if !ok || chromeAfter != chromeBefore {
 		t.Fatalf("chrome box %v after the zoom, %v before: the window scaled", chromeAfter, chromeBefore)
 	}

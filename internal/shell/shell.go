@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -21,6 +22,7 @@ import (
 	"github.com/windedge/peekdown/internal/selection"
 	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/internal/view"
+	"github.com/windedge/peekdown/locales"
 )
 
 // Tab is one open document.
@@ -79,6 +81,9 @@ type Shell struct {
 	// untouched (ticket #25).
 	Zoom    int
 	saveErr string
+	// widthSaveTimer is when a sidebar drag's width lands in the
+	// settings: armed by a divider move, cleared once saved.
+	widthSaveTimer time.Time
 
 	// SearchOpen shows the search bar; search is its state.
 	SearchOpen bool
@@ -112,6 +117,12 @@ type Shell struct {
 	// CloseWindow quits the app: the host closes its window, which ends
 	// the run loop. Nil skips it.
 	CloseWindow func()
+	// AppLocale reads the language the app shows, SetAppLocale chooses
+	// one ("" follows the system); the host maps both onto mygo.App, so
+	// tests and a headless run stay off the app's main loop. Nil reads
+	// as the system choice, and choosing does nothing.
+	AppLocale    func() string
+	SetAppLocale func(string)
 
 	// tabScroll tracks the tab strip's sideways offset: the strip's wheel
 	// handler scrolls with it, and the strip's ScrollIntoView glides against
@@ -351,12 +362,12 @@ func (s *Shell) ActiveTab() *Tab {
 // until the next successful open replaces it.
 func (s *Shell) Title() string {
 	if s.openError != "" {
-		return "Could not read this document: " + s.openError + " - Peekdown"
+		return locales.CouldNotReadDocument(s.openError) + " - " + locales.AppTitle()
 	}
 	if t := s.ActiveTab(); t != nil {
-		return t.Path + " - Peekdown"
+		return t.Path + " - " + locales.AppTitle()
 	}
-	return "Peekdown"
+	return locales.AppTitle()
 }
 
 // CopySelection writes the active tab's selected text to the clipboard
@@ -437,6 +448,22 @@ func (s *Shell) SetSidebarWidth(w float32) {
 		w = maxW
 	}
 	s.Sidebar.Width = w
+}
+
+// widthSaveDelay waits out a drag: the divider moves every frame while
+// held, and only the width it stops on belongs in settings.json, the
+// way mygo's own window state settles before it writes.
+const widthSaveDelay = 300 * time.Millisecond
+
+// persistSidebarWidth records the sidebar width through the settings,
+// straight into Saved and disk like the tree's expanded dirs: the width
+// is instant state, not a settings-dialog field.
+func (s *Shell) persistSidebarWidth() {
+	s.Saved.SidebarWidth = float64(s.Sidebar.Width)
+	s.Draft.SidebarWidth = s.Saved.SidebarWidth
+	if s.Save != nil {
+		_ = s.Save(s.Saved)
+	}
 }
 
 // RestoreFromSettings puts the saved settings on the shell at startup:
@@ -611,6 +638,8 @@ func (s *Shell) View(c *ui.Context) {
 			if s.SearchOpen {
 				s.searchView(c)
 			}
+			s.readingProgress(c)
+			s.jumpButtons(c)
 		}
 		// The body grows into the room the bars leave instead of asking
 		// for the whole column: a Fill here is a hundred percent of the
@@ -621,7 +650,20 @@ func (s *Shell) View(c *ui.Context) {
 		// document's list meets a bounded box and scrolls inside it.
 		if s.Sidebar.Visible {
 			s.SetSidebarWidth(s.Sidebar.Width)
-			ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
+			split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
+			// A divider move (drag or keyboard) re-arms the save; the width
+			// lands in the settings once the drag settles.
+			if split.Changed() {
+				s.widthSaveTimer = c.Now().Add(widthSaveDelay)
+			}
+			if !s.widthSaveTimer.IsZero() {
+				if now := c.Now(); now.Before(s.widthSaveTimer) {
+					c.After(s.widthSaveTimer.Sub(now))
+				} else {
+					s.widthSaveTimer = time.Time{}
+					s.persistSidebarWidth()
+				}
+			}
 		} else {
 			ui.Box(c).Grow(1).Clip().Children(func() { body() })
 		}
@@ -641,7 +683,7 @@ func (s *Shell) Content(c *ui.Context) {
 	tab := s.ActiveTab()
 	if tab == nil || tab.Model == nil {
 		ui.Column(c).Fill().Center().Children(func() {
-			ui.Text(c, "No document open").TextColor(t.TextMuted)
+			ui.Text(c, locales.NoDocumentOpen()).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -654,12 +696,12 @@ func (s *Shell) Content(c *ui.Context) {
 	// set each frame so a tab opened elsewhere finds it in place.
 	tab.State.CopyFrontmatter = func(raw string) {
 		c.WriteClipboard(raw)
-		c.Toast("Copied frontmatter")
+		c.Toast(locales.CopiedFrontmatter())
 	}
 	// A code block's copy button, the same clipboard and a toast of its own.
 	tab.State.CopyText = func(text string) {
 		c.WriteClipboard(text)
-		c.Toast("Copied code")
+		c.Toast(locales.CopiedCode())
 	}
 	// The document area's context menu: the commands act on the open
 	// document, whichever row the click landed on. Rebound every frame like
@@ -676,7 +718,7 @@ func (s *Shell) Content(c *ui.Context) {
 		},
 		CopyPath: func() {
 			c.WriteClipboard(tab.Path)
-			c.Toast("Copied path")
+			c.Toast(locales.CopiedPath())
 		},
 	}
 	// The diagrams render through the shared cache, keyed by source,
@@ -692,7 +734,7 @@ func (s *Shell) Content(c *ui.Context) {
 	// not on OpenURL happening to be set.
 	tab.State.OpenURL = func(url string) {
 		if err := mygo.Shell.OpenExternal(url); err != nil {
-			c.Toast("Could not open the link")
+			c.Toast(locales.CouldNotOpenLink())
 		}
 	}
 	// A link that names a local file opens here, as a tab of its own;
@@ -711,10 +753,14 @@ func (s *Shell) Content(c *ui.Context) {
 	tab.State.Zoom = s.zoomFactor()
 	tab.State.FontFamily = s.Saved.FontFamily
 	tab.State.MonoFontFamily = s.Saved.MonoFontFamily
-	// not wired: mygo has no scroll-speed or inertia API. ScrollSpeed and
-	// InertiaScroll stay settings-only, hidden from the dialog (ticket
-	// #21); the engine's wheel glide is fixed (input.go scroll,
-	// ReduceMotion is the only switch).
+	// The wheel rides the saved scroll settings, topped up every frame
+	// like the loaders: a save lands on the next frame without further
+	// wiring, and a tab opened elsewhere finds them too. The multiplier
+	// and the inertia switch live in the view's own wheel handler
+	// (Handler's InputScroll branch); the touchpad keeps the engine's
+	// unmultiplied drag.
+	tab.State.ScrollSpeed = float32(s.Saved.ScrollSpeed)
+	tab.State.NoInertia = !s.Saved.InertiaScroll
 	// The right edge is 0 so the list's own scrollbar sits at the window's
 	// edge instead of floating 24 DIPs in; the rows give the text its
 	// clearance on the right themselves.
@@ -736,6 +782,51 @@ func (s *Shell) Content(c *ui.Context) {
 }
 
 func (s *Shell) content(c *ui.Context) { s.Content(c) }
+
+// readingProgress draws the 2px reading progress bar across the body's
+// top edge, under the title bar: the fill spans the fraction the active
+// tab's view is scrolled through, in the accent color. A document with
+// no scroll room draws none, as the Rust version's max_scroll test does.
+func (s *Shell) readingProgress(c *ui.Context) {
+	tab := s.ActiveTab()
+	if tab == nil || tab.Model == nil || tab.State.Progress <= 0 {
+		return
+	}
+	ui.Box(c).Absolute().Top(0).Left(0).Height(2).Width(max(0, min(tab.State.Progress, 1)) * float32(bodyWidth(c))).
+		Background(c.Theme().Accent).ZIndex(5)
+}
+
+// jumpButtons are the scroll-to-top and scroll-to-bottom floating
+// buttons over the body's bottom right corner, above the status bar:
+// the button whose end the view already stands at hides, as the Rust
+// version's is_at_top / is_at_bottom do. They float over the document,
+// clear of the search bar's top right corner.
+func (s *Shell) jumpButtons(c *ui.Context) {
+	tab := s.ActiveTab()
+	if tab == nil || tab.Model == nil {
+		return
+	}
+	st := &tab.State
+	if st.AtTop && st.AtBottom {
+		return
+	}
+	col := ui.Column(c).Absolute().Bottom(24).Right(24).Gap(8).ZIndex(10)
+	col.Children(func() {
+		if !st.AtTop {
+			iconButton(c, "jump-top", chevronUpIcon, locales.JumpTop(), 24, 14, s.ScrollToStart)
+		}
+		if !st.AtBottom {
+			iconButton(c, "jump-bottom", chevronDownIcon, locales.JumpBottom(), 24, 14, s.ScrollToEnd)
+		}
+	})
+}
+
+// bodyWidth is the width of the body container the progress bar and the
+// jump buttons float in, read off the frame's window.
+func bodyWidth(c *ui.Context) float32 {
+	w, _ := c.Size()
+	return w
+}
 
 // openLocalLink resolves dest, as a document's link wrote it, against
 // base's directory and shows the target as a tab: an absolute path
@@ -798,16 +889,16 @@ func (s *Shell) welcome(c *ui.Context) {
 	// past a narrow window's edge.
 	recentW := max(min(recentWidth, winW-2*welcomeMargin), 120)
 	ui.Column(c).Fill().Center().Gap(16).Children(func() {
-		ui.Text(c, "Welcome to Peekdown").FontSize(24).Bold()
-		ui.Text(c, "Open a Markdown file to get started").FontSize(12).TextColor(t.TextMuted)
-		if ui.PrimaryButton(c, "Open File").Clicked() {
+		ui.Text(c, locales.WelcomeTitle()).FontSize(24).Bold()
+		ui.Text(c, locales.WelcomeSubtitle()).FontSize(12).TextColor(t.TextMuted)
+		if ui.PrimaryButton(c, locales.WelcomeOpenFile()).Clicked() {
 			if s.OpenDialog != nil {
 				if paths, err := s.OpenDialog(); err == nil {
 					s.OpenPaths(paths)
 				}
 			}
 		}
-		ui.Text(c, "Or drag and drop files \u2022 Ctrl+O to open").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, locales.WelcomeDropHint()).FontSize(11).TextColor(t.TextMuted)
 
 		var recent []string
 		if s.Recent != nil {
@@ -821,8 +912,8 @@ func (s *Shell) welcome(c *ui.Context) {
 			// hundred percent of that height would have each row take the
 			// whole list's height and the next one start below the window.
 			ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Recent Files").FontSize(11).Bold().TextColor(t.TextMuted)
-				if ui.Button(c, "Clear").Clicked() && s.ClearRecent != nil {
+				ui.Text(c, locales.RecentFiles()).FontSize(11).Bold().TextColor(t.TextMuted)
+				if ui.Button(c, locales.Clear()).Clicked() && s.ClearRecent != nil {
 					_ = s.ClearRecent()
 				}
 			})
@@ -858,10 +949,10 @@ func (s *Shell) welcome(c *ui.Context) {
 	})
 }
 
-// statusBar renders the strip under the body: the sidebar's toggles on
-// the left, the search and settings entries on the right. mygo exposes
-// no frame-rate API (a surface's refresh rate only, not a counter), so
-// the Rust version's optional FPS readout has no counterpart here.
+// statusBar renders the strip under the body: the zoom readout, right
+// aligned where the bar's entries used to sit. mygo exposes no frame-rate
+// API (a surface's refresh rate only, not a counter), so the Rust
+// version's optional FPS readout has no counterpart here.
 // welcomeRoom is the height the welcome page spends above its recent
 // list: the greeting, the open button, the hint and the list's caption,
 // with their gaps.
@@ -891,15 +982,11 @@ func (s *Shell) statusBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Height(28).Padding(2, 8).Gap(6).Background(t.Surface).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).AlignItems(ui.Center).Children(func() {
-		iconButton(c, "status-files", folderIcon, "Files", 24, 14, func() { s.SetSidebarTab(0) })
-		iconButton(c, "status-outline", chevronDownIcon, "Outline", 24, 14, func() { s.SetSidebarTab(1) })
+		// The readout is a label, not a control: the menu's chords drive
+		// the zoom, and the bar keeps its entries on the right edge.
 		ui.Box(c).Grow(1)
-		// The zoom readout sits beside the search and settings entries, a
-		// label rather than a control: the menu's chords drive the zoom.
 		ui.Text(c, s.ZoomLabel()).FontSize(11).TextColor(t.TextMuted).MarginX(6).
-			Tooltip("Zoom: Ctrl+= / Ctrl+- / Ctrl+0")
-		iconButton(c, "status-search", searchIcon, "Search", 24, 14, func() { s.OpenSearch() })
-		iconButton(c, "status-settings", gearIcon, "Settings", 24, 14, func() { s.OpenSettings() })
+			Tooltip(locales.ZoomTooltip())
 	})
 }
 

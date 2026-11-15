@@ -25,8 +25,8 @@ func longDoc(t *testing.T, dir string) string {
 	return path
 }
 
-// statusBarLabels are the strip's controls, the rows the viewport must hold.
-var statusBarLabels = []string{"Files", "Outline", "Search", "Settings"}
+// statusLabels is the bar's only content, the row the viewport must hold.
+var statusLabels = []string{"100%"}
 
 // TestStatusBarStaysInTheWindow pins the root column's height budget: a
 // long document must not push the status bar past the window's bottom
@@ -42,7 +42,7 @@ func TestStatusBarStaysInTheWindow(t *testing.T) {
 		tt := s.renderSize(t, w, h)
 		tt.Frame()
 
-		for _, label := range statusBarLabels {
+		for _, label := range statusLabels {
 			r, ok := tt.Find(label)
 			if !ok {
 				t.Fatalf("sidebar %v: texts %v: want the %q control", sidebar, tt.Texts(), label)
@@ -78,7 +78,7 @@ func TestStatusBarStaysInTheWindow(t *testing.T) {
 		if moved, ok := paragraphRect(tt, "Paragraph 0 "); ok && moved.Y >= text.Y {
 			t.Fatalf("sidebar %v: the text stayed at %v: want the list to scroll", sidebar, text)
 		}
-		if after, _ := tt.Find("Settings"); after.Y+after.H > h {
+		if after, _ := tt.Find("100%"); after.Y+after.H > h {
 			t.Fatalf("sidebar %v: the status bar left the window on a scroll: %v", sidebar, after)
 		}
 	}
@@ -100,13 +100,14 @@ func TestStatusBarFitsAShortDocumentToo(t *testing.T) {
 	tt := s.renderSize(t, w, h)
 	tt.Frame()
 
-	r, ok := tt.Find("Settings")
+	r, ok := tt.Find("100%")
 	if !ok {
-		t.Fatalf("texts %v: want the settings control", tt.Texts())
+		t.Fatalf("texts %v: want the zoom readout", tt.Texts())
 	}
-	// The bar hugs the bottom: its 28 DIP row ends within a DIP of the edge.
-	if got := float32(h) - (r.Y + r.H); got < 0 || got > 2 {
-		t.Fatalf("status bar ends %v DIPs from the bottom edge: %v", got, r)
+	// The bar hugs the bottom: the readout, a small label centered in
+	// the 28 DIP row, sits wholly in the strip h-28..h.
+	if r.Y < float32(h-28) || r.Y+r.H > float32(h) {
+		t.Fatalf("zoom readout at %v sits outside the %d DIP window's bottom bar", r, h)
 	}
 }
 
