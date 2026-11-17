@@ -19,11 +19,11 @@ func tabRect(t *testing.T, tt *ui.Tester, label string) ui.Rect {
 	return r
 }
 
-// tabChipSample reads a pixel a few DIPs left of the tab's label: inside
-// the tab's own padding, where the chip's background shows and no glyph
-// or close button does.
-func tabChipSample(img *image.RGBA, r ui.Rect) ui.Color {
-	return pixelAt(img, r.X-6, r.Y+r.H/2)
+// tabChipSample reads the tab's left padding, past the badge that now
+// precedes the label: the chip's background shows there and no glyph or
+// close button does.
+func tabChipSample(img *image.RGBA, label ui.Rect) ui.Color {
+	return pixelAt(img, label.X-tabBadgeGap-tabBadgeSize-4, label.Y+label.H/2)
 }
 
 // renderTheme builds the shell's frame under a fixed theme: the tester

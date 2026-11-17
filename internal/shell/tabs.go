@@ -2,12 +2,52 @@ package shell
 
 import (
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/windedge/peekdown/locales"
 )
+
+// The tab badge is a fixed square before the label: it keeps its size and
+// color while the label beside it is the part that truncates.
+const (
+	tabBadgeSize   float32 = 18
+	tabBadgeGap    float32 = 8
+	tabBadgeRadius float32 = 4
+	tabBadgeFont   float32 = 9
+)
+
+// tabBadgePalette is the fixed set of muted, dark badge fills.
+var tabBadgePalette = [...]ui.Color{
+	ui.RGBA(0x7c, 0x5c, 0xbf, 255),
+	ui.RGBA(0x4e, 0x79, 0xa7, 255),
+	ui.RGBA(0x59, 0xa1, 0x4f, 255),
+	ui.RGBA(0xd4, 0x71, 0x3c, 255),
+	ui.RGBA(0xb2, 0x3a, 0x5b, 255),
+	ui.RGBA(0x2f, 0x9e, 0x8f, 255),
+	ui.RGBA(0xa8, 0x76, 0x2a, 255),
+	ui.RGBA(0x5a, 0x6b, 0x9e, 255),
+}
+
+// tabBadgeColor maps a file name to the same fill on every render. FNV-1a
+// spreads names that share an initial across the palette.
+func tabBadgeColor(path string) ui.Color {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(filepath.Base(path)))
+	return tabBadgePalette[h.Sum32()%uint32(len(tabBadgePalette))]
+}
+
+// tabBadgeInitial is the badge's glyph: the name's first letter, upper
+// cased, or its first character when it is not a letter.
+func tabBadgeInitial(path string) string {
+	for _, r := range filepath.Base(path) {
+		return string(unicode.ToUpper(r))
+	}
+	return "?"
+}
 
 // tabShadow is the active tab's shadow on the bar's tray, per theme: dark
 // panels need a heavier hand for the lift to read at all. Single tight
@@ -80,6 +120,9 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 				i := i
 				path := s.Tabs[i].Path
 				tab := parts.Tab(i)
+				// The neutral weight is inherited by the badge and close icon;
+				// the label sets its own weight per state.
+				tab.Height(tabStripHeight).Padding(3, 10).Radius(7).FontWeight(400)
 				// Home keeps the tabs but no active one: the body is the
 				// welcome page, so a highlight would point at a tab that is not
 				// on screen.
@@ -89,19 +132,33 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 					if t.Dark {
 						shadow = tabShadowDark
 					}
-					tab.Height(tabStripHeight).Padding(3, 10).Radius(7).
-						Background(t.Background).TextColor(t.Text).FontWeight(500).
+					tab.Background(t.Background).TextColor(t.Text).
 						Shadow(0, 1, 3, 0, shadow)
 				} else {
-					tab.Height(tabStripHeight).Padding(3, 10).Radius(7)
 					if tab.Hovered() {
 						tab.Background(t.SurfaceHover)
 					}
 					tab.TextColor(t.TextMuted)
 				}
 				tab.Children(func() {
-					ui.Row(c).Gap(6).Children(func() {
-						ui.Text(c, filepath.Base(s.Tabs[i].Path)).FontSize(13)
+					ui.Row(c).Gap(tabBadgeGap).AlignItems(ui.Center).Children(func() {
+						name := filepath.Base(path)
+						badge := ui.Box(c).Role(ui.RoleImage).Label("Tab badge: "+name).
+							Size(tabBadgeSize, tabBadgeSize).Radius(tabBadgeRadius).
+							Background(tabBadgeColor(name)).Shrink(0).
+							AlignItems(ui.Center).Justify(ui.Center)
+						badge.Children(func() {
+							ui.Text(c, tabBadgeInitial(name)).FontSize(tabBadgeFont).
+								FontWeight(700).TextColor(ui.RGBA(255, 255, 255, 255)).MaxLines(1)
+						})
+						// Reserving the bolder label's advance keeps the chip's
+						// width fixed when the active state changes the weight.
+						boldW, _ := c.MeasureText(0, ui.Span{Text: name, Size: 13, Weight: 500})
+						label := ui.Text(c, name).FontSize(13).MaxLines(1).
+							Width(boldW + 1).Shrink(0)
+						if i == s.Active && !s.Home {
+							label.FontWeight(500)
+						}
 						close := ui.ButtonBase(c.Key(fmt.Sprintf("close-%s", path))).
 							Label(locales.CloseTabNamed(filepath.Base(path))).
 							Size(20, 20).Padding(0).Radius(4).
