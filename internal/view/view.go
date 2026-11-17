@@ -1939,7 +1939,8 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 					// version's checkbox replaces the marker.
 					st.taskBox(c, item.Task, markerWidth(marker))
 				} else {
-					ui.Text(c, marker).Width(markerWidth(marker)).TextColor(tk.muted).TextAlign(ui.End)
+					ui.Text(c, marker).Width(markerWidth(marker)).Font(tk.sans).
+						FontSize(tk.body).TextColor(tk.muted).TextAlign(ui.End)
 				}
 				content := ui.Column(c).Gap(2).Grow(1).MinWidth(0)
 				content.Children(func() {
@@ -1947,8 +1948,12 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 						child := m.Block(j)
 						switch child.Kind {
 						case parser.Paragraph:
-							spans := st.spans(c, m, j, style{})
-							ui.RichText(c, spans...)
+							// An item's prose reads as body text: this row
+							// inherits only the window's font, so the spans
+							// must carry the body's size and family, or the
+							// item draws a size down from a paragraph's.
+							s := style{size: tk.body, weight: 400, color: tk.text}
+							ui.RichText(c, st.spans(c, m, j, s)...).Font(tk.sans)
 						case parser.List:
 							st.list(c, m, j, child, depth+1)
 						default:
