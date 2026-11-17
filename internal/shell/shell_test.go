@@ -718,8 +718,11 @@ func TestSearchToggleRegexCase(t *testing.T) {
 		}
 		got := pixelAt(tt.Image(), r.X+3, r.Y+r.H/2)
 		// A click leaves the pointer parked on the button, so the off fill
-		// may be the hover wash; neither is the selection's blue.
-		if got != ui.LightTheme().Surface && got != ui.LightTheme().SurfaceHover {
+		// may be the hover wash; neither is the selection's blue. The
+		// bar's translucent panel lands composited, so the channels are
+		// what a token match means.
+		light := windowLight()
+		if !channelClose(got, light.Surface, 1) && !channelClose(got, light.SurfaceHover, 1) {
 			t.Fatalf("off %s fill %v, want surface or hover, not the on fill", name, got)
 		}
 	}
@@ -730,18 +733,15 @@ func TestSearchToggleRegexCase(t *testing.T) {
 			t.Fatalf("%s button missing", name)
 		}
 		got := pixelAt(tt.Image(), r.X+3, r.Y+r.H/2)
-		if got == ui.LightTheme().Surface {
+		if channelClose(got, windowLight().Surface, 1) {
 			t.Fatalf("on %s fill %v, indistinguishable from the surface", name, got)
 		}
-		d := func(a, b uint8) int {
-			d := int(a) - int(b)
-			if d < 0 {
-				d = -d
-			}
-			return d
-		}
-		if d(got.R, ui.LightTheme().Surface.R)+d(got.G, ui.LightTheme().Surface.G)+d(got.B, ui.LightTheme().Surface.B) < 40 || got.B < got.R {
-			t.Fatalf("on %s fill %v, want a visible pale blue over the surface", name, got)
+		// The on fill is the selection's pale accent laid over the bar's
+		// surface: with an accent theme it takes that theme's hue, not
+		// always blue, so the expectation rides the live token.
+		want := over(windowLight().Selection, windowLight().Surface)
+		if !channelClose(got, want, 2) {
+			t.Fatalf("on %s fill %v, want the selection's %v over the surface", name, got, want)
 		}
 	}
 	offFill(t, "Match case")

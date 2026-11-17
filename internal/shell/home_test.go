@@ -64,11 +64,13 @@ func TestBrandOpensHome(t *testing.T) {
 	// Before Home the active tab (b.md, the last opened) takes the
 	// window's background and the idle one the raised surface: the sample
 	// tells the two apart, so its verdict after Home means something.
-	light := ui.LightTheme()
+	light := windowLight()
 	if got := tabBackground(t, tt, "b.md"); got != light.Background {
 		t.Fatalf("the active tab is %v, want the window's %v", got, light.Background)
 	}
-	if got := tabBackground(t, tt, "a.md"); got != light.Surface {
+	// The idle tab's fill lands on the frame composited, so its alpha
+	// flattens to the frame's: compare the channels.
+	if got := tabBackground(t, tt, "a.md"); !channelClose(got, light.Surface, 1) {
 		t.Fatalf("the idle tab is %v, want the raised %v", got, light.Surface)
 	}
 
@@ -92,7 +94,7 @@ func TestBrandOpensHome(t *testing.T) {
 		if _, ok := tt.Find(label); !ok {
 			t.Fatalf("texts %v: want the %q tab kept", tt.Texts(), label)
 		}
-		if got := tabBackground(t, tt, label); got != light.Surface {
+		if got := tabBackground(t, tt, label); !channelClose(got, light.Surface, 1) {
 			t.Fatalf("the %q tab is %v under Home, want the idle %v", label, got, light.Surface)
 		}
 	}

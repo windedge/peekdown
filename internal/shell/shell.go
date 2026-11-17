@@ -14,6 +14,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
 
@@ -625,64 +626,112 @@ func (s *Shell) View(c *ui.Context) {
 	s.trackFrames(c)
 	s.settlePersist(c)
 	s.RegisterShortcuts(c)
-	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Background).Children(func() {
-		// The bar is the window's title bar, so it draws on the welcome
-		// page too: without it a window with a hidden title bar has no
-		// place to drag from and no room for the window controls.
-		s.titleBar(c)
-		// The welcome page backs both the empty window and Home, so the two
-		// paths render the same view; the status bar stays off it.
-		if s.Home || len(s.Tabs) == 0 {
-			s.welcome(c)
-			return
-		}
-		// The bar floats over the body's top right inside the clipped body
-		// container, so opening it never pushes the document around. The
-		// box the bar's fill is measured against is the body itself, not
-		// the window: with the sidebar visible the body is narrower, and
-		// the bar must stop at the body's right edge (progressBody).
-		body := func() {
-			ui.Box(c).Fill().Bind(&s.progressBody).Label("Body").Children(func() {
-				s.content(c)
-			})
-			if s.SearchOpen {
-				s.searchView(c)
+	// The theme with the accent tokens pressed on it goes to the frame
+	// first: the bars and the welcome page below read it back through
+	// c.Theme(). The window's own background is painted, not filled, so
+	// the root keeps its (now matched) color under the gradient.
+	k := s.accentColors(c)
+	c.SetTheme(applyAccentTheme(c.Theme(), k))
+	ui.Column(c).Fill().
+		Draw(func(p *ui.Painter, r ui.Rect) { paintAccentBackground(p, r, k) }).
+		Children(func() {
+			// The bar is the window's title bar, so it draws on the welcome
+			// page too: without it a window with a hidden title bar has no
+			// place to drag from and no room for the window controls.
+			s.titleBar(c)
+			// The welcome page backs both the empty window and Home, so the two
+			// paths render the same view; the status bar stays off it.
+			if s.Home || len(s.Tabs) == 0 {
+				s.welcome(c)
+				return
 			}
-			s.readingProgress(c)
-			s.jumpButtons(c)
-		}
-		// The body grows into the room the bars leave instead of asking
-		// for the whole column: a Fill here is a hundred percent of the
-		// window, which with a long document's natural height overflowing
-		// its floor carries the status bar off the bottom edge. Grow takes
-		// the free space and drops the content-based minimum (mygo's
-		// flexLayout leaves a growing item's minimum at zero), so the
-		// document's list meets a bounded box and scrolls inside it.
-		if s.Sidebar.Visible {
-			s.SetSidebarWidth(s.Sidebar.Width)
-			split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
-			// A divider move (drag or keyboard) re-arms the save; the width
-			// lands in the settings once the drag settles.
-			if split.Changed() {
-				s.widthSaveTimer = c.Now().Add(widthSaveDelay)
-			}
-			if !s.widthSaveTimer.IsZero() {
-				if now := c.Now(); now.Before(s.widthSaveTimer) {
-					c.After(s.widthSaveTimer.Sub(now))
-				} else {
-					s.widthSaveTimer = time.Time{}
-					s.persistSidebarWidth()
+			// The bar floats over the body's top right inside the clipped body
+			// container, so opening it never pushes the document around. The
+			// box the bar's fill is measured against is the body itself, not
+			// the window: with the sidebar visible the body is narrower, and
+			// the bar must stop at the body's right edge (progressBody).
+			body := func() {
+				ui.Box(c).Fill().Bind(&s.progressBody).Label("Body").Children(func() {
+					s.content(c)
+				})
+				if s.SearchOpen {
+					s.searchView(c)
 				}
+				s.readingProgress(c)
+				s.jumpButtons(c)
 			}
-		} else {
-			ui.Box(c).Grow(1).Clip().Children(func() { body() })
-		}
-		s.statusBar(c)
-	})
+			// The body grows into the room the bars leave instead of asking
+			// for the whole column: a Fill here is a hundred percent of the
+			// window, which with a long document's natural height overflowing
+			// its floor carries the status bar off the bottom edge. Grow takes
+			// the free space and drops the content-based minimum (mygo's
+			// flexLayout leaves a growing item's minimum at zero), so the
+			// document's list meets a bounded box and scrolls inside it.
+			if s.Sidebar.Visible {
+				s.SetSidebarWidth(s.Sidebar.Width)
+				split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
+				// A divider move (drag or keyboard) re-arms the save; the width
+				// lands in the settings once the drag settles.
+				if split.Changed() {
+					s.widthSaveTimer = c.Now().Add(widthSaveDelay)
+				}
+				if !s.widthSaveTimer.IsZero() {
+					if now := c.Now(); now.Before(s.widthSaveTimer) {
+						c.After(s.widthSaveTimer.Sub(now))
+					} else {
+						s.widthSaveTimer = time.Time{}
+						s.persistSidebarWidth()
+					}
+				}
+			} else {
+				ui.Box(c).Grow(1).Clip().Children(func() { body() })
+			}
+			s.statusBar(c)
+		})
 	if s.SettingsOpen {
 		s.settingsDialog(c)
 	}
+}
+
+// accentCodeTheme colors code blocks by the accent theme: mygo's
+// GitHub default for the frame's appearance, with the theme's six
+// tokens over it. mojian keeps the default theme's editor whole for its
+// default petal, so the default document is pixel-equal; every other
+// theme recolors the tokens alone.
+func (s *Shell) accentCodeTheme(c *ui.Context) *editor.Theme {
+	th := editor.DefaultTheme(c.Theme())
+	k := s.accentColors(c)
+	tok := func(kind editor.TokenKind, i int) { th.Tokens[kind].Color = k.Syntax[i] }
+	tok(editor.TokenKeyword, 0)
+	tok(editor.TokenType, 1)
+	tok(editor.TokenFunction, 2)
+	tok(editor.TokenNumber, 3)
+	tok(editor.TokenString, 4)
+	tok(editor.TokenComment, 5)
+	return th
+}
+
+// accentTheme is the saved accent theme, resolved once. Empty and
+// unknown ids fall back to the default petal.
+func (s *Shell) accentTheme() AccentTheme {
+	return accentThemeByID(s.Saved.AccentTheme)
+}
+
+// accentColors is the accent theme's colors for the frame's appearance:
+// the dark side of the table in a dark window, the light one otherwise.
+func (s *Shell) accentColors(c *ui.Context) AccentColors {
+	return s.accentTheme().of(c.Theme().Dark)
+}
+
+// applyAccentTheme gives the frame the widget theme with the accent
+// theme's tokens pressed onto a copy of it, as mojian's windowTheme
+// builds on mygo's theme: the frame's light or dark still rules, only
+// the hue tokens change. It returns the theme the frame draws with.
+func (s *Shell) applyAccentTheme(c *ui.Context) *ui.Theme {
+	k := s.accentColors(c)
+	t := applyAccentTheme(c.Theme(), k)
+	c.SetTheme(t)
+	return t
 }
 
 // Content renders the active document.
@@ -714,6 +763,10 @@ func (s *Shell) Content(c *ui.Context) {
 		c.WriteClipboard(text)
 		c.Toast(locales.CopiedCode())
 	}
+	// The code highlight follows the accent theme: its six tokens come
+	// from the same table as the window's colors, petal keeping the GitHub
+	// palette the document has always shown.
+	tab.State.CodeTheme = s.accentCodeTheme(c)
 	// The document area's context menu: the commands act on the open
 	// document, whichever row the click landed on. Rebound every frame like
 	// the loaders, so the closures carry this frame's context.

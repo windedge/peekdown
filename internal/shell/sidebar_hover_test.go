@@ -38,17 +38,19 @@ func TestOutlineRowHoverFeedback(t *testing.T) {
 	ax, ay := active.X-6, active.Y+active.H/2
 	before := pixelAt(tt.Image(), x, y)
 	activeIdle := pixelAt(tt.Image(), ax, ay)
-	if before != ui.LightTheme().Surface {
-		t.Fatalf("idle row pixel %v, want the pane surface %v", before, ui.LightTheme().Surface)
+	// The pane's translucent fill lands composited (A=255), so a token
+	// match means the channels.
+	if !channelClose(before, windowLight().Surface, 1) {
+		t.Fatalf("idle row pixel %v, want the pane surface %v", before, windowLight().Surface)
 	}
-	if activeIdle != ui.LightTheme().SurfaceHover {
-		t.Fatalf("active row pixel %v, want the highlight %v", activeIdle, ui.LightTheme().SurfaceHover)
+	if !channelClose(activeIdle, windowLight().SurfaceHover, 1) {
+		t.Fatalf("active row pixel %v, want the highlight %v", activeIdle, windowLight().SurfaceHover)
 	}
 
 	tt.Move(x, y)
 	tt.Frame()
-	if got := pixelAt(tt.Image(), x, y); got != ui.LightTheme().SurfaceHover {
-		t.Fatalf("hover pixel %v, want %v (before %v)", got, ui.LightTheme().SurfaceHover, before)
+	if got := pixelAt(tt.Image(), x, y); !channelClose(got, windowLight().SurfaceHover, 1) {
+		t.Fatalf("hover pixel %v, want %v (before %v)", got, windowLight().SurfaceHover, before)
 	}
 	if got := pixelAt(tt.Image(), ax, ay); got != activeIdle {
 		t.Fatalf("active row under the pointer changed: %v -> %v, the highlight must not stack", activeIdle, got)
@@ -73,14 +75,14 @@ func TestSidebarTabHoverFeedback(t *testing.T) {
 	}
 	x, y := files.X+3, files.Y+files.H/2
 	before := pixelAt(tt.Image(), x, y)
-	if before != ui.LightTheme().Surface {
-		t.Fatalf("idle tab pixel %v, want the header surface %v", before, ui.LightTheme().Surface)
+	if !channelClose(before, windowLight().Surface, 1) {
+		t.Fatalf("idle tab pixel %v, want the header surface %v", before, windowLight().Surface)
 	}
 
 	tt.Move(x, y)
 	tt.Frame()
-	if got := pixelAt(tt.Image(), x, y); got != ui.LightTheme().SurfaceHover {
-		t.Fatalf("inactive tab hover pixel %v, want %v (before %v)", got, ui.LightTheme().SurfaceHover, before)
+	if got := pixelAt(tt.Image(), x, y); !channelClose(got, windowLight().SurfaceHover, 1) {
+		t.Fatalf("inactive tab hover pixel %v, want %v (before %v)", got, windowLight().SurfaceHover, before)
 	}
 
 	// The active Outline tab stays as it is under the pointer.

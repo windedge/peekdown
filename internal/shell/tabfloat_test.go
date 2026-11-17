@@ -62,14 +62,16 @@ func TestActiveTabFloatsAboveBar(t *testing.T) {
 	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight})
 	tt.Frame()
 
-	light := ui.LightTheme()
+	light := windowLight()
 	img := tt.Image()
 	active := tabChipSample(img, tabRect(t, tt, "b.md"))
 	if active != light.Background {
 		t.Fatalf("the active tab is %v, want the window's %v it floats on", active, light.Background)
 	}
+	// The idle tab's fill lands composited (A=255), so a token match
+	// means the channels.
 	idle := tabChipSample(img, tabRect(t, tt, "a.md"))
-	if idle != light.Surface {
+	if !channelClose(idle, light.Surface, 1) {
 		t.Fatalf("the idle tab is %v, want the tray's %v it melts into", idle, light.Surface)
 	}
 
@@ -78,7 +80,7 @@ func TestActiveTabFloatsAboveBar(t *testing.T) {
 	// above the strip's bottom, clear of the tabs' rows.
 	strip := tabRect(t, tt, "Tab bar")
 	tray := pixelAt(img, strip.X+strip.W-3, strip.Y+strip.H-8)
-	if tray != light.Surface {
+	if !channelClose(tray, light.Surface, 1) {
 		t.Fatalf("the bar is %v, want the tray's %v", tray, light.Surface)
 	}
 	if active == tray {
@@ -96,19 +98,19 @@ func TestActiveTabFloatsOnDarkBar(t *testing.T) {
 	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight})
 	tt.Frame()
 
-	dark := ui.DarkTheme()
+	dark := windowDark()
 	img := tt.Image()
 	active := tabChipSample(img, tabRect(t, tt, "b.md"))
 	if active != dark.Background {
 		t.Fatalf("the active tab is %v, want the window's %v it floats on", active, dark.Background)
 	}
 	idle := tabChipSample(img, tabRect(t, tt, "a.md"))
-	if idle != dark.Surface {
+	if !channelClose(idle, dark.Surface, 1) {
 		t.Fatalf("the idle tab is %v, want the tray's %v it melts into", idle, dark.Surface)
 	}
 	strip := tabRect(t, tt, "Tab bar")
 	tray := pixelAt(img, strip.X+strip.W-3, strip.Y+strip.H-8)
-	if tray != dark.Surface {
+	if !channelClose(tray, dark.Surface, 1) {
 		t.Fatalf("the bar is %v, want the tray's %v", tray, dark.Surface)
 	}
 	if active == tray {

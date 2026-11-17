@@ -24,6 +24,18 @@ const FileName = "settings.json"
 // cannot represent.
 const currentVersion = 1
 
+// AccentThemeDefault is the accent theme a new install draws, and what
+// an unknown saved value normalizes to: mojian's warm paper.
+const AccentThemeDefault = "petal"
+
+// AccentThemeIDs are the accent themes this build knows, in the order
+// the theme picker lists them. The shell's color table (acctheme.go)
+// carries a row per id; its tests keep the two in step.
+var AccentThemeIDs = []string{
+	"petal", "mist", "meadow", "dusk", "tide",
+	"apricot", "aurora", "dune", "paper", "plain",
+}
+
 // The theme values this build stores, spelled as the settings dialog lists
 // them. Files written before the choices went Title Case carry the lowercase
 // spellings; Load maps those onto these.
@@ -39,8 +51,9 @@ const (
 type Settings struct {
 	Version int `json:"version"`
 
-	Theme          string  `json:"theme"`  // Auto, Light or Dark
-	Layout         string  `json:"layout"` // centered or full_width
+	Theme          string  `json:"theme"`        // Auto, Light or Dark
+	AccentTheme    string  `json:"accent_theme"` // petal (default), mist, meadow, ...
+	Layout         string  `json:"layout"`       // centered or full_width
 	ScrollSpeed    float64 `json:"scroll_speed"`
 	FontFamily     string  `json:"font_family"`
 	FontSize       float64 `json:"font_size"`
@@ -64,6 +77,7 @@ func Default() Settings {
 	return Settings{
 		Version:          1,
 		Theme:            ThemeAuto,
+		AccentTheme:      AccentThemeDefault,
 		Layout:           "centered",
 		ScrollSpeed:      1,
 		FontSize:         16,
@@ -111,6 +125,7 @@ func Load(path string) (Settings, error) {
 		return Default(), fmt.Errorf("%s: settings version %d is newer than %d", path, s.Version, currentVersion)
 	}
 	s.Theme = normalizeTheme(s.Theme)
+	s.AccentTheme = normalizeAccentTheme(s.AccentTheme)
 	return s, nil
 }
 
@@ -128,6 +143,18 @@ func normalizeTheme(theme string) string {
 		return ThemeDark
 	}
 	return theme
+}
+
+// normalizeAccentTheme maps an unknown or empty accent theme onto the
+// default, so a hand-edited or older settings file never draws a theme
+// this build cannot name.
+func normalizeAccentTheme(id string) string {
+	for _, known := range AccentThemeIDs {
+		if id == known {
+			return id
+		}
+	}
+	return AccentThemeDefault
 }
 
 // Save writes s to path, replacing the file atomically so a crash cannot
