@@ -1782,7 +1782,11 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 						s.weight = 600
 					}
 					spans := st.spans(c, m, cell, s)
-					box := ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10)
+					// A Row centers its children, which would leave a cell as high
+					// as its own text and break its rule at every shorter cell:
+					// stretched, the cells fill the row's height instead.
+					box := ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10).
+						AlignSelf(ui.Stretch)
 					if k < len(cells)-1 {
 						box.BorderWidth(0, 1, 0, 0).BorderColor(tk.border)
 					}
@@ -2262,7 +2266,7 @@ func (st *State) htmlTable(c *ui.Context, i int, n htmlx.Node, off int) {
 						weight = 600
 					}
 					spans := st.overlayRun(c, i, at, []ui.Span{{Text: cell, Size: tk.tableSize(), Weight: weight}})
-					box := ui.Box(c).Grow(1).Padding(6, 10)
+					box := ui.Box(c).Grow(1).Padding(6, 10).AlignSelf(ui.Stretch)
 					if k < len(row)-1 {
 						box.BorderWidth(0, 1, 0, 0).BorderColor(tk.border)
 					}
