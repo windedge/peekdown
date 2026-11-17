@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<!--
+  Peekdown 主界面 - mojian 风格重设计原型（单文件，零依赖）
+  ==================================================================
+  用途：后续 Go（mygo）实现的视觉规格。颜色/圆角/阴影/字号全部抄自
+  mojian 真实源码，:root 每个变量注明来源文件与字段名。
+
+  - 点标题栏调色板按钮开主题弹窗：内含 主题色网格 + 外观（跟随系统/浅色/深色）
+    分节，外观点选切深浅两态（html.theme-light / html.theme-dark）
+  - 每个区域有 region: xxx 锚点注释，Go 实现按锚点对照
+
+  实现对照表（HTML region -> Go 文件 -> 需要改什么）
+  ==================================================================
+  1. region: window（窗口渐变背景）
+     -> main.go、internal/shell/shell.go
+        窗口根背景从纯 t.Surface 改为 mojian theme.go PaintBackground
+        的三段纵向渐变(BgTop->BgMid 0-38% ->BgLow 70% ->BgBottom)加
+        90deg BgTint 横向 tint(35% 起)。
+  2. region: titlebar
+     -> internal/shell/titlebar.go
+        品牌区(18px logo + 13px/600)保留；工具按钮统一 mojian
+        iconButton(30px 方钮、IconMuted 图标、hover Surface 转 Text)；
+        右侧加 Open/Find/Files/Outline/Settings；关闭键 hover 用
+        Danger(#d92d20/#f97066)。
+  3. region: tabs
+     -> internal/shell/tabs.go
+        轨道 32px(tabH28+2 内缩) 用 Track/TrackBorder；激活 =
+        TabActive(白.96/白.13) + 单层阴影 0 2 8 + 字重 500；未激活 =
+        TabInactive(白.34/白.04) hover 用 Hover；detail 12px
+        TextFaint；关闭小钮 18px；未保存点 6px Attention。
+  4. region: sidebar
+     -> internal/shell/sidebar.go、filetree.go
+        面改 Panel(251,249,251,.97 / 35,32,38,.97) + PanelBorder；
+        行 30px radius 6，选中 PanelSel(accent 12%/18%) + accent
+        文字，hover Hover；14px 缩进。单根扁平树：顶部根路径行
+        (12px TextMuted 中间截断 + Tooltip 全路径) + 列表；分组
+        标题不做(backlog：多 VCS 根分组)。
+  5. region: reader（正文排版）
+     -> internal/view/view.go
+        正文 15px/1.65(偏离 mygo 默认 14/1.5，阅读器规格)；标题
+        h1 1.6em/700、h2 1.35em/600、h3 1.15em/500(mygo 默认字重
+        700/650/600，按本规格下调)；行内 code = Text alpha 7% 底 +
+        0.875em；代码块 = Text alpha 4% 卡 + CardBorder + radius
+        Radius+2=12 + 34px 头部(11px muted 语言标签 + Copy 钮)；
+        引用 = 3px accent 洗色条 + TextMuted；表格 = PanelBorder
+        横线 + 表头 Text alpha 4%，无竖线；task checkbox = accent；
+        图片 radius 10；公式 muted mono 占位。列宽 900 沿用
+        view.go centeredWidth(mojian 无阅读列概念)。
+  6. region: outline
+     -> internal/shell/sidebar.go (outlinePane)
+        大纲只在右侧独立面板：标题栏 Outline 按钮开合
+        （.hidden-pane，按钮 active 态跟随），左栏单一文件树
+        无 文件/大纲 tab；行 13px、缩进 12+12*(lv-1)、
+        激活/hover SurfaceHover、radius 4；面板用 Panel + PanelBorder。
+  7. region: statusbar
+     -> internal/shell/shell.go (statusBar)
+        背景改 Panel + PanelBorder 顶缘 1px；FPS/缩放 11px
+        TextMuted 保留，FPS 固定宽防跳动。
+  8. region: search-float
+     -> internal/shell/searchbar.go
+        改居中顶部浮窗(mojian widgets.go CommandDialog 规格：宽
+        560、radius 10、Panel 面、PanelBorder 1px、阴影 0 24 60
+        -8 ShadowDialog)；输入行 30px Radius 8 Hover 底(mojian
+        settings_rows.go)；计数 12px/宽 72(现有 searchCountWidth)；
+        上下钮 24px/radius 5。
+  9. 图标按钮体系（通用）
+     -> internal/shell/icons.go + 各区域
+        四级 18/22/26/30(glyph 12/13/16/17)，mojian app/style.go。
+  10. 标题栏 palette 按钮 + THEME popover
+     -> internal/shell/titlebar.go
+        弹窗内含 主题色网格 + 外观（跟随系统/浅色/深色）分节：
+        10 主题(theme.Choices)缩影卡片网格，点击切 html data-theme
+        不关浮层；外观分节点选切 html theme-light/theme-dark；
+        颜色源 mojian themes.go Window/Terminal。
+-->
+<html lang="zh-CN" class="theme-light" data-theme="petal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peekdown 主界面 - mojian 风格原型</title>
+<style>
+/* ================================================================
+   0. 风格令牌：非颜色令牌 + 不随主题色的深浅差量。
+   主题色（窗口渐变/卡面/文字/accent/语法色等）改由下方
+   html[data-theme="x"] 10 主题 x 深浅 20 组提供，此处不再兜底颜色。
+   来源标注格式：文件名字段名
+   ================================================================ */
+:root {
+  /* 卡片描边/阴影：theme.go deriveColors 不覆盖，固定黑白 alpha */
+  --card-border:   rgba(255,255,255,0.85);  /* theme.go CardBorder */
+  --shadow:        rgba(48,36,48,0.07);     /* theme.go Shadow */
+  --shadow-focus:  rgba(48,36,48,0.12);     /* theme.go ShadowFocused */
+  --shadow-dialog: rgba(30,20,30,0.26);     /* theme.go ShadowDialog */
+
+  --icon-muted: #807b84;  /* theme.go IconMuted（灰调，只随明暗） */
+
+  /* 交互面：theme.go lightColors */
+  --hover:   rgba(35,24,34,0.05);  /* theme.go Hover */
+  --pressed: rgba(35,24,34,0.09);  /* theme.go Pressed */
+
+  /* tab 轨道：theme.go lightColors */
+  --track:        rgba(255,255,255,0.38);  /* theme.go Track */
+  --track-border: rgba(255,255,255,0.50);  /* theme.go TrackBorder */
+  --tab-active:   rgba(255,255,255,0.96);  /* theme.go TabActive */
+  --tab-inactive: rgba(255,255,255,0.34);  /* theme.go TabInactive */
+
+  /* 面板/浮层：theme.go lightColors */
+  --panel-border: rgba(28,18,28,0.08);     /* theme.go PanelBorder */
+  --backdrop:     rgba(28,16,26,0.18);     /* theme.go Backdrop */
+
+  /* Markdown 派生面：mygo ui/markdown/theme.go DefaultTheme() */
+  --rule:           rgba(28,18,28,0.14);  /* Rule/TableBorder = Border(PanelBorder) 加深一档保证可见 */
+  --match-bg:       rgba(255,200,0,0.30); /* mygo editor theme.go Match 浅色 */
+  --scrollbar:      rgba(0,0,0,0.32);     /* mygo ui/theme.go Scrollbar */
+
+  /* 圆角：mojian theme.go Radius 唯一圆角 10；控件 6=mygo Radius；4=peekdown 行 */
+  --radius:    10px;  /* mojian theme.go Radius */
+  --radius-6:  6px;   /* mygo ui/theme.go Radius */
+  --radius-4:  4px;   /* peekdown sidebar.go outline 行 */
+
+  /* 阴影组合：mojian tabs.go / widgets.go / 任务要求的 0 1 3 */
+  --shadow-card:   0 1px 3px 0 var(--shadow-focus);   /* 任务规格 0 1 3 */
+  --shadow-tab:    0 2px 8px 0 var(--shadow);         /* tabs.go 双层取单层 */
+  --shadow-dialog: 0 24px 60px -8px var(--shadow-dialog); /* widgets.go CommandDialog */
+  --shadow-banner: 0 8px 24px 0 var(--shadow-focus);  /* mojian view.go errorBanner */
+
+  /* 字号：mojian 各处真实值 + 本规格定值 */
+  --fs-body: 15px;   /* 规格：阅读正文（mygo 默认 14，mojian 正文 14） */
+  --fs-row:  13px;   /* mojian widgets.go RowTitle / tabs.go 标签 */
+  --fs-detail: 12px; /* mojian widgets.go RowDetail / tab detail */
+  --fs-cap:  11px;   /* mojian sectionLabel / peekdown 状态栏读数 */
+  --fs-h1: 24px;     /* mygo markdown 1.6 * 15 */
+  --fs-h2: 20px;     /* 1.35 * 15 */
+  --fs-h3: 17px;     /* 1.15 * 15 */
+  --fs-code: 13px;   /* 0.875 * 15 */
+  --fs-mono: 12.5px; /* mojian theme.go NoteFont Size */
+
+  /* 字重：mojian tabs.go tabLabel 500 / mygo markdown weights(规格下调 h2 h3) */
+  --w-500: 500;  /* mojian tabLabel/FileRow */
+  --w-600: 600;  /* mygo markdown StrongWeight */
+  --w-650: 650;  /* mojian sectionLabel */
+  --w-h1: 700; --w-h2: 600; --w-h3: 500;  /* 本规格：mygo 默认 700/650/600 */
+
+  /* 节奏：mojian view.go gap / mygo markdown 间距 */
+  --gap-pane: 8px;     /* mojian view.go gap */
+  --lh-body: 1.65;     /* 规格（mygo markdown 默认 1.5） */
+  --sp-block: 0.75em;  /* mygo markdown BlockSpacing */
+  --sp-item: 0.25em;   /* mygo markdown ItemSpacing */
+
+  /* 尺寸：peekdown 现值 + mojian 常量 */
+  --titlebar-h: 44px;   /* peekdown titlebar.go TitleBarHeight = mojian titleH */
+  --statusbar-h: 28px;  /* peekdown shell.go statusBar */
+  --sidebar-w: 260px;   /* peekdown 现值 */
+  --col-w: 900px;       /* peekdown view.go centeredWidth */
+  --search-w: 560px;    /* mojian widgets.go CommandDialog Width(560) */
+  --icon-lg: 30px;      /* mojian style.go iconBtnLg */
+  --icon-md: 26px;      /* mojian style.go iconBtnMd */
+  --icon-sm: 22px;      /* mojian style.go iconBtnSm */
+  --icon-xs: 18px;      /* mojian style.go iconBtnXs */
+}
+
+/* 深色差量：仅不随主题色的部分（其余由 html[data-theme].theme-dark 提供） */
+.theme-dark {
+  --card-border:   rgba(255,255,255,0.06); /* theme.go CardBorder */
+  --shadow:        rgba(0,0,0,0.28);     /* theme.go Shadow */
+  --shadow-focus:  rgba(0,0,0,0.45);     /* theme.go ShadowFocused */
+  --shadow-dialog: rgba(0,0,0,0.60);     /* theme.go ShadowDialog */
+
+  --icon-muted: #9c96a0;  /* theme.go IconMuted */
+
+  --hover:   rgba(255,255,255,0.07);  /* theme.go Hover */
+  --pressed: rgba(255,255,255,0.13);  /* theme.go Pressed */
+
+  --track:        rgba(255,255,255,0.06);  /* theme.go Track */
+  --track-border: rgba(255,255,255,0.07);  /* theme.go TrackBorder */
+  --tab-active:   rgba(255,255,255,0.13);  /* theme.go TabActive */
+  --tab-inactive: rgba(255,255,255,0.04);  /* theme.go TabInactive */
+
+  --panel-border: rgba(255,255,255,0.10);  /* theme.go PanelBorder */
+  --backdrop:     rgba(0,0,0,0.45);        /* theme.go Backdrop */
+
+  --rule:           rgba(255,255,255,0.16);
+  --match-bg:       rgba(255,210,60,0.22); /* mygo editor theme.go Match 深色 */
+  --scrollbar:      rgba(255,255,255,0.35);
+}
+
+/* ================================================================
+   0a. 主题色令牌：10 主题 x 深浅 20 组。
+   颜色由 html[data-theme] 提供（petal = mojian DefaultID，原值即
+   原 :root/.theme-dark，默认视觉零回归）。来源：themes.go washes +
+   toneTheme + deriveColors，数值见 theme-switch-design.md 第 3 节。
+   ================================================================ */
+/* petal */
+html[data-theme="petal"] {
+  --bg-top:#f7f2f6; --bg-mid:#f4eff4; --bg-low:#efeaf1; --bg-bottom:#e9e5ed; --bg-tint:rgba(235,222,232,.5);
+  --card:rgba(255,255,255,.72); --card-focused:rgba(255,255,255,.96);
+  --text:#1f1b20; --text-muted:#66616a; --text-faint:#75707a;
+  --accent:#a84e7c; --panel-sel:rgba(168,78,124,.12); --selection:rgba(168,78,124,.25); --quote-bar:rgba(168,78,124,.45);
+  --danger:#d92d20; --attention:#f59e0b;
+  --panel:rgba(251,249,251,.97); --surface-hover:#eeecee;
+  --code-inline-bg:rgba(31,27,32,.07); --code-block-bg:rgba(31,27,32,.04);
+  --code-kw:#cf222e; --code-ty:#953800; --code-fn:#8250df; --code-num:#0550ae; --code-str:#0a3069; --code-cm:#6e7781;
+}
+html[data-theme="petal"].theme-dark {
+  --bg-top:#241d25; --bg-mid:#1f1a21; --bg-low:#1b181d; --bg-bottom:#18151a; --bg-tint:rgba(120,72,100,.18);
+  --card:rgba(25,23,28,.58); --card-focused:rgba(37,35,41,.95);
+  --text:#f3f0f4; --text-muted:#b1abb4; --text-faint:#928c96;
+  --accent:#e887b6; --panel-sel:rgba(232,135,182,.18); --selection:rgba(232,135,182,.4); --quote-bar:rgba(232,135,182,.5);
+  --danger:#f97066; --attention:#fbbf24;
+  --panel:rgba(35,32,38,.97); --surface-hover:#2f2c32;
+  --code-inline-bg:rgba(243,240,244,.07); --code-block-bg:rgba(243,240,244,.04);
+  --code-kw:#ff7b72; --code-ty:#ffa657; --code-fn:#d2a8ff; --code-num:#79c0ff; --code-str:#a5d6ff; --code-cm:#8b949e;
+}
+/* mist */
+html[data-theme="mist"] {
+  --bg-top:#e3e9f4; --bg-mid:#ebeff6; --bg-low:#f1f2f3; --bg-bottom:#f2f1ec; --bg-tint:rgba(210,225,248,.75);
+  --card:rgba(254,254,255,.78); --card-focused:rgba(254,255,255,.97);
+  --text:#1f2a38; --text-muted:#6f7884; --text-faint:#959da7;
+  --accent:#3772bb; --panel-sel:rgba(55,114,187,.12); --selection:rgba(55,114,187,.25); --quote-bar:rgba(55,114,187,.45);
+  --danger:#af545c; --attention:#9e833c;
+  --panel:rgba(250,252,255,.97); --surface-hover:#edeff3;
+  --code-inline-bg:rgba(31,42,56,.07); --code-block-bg:rgba(31,42,56,.04);
+  --code-kw:#af545c; --code-ty:#9e833c; --code-fn:#835b9f; --code-num:#256ec4; --code-str:#30875f; --code-cm:#6f7884;
+}
+html[data-theme="mist"].theme-dark {
+  --bg-top:#0c1628; --bg-mid:#0d1827; --bg-low:#111b23; --bg-bottom:#111b23; --bg-tint:rgba(46,91,166,.3);
+  --card:rgba(25,28,34,.58); --card-focused:rgba(33,36,42,.95);
+  --text:#dee5ef; --text-muted:#949ba5; --text-faint:#717882;
+  --accent:#70adfb; --panel-sel:rgba(112,173,251,.18); --selection:rgba(112,173,251,.4); --quote-bar:rgba(112,173,251,.5);
+  --danger:#db8087; --attention:#d7bb74;
+  --panel:rgba(37,44,52,.97); --surface-hover:#30373f;
+  --code-inline-bg:rgba(222,229,239,.07); --code-block-bg:rgba(222,229,239,.04);
+  --code-kw:#db8087; --code-ty:#d7bb74; --code-fn:#b992d5; --code-num:#5fa1f3; --code-str:#6bbf94; --code-cm:#949ba5;
+}
+/* meadow */
+html[data-theme="meadow"] {
+  --bg-top:#e2eee5; --bg-mid:#ebf2e7; --bg-low:#f3f2e2; --bg-bottom:#f5f0d6; --bg-tint:rgba(214,240,222,.75);
+  --card:rgba(254,255,254,.78); --card-focused:rgba(254,255,254,.97);
+  --text:#212d1e; --text-muted:#717b6f; --text-faint:#97a095;
+  --accent:#448335; --panel-sel:rgba(68,131,53,.12); --selection:rgba(68,131,53,.25); --quote-bar:rgba(68,131,53,.45);
+  --danger:#b4552b; --attention:#988629;
+  --panel:rgba(251,253,250,.97); --surface-hover:#eef1ed;
+  --code-inline-bg:rgba(33,45,30,.07); --code-block-bg:rgba(33,45,30,.04);
+  --code-kw:#b4552b; --code-ty:#988629; --code-fn:#945295; --code-num:#1776ab; --code-str:#248b27; --code-cm:#717b6f;
+}
+html[data-theme="meadow"].theme-dark {
+  --bg-top:#081c0d; --bg-mid:#101d0c; --bg-low:#1b1c0b; --bg-bottom:#1b1c0b; --bg-tint:rgba(6,113,50,.3);
+  --card:rgba(26,29,28,.58); --card-focused:rgba(34,36,36,.95);
+  --text:#dfe7de; --text-muted:#969d94; --text-faint:#737a71;
+  --accent:#7dbf6e; --panel-sel:rgba(125,191,110,.18); --selection:rgba(125,191,110,.4); --quote-bar:rgba(125,191,110,.5);
+  --danger:#df825c; --attention:#d0bf66;
+  --panel:rgba(39,46,37,.97); --surface-hover:#323930;
+  --code-inline-bg:rgba(223,231,222,.07); --code-block-bg:rgba(223,231,222,.04);
+  --code-kw:#df825c; --code-ty:#d0bf66; --code-fn:#cb8acb; --code-num:#5aa7db; --code-str:#63c561; --code-cm:#969d94;
+}
+/* dusk */
+html[data-theme="dusk"] {
+  --bg-top:#e4dbf3; --bg-mid:#efdeee; --bg-low:#f6e3dc; --bg-bottom:#f7e6cf; --bg-tint:rgba(246,206,222,.8);
+  --card:rgba(255,254,255,.78); --card-focused:rgba(255,254,255,.97);
+  --text:#2f2433; --text-muted:#7d7380; --text-faint:#a199a4;
+  --accent:#8e57a5; --panel-sel:rgba(142,87,165,.12); --selection:rgba(142,87,165,.25); --quote-bar:rgba(142,87,165,.45);
+  --danger:#c14059; --attention:#b67702;
+  --panel:rgba(253,251,254,.97); --surface-hover:#f1eef2;
+  --code-inline-bg:rgba(47,36,51,.07); --code-block-bg:rgba(47,36,51,.04);
+  --code-kw:#c14059; --code-ty:#b67702; --code-fn:#a332b6; --code-num:#4d67c1; --code-str:#258a41; --code-cm:#7d7380;
+}
+html[data-theme="dusk"].theme-dark {
+  --bg-top:#190f2e; --bg-mid:#260f24; --bg-low:#2d140b; --bg-bottom:#2d140b; --bg-tint:rgba(125,65,138,.3);
+  --card:rgba(29,27,33,.58); --card-focused:rgba(37,35,41,.95);
+  --text:#e8e2ec; --text-muted:#9e98a2; --text-faint:#7b757f;
+  --accent:#ca91e3; --panel-sel:rgba(202,145,227,.18); --selection:rgba(202,145,227,.4); --quote-bar:rgba(202,145,227,.5);
+  --danger:#ed7183; --attention:#f2af54;
+  --panel:rgba(47,41,51,.97); --surface-hover:#3a343e;
+  --code-inline-bg:rgba(232,226,236,.07); --code-block-bg:rgba(232,226,236,.04);
+  --code-kw:#ed7183; --code-ty:#f2af54; --code-fn:#db74ed; --code-num:#7d9af0; --code-str:#64c376; --code-cm:#9e98a2;
+}
+/* tide */
+html[data-theme="tide"] {
+  --bg-top:#dbebef; --bg-mid:#e3eff1; --bg-low:#ecf3f0; --bg-bottom:#f2f2e8; --bg-tint:rgba(194,232,238,.75);
+  --card:rgba(253,255,255,.78); --card-focused:rgba(254,255,255,.97);
+  --text:#162d30; --text-muted:#687b7e; --text-faint:#90a0a2;
+  --accent:#008695; --panel-sel:rgba(0,134,149,.12); --selection:rgba(0,134,149,.25); --quote-bar:rgba(0,134,149,.45);
+  --danger:#b35347; --attention:#968737;
+  --panel:rgba(249,253,254,.97); --surface-hover:#ebf1f2;
+  --code-inline-bg:rgba(22,45,48,.07); --code-block-bg:rgba(22,45,48,.04);
+  --code-kw:#b35347; --code-ty:#968737; --code-fn:#8559a1; --code-num:#1b75ad; --code-str:#2b885c; --code-cm:#687b7e;
+}
+html[data-theme="tide"].theme-dark {
+  --bg-top:#001b22; --bg-mid:#001e1f; --bg-low:#0b1e1b; --bg-bottom:#0b1e1b; --bg-tint:rgba(0,112,128,.3);
+  --card:rgba(24,29,32,.58); --card-focused:rgba(31,37,40,.95);
+  --text:#dae8e9; --text-muted:#909e9f; --text-faint:#6d7b7c;
+  --accent:#00c2d2; --panel-sel:rgba(0,194,210,.18); --selection:rgba(0,194,210,.4); --quote-bar:rgba(0,194,210,.5);
+  --danger:#df8073; --attention:#cebf70;
+  --panel:rgba(32,47,48,.97); --surface-hover:#2b3a3b;
+  --code-inline-bg:rgba(218,232,233,.07); --code-block-bg:rgba(218,232,233,.04);
+  --code-kw:#df8073; --code-ty:#cebf70; --code-fn:#bb90d8; --code-num:#5ca6dd; --code-str:#67c091; --code-cm:#909e9f;
+}
+/* apricot */
+html[data-theme="apricot"] {
+  --bg-top:#f5e1d6; --bg-mid:#f8e7dc; --bg-low:#f8eedf; --bg-bottom:#f6f0da; --bg-tint:rgba(252,212,194,.78);
+  --card:rgba(255,254,254,.78); --card-focused:rgba(255,254,254,.97);
+  --text:#35251b; --text-muted:#82746c; --text-faint:#a69a93;
+  --accent:#ac571d; --panel-sel:rgba(172,87,29,.12); --selection:rgba(172,87,29,.25); --quote-bar:rgba(172,87,29,.45);
+  --danger:#d02f00; --attention:#b97600;
+  --panel:rgba(255,251,249,.97); --surface-hover:#f3eeec;
+  --code-inline-bg:rgba(53,37,27,.07); --code-block-bg:rgba(53,37,27,.04);
+  --code-kw:#d02f00; --code-ty:#b97600; --code-fn:#a44688; --code-num:#426bbd; --code-str:#5a831b; --code-cm:#82746c;
+}
+html[data-theme="apricot"].theme-dark {
+  --bg-top:#2a1207; --bg-mid:#291507; --bg-low:#25190a; --bg-bottom:#25190a; --bg-tint:rgba(151,62,22,.3);
+  --card:rgba(31,27,27,.58); --card-focused:rgba(38,35,36,.95);
+  --text:#ede2dc; --text-muted:#a39892; --text-faint:#80756f;
+  --accent:#ec915c; --panel-sel:rgba(236,145,92,.18); --selection:rgba(236,145,92,.4); --quote-bar:rgba(236,145,92,.5);
+  --danger:#fd6945; --attention:#f5ae3a;
+  --panel:rgba(51,41,35,.97); --surface-hover:#3e342e;
+  --code-inline-bg:rgba(237,226,220,.07); --code-block-bg:rgba(237,226,220,.04);
+  --code-kw:#fd6945; --code-ty:#f5ae3a; --code-fn:#dd80be; --code-num:#749ded; --code-str:#8fbb59; --code-cm:#a39892;
+}
+/* aurora */
+html[data-theme="aurora"] {
+  --bg-top:#dbefe8; --bg-mid:#e1ebf2; --bg-low:#e8e4f4; --bg-bottom:#f0e6f1; --bg-tint:rgba(198,238,224,.75);
+  --card:rgba(254,255,254,.78); --card-focused:rgba(254,255,254,.97);
+  --text:#192e27; --text-muted:#6b7c76; --text-faint:#91a19b;
+  --accent:#008966; --panel-sel:rgba(0,137,102,.12); --selection:rgba(0,137,102,.25); --quote-bar:rgba(0,137,102,.45);
+  --danger:#c44412; --attention:#998700;
+  --panel:rgba(249,253,251,.97); --surface-hover:#ecf1ee;
+  --code-inline-bg:rgba(25,46,39,.07); --code-block-bg:rgba(25,46,39,.04);
+  --code-kw:#c44412; --code-ty:#998700; --code-fn:#944aab; --code-num:#0077bb; --code-str:#009136; --code-cm:#6b7c76;
+}
+html[data-theme="aurora"].theme-dark {
+  --bg-top:#001f13; --bg-mid:#06192b; --bg-low:#1e122a; --bg-bottom:#1e122a; --bg-tint:rgba(0,115,75,.3);
+  --card:rgba(24,29,30,.58); --card-focused:rgba(32,37,38,.95);
+  --text:#dbe8e3; --text-muted:#919e99; --text-faint:#6e7b76;
+  --accent:#3bc59e; --panel-sel:rgba(59,197,158,.18); --selection:rgba(59,197,158,.4); --quote-bar:rgba(59,197,158,.5);
+  --danger:#f0754e; --attention:#d2c049;
+  --panel:rgba(34,47,42,.97); --surface-hover:#2d3a35;
+  --code-inline-bg:rgba(219,232,227,.07); --code-block-bg:rgba(219,232,227,.04);
+  --code-kw:#f0754e; --code-ty:#d2c049; --code-fn:#ca84e1; --code-num:#38a9ea; --code-str:#15cb6d; --code-cm:#919e99;
+}
+/* dune */
+html[data-theme="dune"] {
+  --bg-top:#ede4d8; --bg-mid:#f1e9de; --bg-low:#f4eee4; --bg-bottom:#f3efe8; --bg-tint:rgba(242,222,194,.7);
+  --card:rgba(255,254,254,.78); --card-focused:rgba(255,255,254,.97);
+  --text:#2e281d; --text-muted:#7c776e; --text-faint:#a19c94;
+  --accent:#996700; --panel-sel:rgba(153,103,0,.12); --selection:rgba(153,103,0,.25); --quote-bar:rgba(153,103,0,.45);
+  --danger:#a0624c; --attention:#a1813f;
+  --panel:rgba(253,252,250,.97); --surface-hover:#f1efed;
+  --code-inline-bg:rgba(46,40,29,.07); --code-block-bg:rgba(46,40,29,.04);
+  --code-kw:#a0624c; --code-ty:#a1813f; --code-fn:#8d5d7d; --code-num:#517198; --code-str:#667d50; --code-cm:#7c776e;
+}
+html[data-theme="dune"].theme-dark {
+  --bg-top:#22190b; --bg-mid:#211a0e; --bg-low:#201b12; --bg-bottom:#201b12; --bg-tint:rgba(135,79,0,.3);
+  --card:rgba(29,28,28,.58); --card-focused:rgba(37,35,36,.95);
+  --text:#e8e4dd; --text-muted:#9e9a93; --text-faint:#7b7770;
+  --accent:#d5a13c; --panel-sel:rgba(213,161,60,.18); --selection:rgba(213,161,60,.4); --quote-bar:rgba(213,161,60,.5);
+  --danger:#cb8e77; --attention:#dbb976;
+  --panel:rgba(47,43,36,.97); --surface-hover:#3a362f;
+  --code-inline-bg:rgba(232,228,221,.07); --code-block-bg:rgba(232,228,221,.04);
+  --code-kw:#cb8e77; --code-ty:#dbb976; --code-fn:#c493b3; --code-num:#82a1c7; --code-str:#9cb485; --code-cm:#9e9a93;
+}
+/* paper */
+html[data-theme="paper"] {
+  --bg-top:#f6f6f7; --bg-mid:#f7f7f8; --bg-low:#f8f8f8; --bg-bottom:#f8f8f8; --bg-tint:transparent;
+  --card:rgba(255,255,255,.78); --card-focused:rgba(255,255,255,.97);
+  --text:#292929; --text-muted:#7a7a7a; --text-faint:#a1a1a1;
+  --accent:#466fbd; --panel-sel:rgba(70,111,189,.12); --selection:rgba(70,111,189,.25); --quote-bar:rgba(70,111,189,.45);
+  --danger:#b54e5a; --attention:#a2812d;
+  --panel:rgba(255,255,255,.97); --surface-hover:#f2f2f2;
+  --code-inline-bg:rgba(41,41,41,.07); --code-block-bg:rgba(41,41,41,.04);
+  --code-kw:#b54e5a; --code-ty:#a2812d; --code-fn:#8557a4; --code-num:#216ccc; --code-str:#1f895b; --code-cm:#7a7a7a;
+}
+html[data-theme="paper"].theme-dark {
+  --bg-top:#141416; --bg-mid:#151517; --bg-low:#161618; --bg-bottom:#161618; --bg-tint:rgba(90,120,200,.1);
+  --card:rgba(28,28,30,.58); --card-focused:rgba(36,36,39,.95);
+  --text:#e4e4e4; --text-muted:#9b9b9b; --text-faint:#787878;
+  --accent:#7daafd; --panel-sel:rgba(125,170,253,.18); --selection:rgba(125,170,253,.4); --quote-bar:rgba(125,170,253,.5);
+  --danger:#e17c85; --attention:#dcb968;
+  --panel:rgba(44,44,44,.97); --surface-hover:#373737;
+  --code-inline-bg:rgba(228,228,228,.07); --code-block-bg:rgba(228,228,228,.04);
+  --code-kw:#e17c85; --code-ty:#dcb968; --code-fn:#bc8fdb; --code-num:#5c9ffb; --code-str:#61c191; --code-cm:#9b9b9b;
+}
+/* plain */
+html[data-theme="plain"] {
+  --bg-top:#eceef4; --bg-mid:#eceef4; --bg-low:#eceef4; --bg-bottom:#eceef4; --bg-tint:transparent;
+  --card:rgba(255,255,255,.78); --card-focused:rgba(255,255,255,.97);
+  --text:#292929; --text-muted:#7a7a7a; --text-faint:#a1a1a1;
+  --accent:#466fbd; --panel-sel:rgba(70,111,189,.12); --selection:rgba(70,111,189,.25); --quote-bar:rgba(70,111,189,.45);
+  --danger:#b54e5a; --attention:#a2812d;
+  --panel:rgba(255,255,255,.97); --surface-hover:#f2f2f2;
+  --code-inline-bg:rgba(41,41,41,.07); --code-block-bg:rgba(41,41,41,.04);
+  --code-kw:#b54e5a; --code-ty:#a2812d; --code-fn:#8557a4; --code-num:#216ccc; --code-str:#1f895b; --code-cm:#7a7a7a;
+}
+html[data-theme="plain"].theme-dark {
+  --bg-top:#141418; --bg-mid:#141418; --bg-low:#141418; --bg-bottom:#141418; --bg-tint:transparent;
+  --card:rgba(28,28,30,.58); --card-focused:rgba(36,36,39,.95);
+  --text:#e4e4e4; --text-muted:#9b9b9b; --text-faint:#787878;
+  --accent:#7daafd; --panel-sel:rgba(125,170,253,.18); --selection:rgba(125,170,253,.4); --quote-bar:rgba(125,170,253,.5);
+  --danger:#e17c85; --attention:#dcb968;
+  --panel:rgba(44,44,44,.97); --surface-hover:#373737;
+  --code-inline-bg:rgba(228,228,228,.07); --code-block-bg:rgba(228,228,228,.04);
+  --code-kw:#e17c85; --code-ty:#dcb968; --code-fn:#bc8fdb; --code-num:#5c9ffb; --code-str:#61c191; --code-cm:#9b9b9b;
+}
+
+/* ================================================================
+   0b. 主题卡片预览令牌：卡面色属卡片自己的主题，不随窗口主题变、
+   只随窗口深浅变。--pv-dots 为终端 8 色 hard-stop 渐变
+   （Go 落地按 mojian PaintPreview 画 8 个独立 5px 点，gap 3px）。
+   ================================================================ */
+.thmcard[data-theme="petal"] { --pv-g1:#f7f2f6; --pv-g2:#f4eff4; --pv-g3:#efeaf1; --pv-g4:#e9e5ed; --pv-card:rgba(255,255,255,.96); --pv-text:#1f1b20; --pv-accent:#a84e7c;
+  --pv-dots:linear-gradient(90deg,#000 0 12.5%,#cd3131 0 25%,#00bc00 0 37.5%,#949800 0 50%,#0451a5 0 62.5%,#bc05bc 0 75%,#0598bc 0 87.5%,#555555 0); }
+.theme-dark .thmcard[data-theme="petal"] { --pv-g1:#241d25; --pv-g2:#1f1a21; --pv-g3:#1b181d; --pv-g4:#18151a; --pv-card:rgba(37,35,41,.95); --pv-text:#f3f0f4; --pv-accent:#e887b6;
+  --pv-dots:linear-gradient(90deg,#000 0 12.5%,#cd3131 0 25%,#0dbc79 0 37.5%,#e5e510 0 50%,#2472c8 0 62.5%,#bc3fbc 0 75%,#11a8cd 0 87.5%,#e5e5e5 0); }
+.thmcard[data-theme="mist"] { --pv-g1:#e3e9f4; --pv-g2:#ebeff6; --pv-g3:#f1f2f3; --pv-g4:#f2f1ec; --pv-card:rgba(254,255,255,.97); --pv-text:#1f2a38; --pv-accent:#3772bb;
+  --pv-dots:linear-gradient(90deg,#1f2a38 0 12.5%,#af545c 0 25%,#30875f 0 37.5%,#9e833c 0 50%,#256ec4 0 62.5%,#835b9f 0 75%,#3a808b 0 87.5%,#969fab 0); }
+.theme-dark .thmcard[data-theme="mist"] { --pv-g1:#0c1628; --pv-g2:#0d1827; --pv-g3:#111b23; --pv-g4:#111b23; --pv-card:rgba(33,36,42,.95); --pv-text:#dee5ef; --pv-accent:#70adfb;
+  --pv-dots:linear-gradient(90deg,#363e48 0 12.5%,#db8087 0 25%,#6bbf94 0 37.5%,#d7bb74 0 50%,#5fa1f3 0 62.5%,#b992d5 0 75%,#70bfcc 0 87.5%,#bfc5cc 0); }
+.thmcard[data-theme="meadow"] { --pv-g1:#e2eee5; --pv-g2:#ebf2e7; --pv-g3:#f3f2e2; --pv-g4:#f5f0d6; --pv-card:rgba(254,255,254,.97); --pv-text:#212d1e; --pv-accent:#448335;
+  --pv-dots:linear-gradient(90deg,#212d1e 0 12.5%,#b4552b 0 25%,#248b27 0 37.5%,#988629 0 50%,#1776ab 0 62.5%,#945295 0 75%,#2e8478 0 87.5%,#98a296 0); }
+.theme-dark .thmcard[data-theme="meadow"] { --pv-g1:#081c0d; --pv-g2:#101d0c; --pv-g3:#1b1c0b; --pv-g4:#1b1c0b; --pv-card:rgba(34,36,36,.95); --pv-text:#dfe7de; --pv-accent:#7dbf6e;
+  --pv-dots:linear-gradient(90deg,#384036 0 12.5%,#df825c 0 25%,#63c561 0 37.5%,#d0bf66 0 50%,#5aa7db 0 62.5%,#cb8acb 0 75%,#66c5b5 0 87.5%,#c0c6bf 0); }
+.thmcard[data-theme="dusk"] { --pv-g1:#e4dbf3; --pv-g2:#efdeee; --pv-g3:#f6e3dc; --pv-g4:#f7e6cf; --pv-card:rgba(255,254,255,.97); --pv-text:#2f2433; --pv-accent:#8e57a5;
+  --pv-dots:linear-gradient(90deg,#2f2433 0 12.5%,#c14059 0 25%,#258a41 0 37.5%,#b67702 0 50%,#4d67c1 0 62.5%,#a332b6 0 75%,#008494 0 87.5%,#a39ba7 0); }
+.theme-dark .thmcard[data-theme="dusk"] { --pv-g1:#190f2e; --pv-g2:#260f24; --pv-g3:#2d140b; --pv-g4:#2d140b; --pv-card:rgba(37,35,41,.95); --pv-text:#e8e2ec; --pv-accent:#ca91e3;
+  --pv-dots:linear-gradient(90deg,#413a44 0 12.5%,#ed7183 0 25%,#64c376 0 37.5%,#f2af54 0 50%,#7d9af0 0 62.5%,#db74ed 0 75%,#49c4d6 0 87.5%,#c7c2ca 0); }
+.thmcard[data-theme="tide"] { --pv-g1:#dbebef; --pv-g2:#e3eff1; --pv-g3:#ecf3f0; --pv-g4:#f2f2e8; --pv-card:rgba(254,255,255,.97); --pv-text:#162d30; --pv-accent:#008695;
+  --pv-dots:linear-gradient(90deg,#162d30 0 12.5%,#b35347 0 25%,#2b885c 0 37.5%,#968737 0 50%,#1b75ad 0 62.5%,#8559a1 0 75%,#00878b 0 87.5%,#91a2a4 0); }
+.theme-dark .thmcard[data-theme="tide"] { --pv-g1:#001b22; --pv-g2:#001e1f; --pv-g3:#0b1e1b; --pv-g4:#0b1e1b; --pv-card:rgba(31,37,40,.95); --pv-text:#dae8e9; --pv-accent:#00c2d2;
+  --pv-dots:linear-gradient(90deg,#314042 0 12.5%,#df8073 0 25%,#67c091 0 37.5%,#cebf70 0 50%,#5ca6dd 0 62.5%,#bb90d8 0 75%,#38c7cc 0 87.5%,#bcc6c8 0); }
+.thmcard[data-theme="apricot"] { --pv-g1:#f5e1d6; --pv-g2:#f8e7dc; --pv-g3:#f8eedf; --pv-g4:#f6f0da; --pv-card:rgba(255,254,254,.97); --pv-text:#35251b; --pv-accent:#ac571d;
+  --pv-dots:linear-gradient(90deg,#35251b 0 12.5%,#d02f00 0 25%,#5a831b 0 37.5%,#b97600 0 50%,#426bbd 0 62.5%,#a44688 0 75%,#14867c 0 87.5%,#a99b94 0); }
+.theme-dark .thmcard[data-theme="apricot"] { --pv-g1:#2a1207; --pv-g2:#291507; --pv-g3:#25190a; --pv-g4:#25190a; --pv-card:rgba(38,35,36,.95); --pv-text:#ede2dc; --pv-accent:#ec915c;
+  --pv-dots:linear-gradient(90deg,#463a34 0 12.5%,#fd6945 0 25%,#8fbb59 0 37.5%,#f5ae3a 0 50%,#749ded 0 62.5%,#dd80be 0 75%,#55c7ba 0 87.5%,#cbc2bd 0); }
+.thmcard[data-theme="aurora"] { --pv-g1:#dbefe8; --pv-g2:#e1ebf2; --pv-g3:#e8e4f4; --pv-g4:#f0e6f1; --pv-card:rgba(254,255,254,.97); --pv-text:#192e27; --pv-accent:#008966;
+  --pv-dots:linear-gradient(90deg,#192e27 0 12.5%,#c44412 0 25%,#009136 0 37.5%,#998700 0 50%,#0077bb 0 62.5%,#944aab 0 75%,#008c82 0 87.5%,#93a39c 0); }
+.theme-dark .thmcard[data-theme="aurora"] { --pv-g1:#001f13; --pv-g2:#06192b; --pv-g3:#1e122a; --pv-g4:#1e122a; --pv-card:rgba(32,37,38,.95); --pv-text:#dbe8e3; --pv-accent:#3bc59e;
+  --pv-dots:linear-gradient(90deg,#33413b 0 12.5%,#f0754e 0 25%,#15cb6d 0 37.5%,#d2c049 0 50%,#38a9ea 0 62.5%,#ca84e1 0 75%,#00cec1 0 87.5%,#bdc7c3 0); }
+.thmcard[data-theme="dune"] { --pv-g1:#ede4d8; --pv-g2:#f1e9de; --pv-g3:#f4eee4; --pv-g4:#f3efe8; --pv-card:rgba(255,255,254,.97); --pv-text:#2e281d; --pv-accent:#996700;
+  --pv-dots:linear-gradient(90deg,#2e281d 0 12.5%,#a0624c 0 25%,#667d50 0 37.5%,#a1813f 0 50%,#517198 0 62.5%,#8d5d7d 0 75%,#537e76 0 87.5%,#a39e95 0); }
+.theme-dark .thmcard[data-theme="dune"] { --pv-g1:#22190b; --pv-g2:#211a0e; --pv-g3:#201b12; --pv-g4:#201b12; --pv-card:rgba(37,35,36,.95); --pv-text:#e8e4dd; --pv-accent:#d5a13c;
+  --pv-dots:linear-gradient(90deg,#413c35 0 12.5%,#cb8e77 0 25%,#9cb485 0 37.5%,#dbb976 0 50%,#82a1c7 0 62.5%,#c493b3 0 75%,#8bbdb3 0 87.5%,#c7c4be 0); }
+.thmcard[data-theme="paper"] { --pv-g1:#f6f6f7; --pv-g2:#f7f7f8; --pv-g3:#f8f8f8; --pv-g4:#f8f8f8; --pv-card:rgba(255,255,255,.97); --pv-text:#292929; --pv-accent:#466fbd;
+  --pv-dots:linear-gradient(90deg,#292929 0 12.5%,#b54e5a 0 25%,#1f895b 0 37.5%,#a2812d 0 50%,#216ccc 0 62.5%,#8557a4 0 75%,#2d818e 0 87.5%,#9e9e9e 0); }
+.theme-dark .thmcard[data-theme="paper"] { --pv-g1:#141416; --pv-g2:#151517; --pv-g3:#161618; --pv-g4:#161618; --pv-card:rgba(36,36,39,.95); --pv-text:#e4e4e4; --pv-accent:#7daafd;
+  --pv-dots:linear-gradient(90deg,#3d3d3d 0 12.5%,#e17c85 0 25%,#61c191 0 37.5%,#dcb968 0 50%,#5c9ffb 0 62.5%,#bc8fdb 0 75%,#65c1d0 0 87.5%,#c4c4c4 0); }
+.thmcard[data-theme="plain"] { --pv-g1:#eceef4; --pv-g2:#eceef4; --pv-g3:#eceef4; --pv-g4:#eceef4; --pv-card:rgba(255,255,255,.97); --pv-text:#292929; --pv-accent:#466fbd;
+  --pv-dots:linear-gradient(90deg,#292929 0 12.5%,#b54e5a 0 25%,#1f895b 0 37.5%,#a2812d 0 50%,#216ccc 0 62.5%,#8557a4 0 75%,#2d818e 0 87.5%,#9e9e9e 0); }
+.theme-dark .thmcard[data-theme="plain"] { --pv-g1:#141418; --pv-g2:#141418; --pv-g3:#141418; --pv-g4:#141418; --pv-card:rgba(36,36,39,.95); --pv-text:#e4e4e4; --pv-accent:#7daafd;
+  --pv-dots:linear-gradient(90deg,#3d3d3d 0 12.5%,#e17c85 0 25%,#61c191 0 37.5%,#dcb968 0 50%,#5c9ffb 0 62.5%,#bc8fdb 0 75%,#65c1d0 0 87.5%,#c4c4c4 0); }
+
+/* ================================================================
+   1. 桌面底 + 模拟窗口
+   ================================================================ */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 28px 20px;
+  background: #3d3740;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  transition: background 0.25s;
+}
+.theme-dark body { background: #0d0a0e; }
+
+/* region: window */
+.window {
+  position: relative;
+  width: min(1440px, 100%);
+  height: min(880px, calc(100vh - 56px));
+  display: flex; flex-direction: column;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.07);
+  color: var(--text);
+  /* mojian PaintBackground：三段纵向渐变 + 35% 起的 BgTint 横向 tint */
+  background:
+    linear-gradient(90deg, rgba(0,0,0,0) 35%, var(--bg-tint)),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 38%, var(--bg-low) 70%, var(--bg-bottom) 100%);
+}
+
+/* ================================================================
+   2. 通用 icon 按钮：mojian view.go iconButton
+   ================================================================ */
+.ibtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; padding: 0; cursor: pointer; flex: none;
+  background: transparent; border-radius: var(--radius);
+  color: var(--icon-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.ibtn:hover { background: var(--hover); color: var(--text); }
+.ibtn:active { background: var(--pressed); }
+.ibtn.active { background: var(--panel-sel); color: var(--accent); }  /* 开关型按钮开启态（面板开着），与选中态一致 */
+.ibtn.lg { width: var(--icon-lg); height: var(--icon-lg); }
+.ibtn.md { width: var(--icon-md); height: var(--icon-md); }
+.ibtn.sm { width: var(--icon-sm); height: var(--icon-sm); }
+.ibtn.xs { width: var(--icon-xs); height: var(--icon-xs); border-radius: var(--radius-6); }
+.ibtn svg { width: 17px; height: 17px; }   /* mojian iconGlyphLg 17 */
+.ibtn.md svg { width: 16px; height: 16px; } /* iconGlyphMd 16 */
+.ibtn.sm svg { width: 13px; height: 13px; } /* iconGlyphSm 13 */
+.ibtn.xs svg { width: 12px; height: 12px; } /* iconGlyphXs 12 */
+
+/* ================================================================
+   3. region: titlebar（44px，mojian view.go titleBar + peekdown 现状）
+   ================================================================ */
+.titlebar {
+  height: var(--titlebar-h); flex: none;
+  display: flex; align-items: center;
+  gap: 14px;                       /* mojian view.go 标题栏 Gap(14) */
+  padding: 0 0 0 10px;             /* 左端 titleBarClearance(8)+2 */
+}
+/* 品牌：peekdown titlebar.go brand（18px logo + 13px/600），hover 圆角面 */
+.brand {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: var(--radius-6);
+  cursor: pointer; user-select: none; flex: none;
+}
+.brand:hover { background: var(--hover); }
+.brand .logo {
+  width: 18px; height: 18px;      /* peekdown titlebar.go appLogoSize = 18 */
+  border-radius: 5px;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+.brand .name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+/* region: tabs（mojian tabs.go tabStrip） */
+.tabtrack {
+  height: 32px;                    /* mojian tabH(28) + 上下内缩 2 */
+  display: flex; align-items: center;
+  padding: 2px;
+  background: var(--track);        /* mojian tabs.go k.Track */
+  border: 0.5px solid var(--track-border);  /* k.TrackBorder 0.5px */
+  border-radius: var(--radius);
+  flex: none; max-width: 620px; overflow: hidden;
+}
+.tab {
+  height: 28px;                    /* mojian tabH */
+  min-width: 112px; max-width: 214px;  /* mojian tabMinW/tabMaxW */
+  display: flex; align-items: center; gap: 8px;  /* mojian tabItem Gap(8) */
+  padding: 0 9px 0 5px;            /* mojian tabItem Padding(0,9,0,5) */
+  border-radius: var(--radius);
+  background: var(--tab-inactive); /* mojian TabInactive */
+  color: var(--text-muted);
+  font-size: 13px;                 /* mojian tabLabel 13 */
+  font-weight: var(--w-500);       /* mojian tabLabel 500 */
+  cursor: pointer; user-select: none; flex: none;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.tab:hover { background: var(--hover); }  /* mojian 未激活 hover 用 Hover */
+.tab.active {
+  background: var(--tab-active);   /* mojian TabActive = 页面背景色 */
+  color: var(--text);
+  box-shadow: var(--shadow-tab);   /* 单层阴影（mojian 双层 0 1 2 + 0 2 8 取一层） */
+}
+.tab .fav {
+  width: 15px; height: 15px; flex: none;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: #fff;
+}
+.tab .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab .d { font-size: 12px; font-weight: 400; color: var(--text-faint); }  /* mojian detail 12 TextFaint */
+.tab .dot {
+  width: 6px; height: 6px; flex: none;   /* mojian dotSize 6 */
+  border-radius: 3px; background: var(--attention);
+}
+.tab .x { visibility: hidden; }
+.tab:hover .x, .tab.active .x { visibility: visible; }
+.tb-spacer { flex: 1 1 24px; min-width: 24px; }  /* mojian view.go 标题栏中段拖动区 MinWidth(24) */
+
+.titlebar-tools { display: flex; align-items: center; gap: 2px; flex: none; }  /* peekdown titleBarButton 2 */
+
+/* Win11 caption 三键（CSS/SVG 画） */
+.caption { display: flex; align-items: stretch; height: var(--titlebar-h); flex: none; }
+.caption .cap {
+  width: 46px; border: none; padding: 0; cursor: pointer;
+  background: transparent; color: var(--icon-muted);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.caption .cap:hover { background: var(--hover); color: var(--text); }
+.caption .cap.close:hover { background: var(--danger); color: #fff; }  /* mojian Danger */
+.caption .cap svg { width: 10px; height: 10px; }
+
+/* ================================================================
+   4. region: content 三栏（mojian view.go workspace-content 布局）
+   ================================================================ */
+.content {
+  flex: 1; min-height: 0;
+  display: flex; align-items: stretch;
+  gap: var(--gap-pane);            /* mojian view.go gap 8 */
+  padding: 0 var(--gap-pane) var(--gap-pane);  /* mojian Padding(0,gap,gap,gap) */
+}
+
+/* region: sidebar（peekdown 布局 + mojian Panel 面） */
+.sidebar {
+  width: var(--sidebar-w); flex: none;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel);              /* mojian Panel */
+  border: 1px solid var(--panel-border); /* mojian PanelBorder */
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.sidebar-head {
+  display: flex; align-items: center;
+  height: 33px;                    /* 与右面板 .outline-head 同高：mojian view.go headerH 33 */
+  padding: 0 8px 0 14px; flex: none;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 12.5px; font-weight: var(--w-600);  /* mojian tree_view.go 面板标题 12.5/600 */
+}
+.sidebar-head .grow { flex: 1; }
+.sidebar-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 14px; }
+
+/* 根路径行：filetree.go 根目录名 12px TextMuted，中间截断 + Tooltip 全路径 */
+.tree-root {
+  display: block; padding: 6px 8px 4px;
+  font-size: 12px; font-weight: 550; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left; user-select: none; cursor: default;
+}
+.tree-root > bdo { direction: ltr; unicode-bidi: bidi-override; }
+
+/* 文件行：mojian 圆角选中/hover 态 */
+.tree-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 8px;
+  border-radius: var(--radius-6);
+  font-size: 13px; color: var(--text);
+  cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background 0.12s;
+}
+.tree-row:hover { background: var(--hover); }                              /* mojian Hover */
+.tree-row.sel { background: var(--panel-sel); color: var(--accent); font-weight: var(--w-500); }  /* mojian PanelSel */
+.tree-row .tw { width: 12px; flex: none; display: flex; justify-content: center; color: var(--text-faint); }
+.tree-row .tw svg { width: 10px; height: 10px; }
+.tree-row > svg.f { width: 15px; height: 15px; flex: none; color: var(--icon-muted); }
+.tree-row.sel > svg.f { color: var(--accent); }
+.tree-row .n { overflow: hidden; text-overflow: ellipsis; padding-right: 14px; }  /* 滚动条让位 >= 12px */
+.tree-row .badge { margin-left: auto; font-size: 11px; color: var(--text-faint); flex: none; }
+.tree-row .dot6 { width: 6px; height: 6px; border-radius: 3px; background: var(--attention); flex: none; }
+.tree-row.l1 { padding-left: 8px; }
+.tree-row.l2 { padding-left: 24px; }
+.tree-row.l3 { padding-left: 40px; }
+
+/* region: reader（中列：mojian Card 卡面 + peekdown 900 居中列） */
+.reader {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--card);                /* mojian Card */
+  border: 1px solid var(--card-border);   /* mojian CardBorder */
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);         /* 0 1 3 */
+}
+.reader-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.reader-col {
+  max-width: var(--col-w);         /* peekdown view.go centeredWidth 900 */
+  margin: 0 auto;
+  padding: 40px 36px 96px;         /* 右 36 > 滚动条占位 9 + 让位 12 */
+}
+
+/* Markdown 排版：mygo ui/markdown/theme.go DefaultTheme 数值 */
+.md { font-size: var(--fs-body); line-height: var(--lh-body); color: var(--text); }
+.md ::selection { background: var(--selection); }
+.md h1, .md h2, .md h3 { margin: 1.4em 0 0.55em; line-height: 1.3; }  /* mygo Heading Top 1.4 Bottom 0.55 */
+.md h1 { font-size: var(--fs-h1); font-weight: var(--w-h1); letter-spacing: -0.2px; }
+.md h2 { font-size: var(--fs-h2); font-weight: var(--w-h2); letter-spacing: -0.2px; }
+.md h3 { font-size: var(--fs-h3); font-weight: var(--w-h3); }
+.md p { margin: 0 0 var(--sp-block); }     /* mygo BlockSpacing 0.75em */
+.md a { color: var(--accent); text-decoration: none; }  /* mygo Link = Accent */
+.md a:hover { text-decoration: underline; }
+.md strong { font-weight: var(--w-600); }  /* mygo StrongWeight 600 */
+.md ul, .md ol { margin: var(--sp-item) 0 var(--sp-block); padding-left: 1.6em; }  /* mygo ListIndent 1.6em */
+.md li { margin: var(--sp-item) 0; }       /* mygo ItemSpacing 0.25em */
+.md hr { border: none; border-top: 1px solid var(--rule); margin: 1.6em 0; }
+
+/* 行内 code：mygo CodeBackground Text alpha 7% + CodeSize 0.875em */
+.md .ic {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: var(--fs-code);
+  background: var(--code-inline-bg);
+  border-radius: 5px; padding: 2px 6px; white-space: nowrap;
+}
+
+/* 代码块：mygo CodeBlockRadius = Radius+2 = 12 + CodeBlockPadding 0.85em */
+.codeblock {
+  background: var(--code-block-bg);       /* mygo CodeBlockBackground Text 4% */
+  border: 1px solid var(--card-border);   /* mygo CodeBlockBorder */
+  border-radius: 12px;
+  margin: 1em 0 1.25em; overflow: hidden;
+}
+.cb-head {
+  display: flex; align-items: center;
+  height: 34px; padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--card-border);
+}
+.cb-lang { flex: 1; font-size: 11px; color: var(--text-faint); }  /* mygo markdown 语言标签 muted 11 */
+.cb-copy {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 7px;
+  border: none; border-radius: var(--radius-6);
+  background: transparent; color: var(--icon-muted);
+  font-size: 11px; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.cb-copy:hover { background: var(--hover); color: var(--text); }
+.cb-copy svg { width: 12px; height: 12px; }
+.cb-body {
+  margin: 0; padding: 14px 18px;          /* mygo CodeBlockPadding 0.85em 约 13px */
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: var(--fs-mono);              /* mojian theme.go NoteFont 12.5 */
+  line-height: 1.55;                      /* mojian theme.go NoteFont LineHeight */
+  overflow-x: auto; tab-size: 4;
+}
+/* 语法高亮：非 petal 主题取 themes.go EditorTheme 的 tone palette，
+   petal 走 mygo editor DefaultTheme GitHub 色（变量值见第 0a 节） */
+.kw  { color: var(--code-kw); }  /* TokenKeyword */
+.ty  { color: var(--code-ty); }  /* TokenType */
+.fn  { color: var(--code-fn); }  /* TokenFunction */
+.num { color: var(--code-num); }  /* TokenNumber/Property */
+.str { color: var(--code-str); }  /* TokenString */
+.cm  { color: var(--code-cm); }  /* TokenComment */
+
+/* 引用：mygo QuoteBarWidth 3 + peekdown quoteBarTint + QuoteText TextMuted */
+.md blockquote {
+  margin: var(--sp-block) 0; padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--quote-bar);
+  color: var(--text-muted);
+}
+.md blockquote p { margin: 0.4em 0; }
+
+/* 表格：mygo TableBorder 横线 + TableHeader Text alpha 4%，无竖线 */
+.md table { border-collapse: collapse; width: 100%; margin: 1em 0 1.25em; font-size: 14px; }
+.md th, .md td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+.md thead th { background: var(--code-block-bg); font-weight: var(--w-600); border-bottom: 1px solid var(--text-muted); }
+.md tbody tr:last-child td { border-bottom: none; }
+
+/* task list：mygo Checkbox = Accent */
+.md ul.task { list-style: none; padding-left: 4px; }
+.md ul.task li { display: flex; align-items: baseline; gap: 9px; }
+.md .chk {
+  width: 15px; height: 15px; flex: none; transform: translateY(2px);
+  border-radius: 4px; border: 1.5px solid var(--text-muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 10px;
+}
+.md li.done .chk { background: var(--accent); border-color: var(--accent); }  /* mygo Checkbox Accent */
+.md li.done { color: var(--text-muted); }
+
+/* 图片：mojian markdown_preview.go Radius(radius)=10 */
+.md figure { margin: 1em 0 1.25em; }
+.img-ph {
+  height: 190px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); font-size: 12px;
+  border: 1px dashed var(--panel-border);
+  background: linear-gradient(135deg, var(--bg-mid), var(--bg-low));
+}
+.md figcaption { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 8px; }
+
+/* 行内公式占位 */
+.md .math {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px; color: var(--text-muted);
+  background: var(--hover); border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+}
+
+/* region: outline（mojian Panel 面 + peekdown outlinePane 行为） */
+.outline {
+  width: 232px; flex: none;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+}
+.outline-head {
+  display: flex; align-items: center;
+  height: 33px;                    /* mojian view.go headerH 33 */
+  padding: 0 8px 0 14px; flex: none;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 12.5px; font-weight: var(--w-600);  /* mojian tree_view.go 面板标题 12.5/600 */
+}
+.outline-head .grow { flex: 1; }
+.outline-body { flex: 1; overflow-y: auto; padding: 6px 6px 12px; }
+.ol-row {
+  display: flex; align-items: center;
+  height: 26px; border-radius: var(--radius-4);
+  font-size: 13px;                 /* peekdown outlinePane FontSize 13 */
+  color: var(--text); cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+  padding-right: 14px;             /* 滚动条让位 */
+  transition: background 0.12s;
+}
+.ol-row:hover { background: var(--surface-hover); }
+.ol-row.on { background: var(--surface-hover); font-weight: var(--w-600); }  /* 当前节 */
+.ol-row .tx { overflow: hidden; text-overflow: ellipsis; }
+.ol-row.lv1 { padding-left: 12px; }  /* peekdown outlinePane: 12 + 12*(lv-1) */
+.ol-row.lv2 { padding-left: 24px; }
+.ol-row.lv3 { padding-left: 36px; }
+
+/* ================================================================
+   5. region: statusbar（peekdown statusBar 28px + mojian Panel 面）
+   ================================================================ */
+.statusbar {
+  height: var(--statusbar-h); flex: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--panel-border);
+  font-size: 11px;                 /* peekdown 状态栏读数 FontSize 11 */
+  color: var(--text-muted);
+  user-select: none;
+}
+.statusbar .grow { flex: 1; align-self: stretch; cursor: default; }  /* 可拖动区 */
+.sb-fps { width: 110px; flex: none; white-space: nowrap; }  /* peekdown fps.go 固定宽防跳动 */
+.sb-zoom { margin: 0 6px; }                                 /* peekdown MarginX(6) */
+
+/* ================================================================
+   6. region: search-float（mojian widgets.go CommandDialog 规格）
+   ================================================================ */
+.searchfloat {
+  position: absolute; z-index: 50;
+  top: 54px; left: 50%; transform: translateX(-50%);
+  width: var(--search-w);          /* mojian CommandDialog Width(560) */
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);    /* mojian CommandDialog Radius(10) */
+  box-shadow: var(--shadow-dialog);/* 0 24 60 -8 ShadowDialog */
+  overflow: hidden;
+}
+.sf-inputrow { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.sf-field {
+  flex: 1; display: flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 9px;
+  border-radius: 8px;              /* mojian settings_rows.go 输入框 Radius(8) */
+  background: var(--hover);        /* 输入框底 Hover 面 */
+  color: var(--text);
+}
+.sf-field svg { width: 14px; height: 14px; color: var(--icon-muted); flex: none; }
+.sf-field input {
+  border: none; outline: none; background: transparent;
+  width: 100%; font: inherit; font-size: 13px; color: var(--text);
+}
+.sf-field input::placeholder { color: var(--text-faint); }
+.sf-count {
+  width: 72px; flex: none; text-align: right;  /* peekdown searchCountWidth 72 */
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+}
+.sf-nav { display: flex; gap: 4px; flex: none; }
+.sf-nav button {
+  width: 24px; height: 24px; border: none; cursor: pointer;
+  border-radius: 5px;              /* peekdown searchbar.go Radius(5) */
+  background: transparent; color: var(--icon-muted);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.sf-nav button:hover { background: var(--hover); color: var(--text); }
+.sf-nav button svg { width: 13px; height: 13px; }
+.sf-body { border-top: 1px solid var(--panel-border); padding: 4px 6px 8px; }
+.sf-hit {
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 10px;
+  border-radius: var(--radius-6);
+  font-size: 12.5px; color: var(--text-muted);
+  cursor: pointer; white-space: nowrap; overflow: hidden;
+}
+.sf-hit:hover, .sf-hit.on { background: var(--panel-sel); color: var(--accent); }
+.sf-hit mark { background: var(--match-bg); color: inherit; border-radius: 3px; padding: 0 1px; }
+.sf-hit .ln { margin-left: auto; font-size: 11px; color: var(--text-faint); flex: none; }
+
+/* 滚动条：overlay 细条（mygo ScrollbarWidth 6 + 边距） */
+.reader-scroll::-webkit-scrollbar, .sidebar-body::-webkit-scrollbar,
+.outline-body::-webkit-scrollbar, .cb-body::-webkit-scrollbar { width: 9px; height: 9px; }
+.reader-scroll::-webkit-scrollbar-thumb, .sidebar-body::-webkit-scrollbar-thumb,
+.outline-body::-webkit-scrollbar-thumb, .cb-body::-webkit-scrollbar-thumb {
+  background: var(--scrollbar); border-radius: 5px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+.reader-scroll::-webkit-scrollbar-track, .sidebar-body::-webkit-scrollbar-track,
+.outline-body::-webkit-scrollbar-track, .cb-body::-webkit-scrollbar-track { background: transparent; }
+
+/* ================================================================
+   7. 主题选择浮层：调色板按钮 + THEME Popover
+      （2 行 x 5 列缩影卡片 + 外观分段选择器）
+   ================================================================ */
+.palette-wrap { position: relative; flex: none; }
+.theme-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;  /* 右缘对齐按钮右缘 */
+  width: 516px;                                                      /* 5x96 + 4x8 + padding 2x12 */
+  padding: 2px 12px 12px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--radius); box-shadow: var(--shadow-dialog);
+  display: none;
+}
+.theme-popover.open { display: block; }
+.theme-popover .thmgrid { margin-top: 6px; }
+.thmgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }  /* 2 行 x 5 列 */
+.thmcard {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 6px 6px 5px; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius); color: var(--text-muted); font: inherit;
+  transition: transform .15s, box-shadow .15s;
+}
+.thmcard:hover { transform: translateY(-1px); }
+.thmcard:hover .thm-prev { box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+.thm-prev {
+  height: 64px; border-radius: 7px; overflow: hidden; display: block; padding: 7px;
+  background:
+    linear-gradient(90deg, transparent 35%, var(--pv-tint, transparent)),
+    linear-gradient(180deg, var(--pv-g1) 0%, var(--pv-g2) 38%, var(--pv-g3) 70%, var(--pv-g4) 100%);
+}
+.thm-win {
+  display: block; height: 100%; padding: 5px 6px; border-radius: 5px;
+  background: var(--pv-card); box-shadow: 0 1px 2px rgba(0,0,0,.10);
+  position: relative;
+}
+.thm-aa  { font-size: 10px; font-weight: 600; color: var(--pv-text); line-height: 1; display: block; }
+.thm-line { display: block; height: 4px; margin-top: 5px; width: 62%; border-radius: 2px;
+  background: var(--pv-text); opacity: .22; position: relative; }   /* 一行假文 */
+.thm-caret { position: absolute; left: 100%; top: -2px; width: 2px; height: 8px;
+  border-radius: 1px; background: var(--pv-accent); opacity: 1; }   /* 光标竖条，对照 PaintPreview */
+.thm-dots { display: block; height: 5px; border-radius: 2.5px; margin-top: 8px;
+  background-image: var(--pv-dots); }
+.thm-name { font-size: 11px; font-weight: 400; text-align: center; line-height: 1; }
+.thmcard.on { color: var(--text); }
+.thmcard.on .thm-prev { outline: 2px solid var(--accent); outline-offset: -1px; }  /* 选中描边 = 当前窗口 accent */
+.thmcard.on .thm-name { font-weight: 600; }
+
+/* 外观分段选择器：Track 底 + 选中白卡（mojian Segmented），浅深两态令牌已在
+   :root/.theme-dark 各一份（theme.go Track / TabActive / TrackBorder） */
+.seg {
+  display: flex; margin-top: 6px; padding: 2px; gap: 2px;
+  background: var(--track); border: 0.5px solid var(--track-border);
+  border-radius: 8px; cursor: pointer;
+}
+.seg-opt {
+  flex: 1; padding: 5px 0 4px; border: none; background: transparent;
+  border-radius: 6px; font: inherit; font-size: 12px; font-weight: 400;
+  color: var(--text-muted); cursor: pointer; text-align: center;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-opt:hover { color: var(--text); }
+.seg-opt.on {
+  background: var(--tab-active); color: var(--text);
+  font-weight: 600; box-shadow: 0 1px 3px 0 var(--shadow-focus);
+}
+.seg-note {
+  margin-top: 6px; font-size: 11px; color: var(--text-faint); user-select: none;
+}
+
+/* 面板隐藏开关：标题栏 Outline 钮与面板关闭钮共用，flex 布局下中列自然伸展。
+   必须放在 .outline 之后，否则同特异性的 display:flex 会覆盖掉 display:none */
+.hidden-pane { display: none; }
+
+/* 窄窗强制隐藏右面板，原型不模拟响应式开合记忆：此规则与 .hidden-pane
+   同为 display:none，1200px 以下 JS 开合无效果（可接受） */
+@media (max-width: 1200px) { .outline { display: none; } }
+</style>
+</head>
+<body>
+
+<!-- region: window -->
+<div class="window">
+
+  <!-- region: titlebar -->
+  <div class="titlebar">
+    <div class="brand" title="返回欢迎页">
+      <div class="logo">P</div>
+      <div class="name">Peekdown</div>
+    </div>
+
+    <!-- region: tabs -->
+    <div class="tabtrack">
+      <div class="tab active">
+        <span class="fav" style="background:#7c5cbf">M</span>
+        <span class="t">主界面重设计-spec</span>
+        <span class="dot" title="未保存"></span>
+        <button class="ibtn xs x" title="关闭标签"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="tab">
+        <span class="fav" style="background:#4e79a7">R</span>
+        <span class="t">README</span>
+        <button class="ibtn xs x" title="关闭标签"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="tab">
+        <span class="fav" style="background:#59a14f">G</span>
+        <span class="t">gap-analysis</span>
+        <button class="ibtn xs x" title="关闭标签"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+    </div>
+
+    <div class="tb-spacer"></div>
+
+    <!-- 标题栏右端工具：Open/Find/Files/Outline/Settings + 主题色 -->
+    <div class="titlebar-tools">
+      <button class="ibtn lg" title="打开文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg></button>
+      <button class="ibtn lg" title="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+      <button class="ibtn lg" title="文件树"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+      <button class="ibtn lg active" id="outlineBtn" title="大纲" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></button>
+      <button class="ibtn lg" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg></button>
+      <!-- 主题色选择：调色板按钮 + THEME Popover（包裹层随按钮右对齐定位） -->
+    <div class="palette-wrap">
+      <button class="ibtn lg" id="paletteBtn" title="主题色" aria-haspopup="true" aria-expanded="false" aria-controls="themePopover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 .4 18H14a2.5 2.5 0 0 0 0-5h-1a2 2 0 0 1 0-4h6.2A3.8 3.8 0 0 0 23 8.2C22.2 5 17.6 3 12 3z"/><circle cx="7.5" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="11.5" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1" fill="currentColor" stroke="none"/></svg></button>
+      <div class="theme-popover" id="themePopover" role="listbox" aria-label="THEME">
+        <div style="padding:10px 12px 4px; font-size:10px; font-weight:var(--w-650); letter-spacing:0.6px; text-transform:uppercase; color:var(--text-faint); user-select:none;">THEME</div>
+        <div class="thmgrid">
+          <button class="thmcard on" data-theme="petal" role="radio" aria-checked="true" title="Petal"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Petal</span></button>
+          <button class="thmcard" data-theme="mist" role="radio" aria-checked="false" title="Mist"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Mist</span></button>
+          <button class="thmcard" data-theme="meadow" role="radio" aria-checked="false" title="Meadow"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Meadow</span></button>
+          <button class="thmcard" data-theme="dusk" role="radio" aria-checked="false" title="Dusk"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Dusk</span></button>
+          <button class="thmcard" data-theme="tide" role="radio" aria-checked="false" title="Tide"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Tide</span></button>
+          <button class="thmcard" data-theme="apricot" role="radio" aria-checked="false" title="Apricot"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Apricot</span></button>
+          <button class="thmcard" data-theme="aurora" role="radio" aria-checked="false" title="Aurora"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Aurora</span></button>
+          <button class="thmcard" data-theme="dune" role="radio" aria-checked="false" title="Dune"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Dune</span></button>
+          <button class="thmcard" data-theme="paper" role="radio" aria-checked="false" title="Paper"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Paper</span></button>
+          <button class="thmcard" data-theme="plain" role="radio" aria-checked="false" title="Plain"><span class="thm-prev" aria-hidden="true"><span class="thm-win"><span class="thm-aa">Aa</span><span class="thm-line"><i class="thm-caret"></i></span><span class="thm-dots"></span></span></span><span class="thm-name">Plain</span></button>
+        </div>
+
+        <div style="padding:10px 12px 4px; font-size:10px; font-weight:var(--w-650); letter-spacing:0.6px; text-transform:uppercase; color:var(--text-faint); user-select:none;">外观</div>
+        <div class="seg" role="radiogroup" aria-label="外观">
+          <button class="seg-opt on" data-mode="auto" role="radio" aria-checked="true">跟随系统</button>
+          <button class="seg-opt" data-mode="light" role="radio" aria-checked="false">浅色</button>
+          <button class="seg-opt" data-mode="dark" role="radio" aria-checked="false">深色</button>
+        </div>
+        <div class="seg-note">原型中跟随系统等同于浅色（无真实系统检测）</div>
+      </div>
+    </div>
+    </div>
+
+    <!-- Win11 caption 三键 -->
+    <div class="caption">
+      <button class="cap" title="最小化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"/></svg></button>
+      <button class="cap" title="最大化"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9" rx="1.5"/></svg></button>
+      <button class="cap close" title="关闭"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+    </div>
+  </div>
+
+  <!-- region: content -->
+  <div class="content">
+
+    <!-- region: sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-head">
+        文件
+        <span class="grow"></span>
+        <button class="ibtn sm" title="关闭侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="sidebar-body">
+        <!-- 实机语义（filetree.go filesPane）：单根 + 根路径行 + 一棵扁平树；分组标题不做（backlog：多 VCS 根分组） -->
+        <div class="tree-root" title="C:\Seafile\Works\go\peekdown"><bdo dir="ltr">C:\Seafile\Works\go\peekdown</bdo></div>
+        <div class="tree-row l1"><span class="tw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></span><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg><span class="n">docs</span></div>
+        <div class="tree-row l2 sel"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">main-mojian.html</span><span class="dot6" title="未保存"></span></div>
+        <div class="tree-row l2"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">v0.3.0-gap-analysis.md</span></div>
+        <div class="tree-row l1"><span class="tw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></span><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg><span class="n">internal</span></div>
+        <div class="tree-row l2"><span class="tw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></span><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg><span class="n">shell</span></div>
+        <div class="tree-row l3"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">titlebar.go</span></div>
+        <div class="tree-row l3"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">tabs.go</span><span class="badge">已修改</span></div>
+        <div class="tree-row l3"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">sidebar.go</span></div>
+        <div class="tree-row l1"><span class="tw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></span><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg><span class="n">locales</span></div>
+        <div class="tree-row l1"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">main.go</span></div>
+        <div class="tree-row l1"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">go.mod</span></div>
+        <div class="tree-row l1"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">AGENTS.md</span></div>
+        <div class="tree-row l1"><svg class="f" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg><span class="n">README.md</span></div>
+      </div>
+    </div>
+
+    <!-- region: reader -->
+    <div class="reader">
+      <div class="reader-scroll">
+        <div class="reader-col md">
+          <h1>Peekdown 主界面 mojian 风格重设计</h1>
+          <p>本文件是 <strong>Go 实现</strong>的视觉规格：颜色、圆角、阴影、字号全部取自 mojian 的 <a href="#">theme.go</a> 与部件层默认值，深浅两态在 <code class="ic">:root</code> 与 <code class="ic">.theme-dark</code> 各一份。阅读列宽沿用 <code class="ic">centeredWidth = 900</code>（mojian 没有阅读列概念，900 是 peekdown 已验证的现值）。</p>
+
+          <h2>标题分级与字重</h2>
+          <p>标题字重按规格取 <strong>h1 700 / h2 600 / h3 500</strong>；字号沿用 mygo markdown 的 em 阶梯 1.6 / 1.35 / 1.15。段落间距 0.75em、列表项 0.25em、行高 1.65（默认 1.5，阅读器放宽）。</p>
+
+          <h3>行内元素</h3>
+          <p>行内代码如 <code class="ic">internal/shell/titlebar.go</code>；链接如 <a href="#">实现对照表</a>；行内公式占位：<span class="math">E = mc^2</span> 与 <span class="math">a^2 + b^2 = c^2</span>，后续接 KaTeX 渲染。</p>
+
+          <h2>代码块</h2>
+          <p>圆角 12（Radius+2）、底色 Text alpha 4%、头部 34px 放语言标签与 Copy 按钮：</p>
+          <div class="codeblock">
+            <div class="cb-head">
+              <span class="cb-lang">go</span>
+              <button class="cb-copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
+            </div>
+<pre class="cb-body"><span class="cm">// renderDoc 逐块渲染；表格与代码块让出滚动条内缩</span>
+<span class="kw">func</span> <span class="fn">renderDoc</span>(v *<span class="ty">View</span>, d *<span class="ty">doc</span>.<span class="ty">Model</span>) <span class="ty">error</span> {
+    <span class="kw">for</span> i, b := <span class="kw">range</span> d.<span class="num">Blocks</span> {
+        <span class="kw">if</span> err := v.<span class="fn">drawBlock</span>(i, b); err != <span class="num">nil</span> {
+            <span class="kw">return</span> err
+        }
+    }
+    <span class="kw">return</span> v.<span class="fn">commit</span>()
+}</pre>
+          </div>
+
+          <blockquote>
+            <p>引用：3px accent 洗色左条 + TextMuted 文字（mygo QuoteBarWidth 3 / QuoteText）。</p>
+          </blockquote>
+
+          <h2>表格</h2>
+          <p>横线风：只有行分隔线，表头带 Text alpha 4% 底色，无竖线断裂：</p>
+          <table>
+            <thead><tr><th>区域</th><th>peekdown 现状</th><th>mojian 改动</th></tr></thead>
+            <tbody>
+              <tr><td>标题栏</td><td>纯 Surface 平条</td><td>渐变背景 + tab 芯片轨道 Track</td></tr>
+              <tr><td>正文列</td><td><code class="ic">900</code> 居中（保留）</td><td>Card 卡面 + 阴影 0 1 3</td></tr>
+              <tr><td>代码块</td><td>8px 圆角</td><td>Radius+2 = 12，Text 4% 底</td></tr>
+            </tbody>
+          </table>
+
+          <h2>任务清单</h2>
+          <ul class="task">
+            <li class="done"><span class="chk">✓</span><span>抄 mojian theme.go 两套颜色令牌</span></li>
+            <li class="done"><span class="chk">✓</span><span>tab 芯片轨道 + 激活阴影</span></li>
+            <li><span class="chk"></span><span>代码块 Copy 按钮接线到剪贴板</span></li>
+            <li><span class="chk"></span><span>搜索浮窗键盘导航（上/下/Enter）</span></li>
+          </ul>
+
+          <h2>图片</h2>
+          <figure>
+            <div class="img-ph">图片占位：窗口结构示意（原型不引外链，Go 实现为 radius 10 圆角 + 等比缩放）</div>
+            <figcaption>fig 1 - 三栏结构与 900px 居中列</figcaption>
+          </figure>
+
+          <hr>
+          <h3>余下工作</h3>
+          <p>搜索浮窗与状态栏的规格见右侧大纲与文件头部注释；落地顺序建议先做令牌层，再逐 region 对照实现。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- region: outline -->
+    <div class="outline">
+      <div class="outline-head">大纲<span class="grow"></span><button class="ibtn sm" id="outlineClose" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+      <div class="outline-body">
+        <div class="ol-row lv1 on"><span class="tx">主界面 mojian 风格重设计</span></div>
+        <div class="ol-row lv2"><span class="tx">标题分级与字重</span></div>
+        <div class="ol-row lv3"><span class="tx">行内元素</span></div>
+        <div class="ol-row lv2"><span class="tx">代码块</span></div>
+        <div class="ol-row lv2"><span class="tx">表格</span></div>
+        <div class="ol-row lv2"><span class="tx">任务清单</span></div>
+        <div class="ol-row lv2"><span class="tx">图片</span></div>
+        <div class="ol-row lv3"><span class="tx">余下工作</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- region: search-float -->
+  <div class="searchfloat">
+    <div class="sf-inputrow">
+      <div class="sf-field">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" placeholder="在文档中搜索…" value="mojian">
+      </div>
+      <span class="sf-count">3/17</span>
+      <div class="sf-nav">
+        <button title="上一个"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>
+        <button title="下一个"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+    </div>
+    <div class="sf-body">
+      <div class="sf-hit on"><span>全部抄自 <mark>mojian</mark> 的 theme.go 与部件默认值</span><span class="ln">第 4 行</span></div>
+      <div class="sf-hit"><span>标题栏右侧工具按钮统一 <mark>mojian</mark> iconButton</span><span class="ln">第 12 行</span></div>
+      <div class="sf-hit"><span>浮窗规格：宽 560、radius 10、阴影 0 24 60 -8（<mark>mojian</mark> CommandDialog）</span><span class="ln">第 31 行</span></div>
+    </div>
+  </div>
+
+  <!-- region: statusbar -->
+  <div class="statusbar">
+    <span class="sb-fps" title="帧率读数">60 fps</span>
+    <span class="grow" title="拖动区"></span>
+    <span class="sb-zoom" title="缩放">100%</span>
+  </div>
+</div>
+
+<script>
+// 主题色 Popover：点卡片即时切 data-theme、点外观选项切深浅两态，均不关浮层；Esc/外点关闭
+var palBtn = document.getElementById('paletteBtn');
+var pop = document.getElementById('themePopover');
+palBtn.addEventListener('click', function (e) {
+  e.stopPropagation();
+  var open = pop.classList.toggle('open');
+  palBtn.setAttribute('aria-expanded', open);
+});
+pop.addEventListener('click', function (e) {
+  var c = e.target.closest('.thmcard');
+  if (c) {
+    document.documentElement.setAttribute('data-theme', c.dataset.theme);
+    pop.querySelectorAll('.thmcard').forEach(function (x) {
+      var on = x === c;
+      x.classList.toggle('on', on);
+      x.setAttribute('aria-checked', on);
+    });
+    return;
+  }
+  // 外观分段选择器：明暗差量随 html 的 theme-light/theme-dark class 翻转；
+  // 跟随系统在纯静态原型里等同于浅色（页面默认即 theme-light）
+  var seg = e.target.closest('.seg-opt');
+  if (!seg) return;
+  var r = document.documentElement;
+  r.classList.toggle('theme-dark', seg.dataset.mode === 'dark');
+  r.classList.toggle('theme-light', seg.dataset.mode !== 'dark');
+  seg.parentElement.querySelectorAll('.seg-opt').forEach(function (x) {
+    var on = x === seg;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-checked', on);
+  });
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && pop.classList.contains('open')) {
+    pop.classList.remove('open');
+    palBtn.setAttribute('aria-expanded', 'false');
+  }
+});
+document.addEventListener('click', function (e) {
+  if (pop.classList.contains('open') && !pop.contains(e.target) && !palBtn.contains(e.target)) {
+    pop.classList.remove('open');
+    palBtn.setAttribute('aria-expanded', 'false');
+  }
+});
+
+// 大纲面板开合：标题栏 Outline 钮与面板关闭钮都切 .hidden-pane，钮的 active 态跟随面板
+var outlineBtn = document.getElementById('outlineBtn');
+var outlinePane = document.querySelector('.outline');
+function syncOutlineActive() {
+  var on = !outlinePane.classList.contains('hidden-pane');
+  outlineBtn.classList.toggle('active', on);
+  outlineBtn.setAttribute('aria-pressed', on);
+}
+outlineBtn.addEventListener('click', function () {
+  outlinePane.classList.toggle('hidden-pane');
+  syncOutlineActive();
+});
+document.getElementById('outlineClose').addEventListener('click', function () {
+  outlinePane.classList.add('hidden-pane');
+  syncOutlineActive();
+});
+</script>
+</body>
+</html>
