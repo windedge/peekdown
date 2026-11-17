@@ -97,9 +97,12 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 			Tooltip(locales.BarFilesTooltip())
 		iconButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(), 24, 14, func() { s.SetSidebarTab(1) }).
 			Tooltip(locales.BarOutlineTooltip())
+		pal := iconButton(c, "bar-palette", paletteIcon, locales.BarThemeTooltip(), 24, 14, s.openPalette)
+		pal.Tooltip(locales.BarThemeTooltip())
 		iconButton(c, "bar-settings", gearIcon, locales.BarSettingsPanel(), 24, 14, s.OpenSettings).
 			Tooltip(locales.BarSettingsTooltip())
 		s.menuButton(c)
+		s.palettePopover(c, pal)
 	})
 }
 

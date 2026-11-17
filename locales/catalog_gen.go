@@ -1096,6 +1096,176 @@ func (msgs Messages) FontPickerNoMatch() string {
 	return Catalog.Format(msgs.locale, "fontPickerNoMatch", nil)
 }
 
+// BarThemeTooltip says "Accent theme"
+// in the language the app shows.
+func BarThemeTooltip() string { return In(i18n.Locale()).BarThemeTooltip() }
+
+// BarThemeTooltip says "Accent theme"
+// in the language of msgs.
+func (msgs Messages) BarThemeTooltip() string {
+	return Catalog.Format(msgs.locale, "barThemeTooltip", nil)
+}
+
+// PaletteTitle says "Theme"
+// in the language the app shows.
+func PaletteTitle() string { return In(i18n.Locale()).PaletteTitle() }
+
+// PaletteTitle says "Theme"
+// in the language of msgs.
+func (msgs Messages) PaletteTitle() string {
+	return Catalog.Format(msgs.locale, "paletteTitle", nil)
+}
+
+// PaletteAppearance says "Appearance"
+// in the language the app shows.
+func PaletteAppearance() string { return In(i18n.Locale()).PaletteAppearance() }
+
+// PaletteAppearance says "Appearance"
+// in the language of msgs.
+func (msgs Messages) PaletteAppearance() string {
+	return Catalog.Format(msgs.locale, "paletteAppearance", nil)
+}
+
+// AppearanceSystem says "System"
+// in the language the app shows.
+func AppearanceSystem() string { return In(i18n.Locale()).AppearanceSystem() }
+
+// AppearanceSystem says "System"
+// in the language of msgs.
+func (msgs Messages) AppearanceSystem() string {
+	return Catalog.Format(msgs.locale, "appearanceSystem", nil)
+}
+
+// AppearanceLight says "Light"
+// in the language the app shows.
+func AppearanceLight() string { return In(i18n.Locale()).AppearanceLight() }
+
+// AppearanceLight says "Light"
+// in the language of msgs.
+func (msgs Messages) AppearanceLight() string {
+	return Catalog.Format(msgs.locale, "appearanceLight", nil)
+}
+
+// AppearanceDark says "Dark"
+// in the language the app shows.
+func AppearanceDark() string { return In(i18n.Locale()).AppearanceDark() }
+
+// AppearanceDark says "Dark"
+// in the language of msgs.
+func (msgs Messages) AppearanceDark() string {
+	return Catalog.Format(msgs.locale, "appearanceDark", nil)
+}
+
+// AppearanceNote says "System follows the Windows light or dark mode"
+// in the language the app shows.
+func AppearanceNote() string { return In(i18n.Locale()).AppearanceNote() }
+
+// AppearanceNote says "System follows the Windows light or dark mode"
+// in the language of msgs.
+func (msgs Messages) AppearanceNote() string {
+	return Catalog.Format(msgs.locale, "appearanceNote", nil)
+}
+
+// AccentThemePetal says "Petal"
+// in the language the app shows.
+func AccentThemePetal() string { return In(i18n.Locale()).AccentThemePetal() }
+
+// AccentThemePetal says "Petal"
+// in the language of msgs.
+func (msgs Messages) AccentThemePetal() string {
+	return Catalog.Format(msgs.locale, "accentThemePetal", nil)
+}
+
+// AccentThemeMist says "Mist"
+// in the language the app shows.
+func AccentThemeMist() string { return In(i18n.Locale()).AccentThemeMist() }
+
+// AccentThemeMist says "Mist"
+// in the language of msgs.
+func (msgs Messages) AccentThemeMist() string {
+	return Catalog.Format(msgs.locale, "accentThemeMist", nil)
+}
+
+// AccentThemeMeadow says "Meadow"
+// in the language the app shows.
+func AccentThemeMeadow() string { return In(i18n.Locale()).AccentThemeMeadow() }
+
+// AccentThemeMeadow says "Meadow"
+// in the language of msgs.
+func (msgs Messages) AccentThemeMeadow() string {
+	return Catalog.Format(msgs.locale, "accentThemeMeadow", nil)
+}
+
+// AccentThemeDusk says "Dusk"
+// in the language the app shows.
+func AccentThemeDusk() string { return In(i18n.Locale()).AccentThemeDusk() }
+
+// AccentThemeDusk says "Dusk"
+// in the language of msgs.
+func (msgs Messages) AccentThemeDusk() string {
+	return Catalog.Format(msgs.locale, "accentThemeDusk", nil)
+}
+
+// AccentThemeTide says "Tide"
+// in the language the app shows.
+func AccentThemeTide() string { return In(i18n.Locale()).AccentThemeTide() }
+
+// AccentThemeTide says "Tide"
+// in the language of msgs.
+func (msgs Messages) AccentThemeTide() string {
+	return Catalog.Format(msgs.locale, "accentThemeTide", nil)
+}
+
+// AccentThemeApricot says "Apricot"
+// in the language the app shows.
+func AccentThemeApricot() string { return In(i18n.Locale()).AccentThemeApricot() }
+
+// AccentThemeApricot says "Apricot"
+// in the language of msgs.
+func (msgs Messages) AccentThemeApricot() string {
+	return Catalog.Format(msgs.locale, "accentThemeApricot", nil)
+}
+
+// AccentThemeAurora says "Aurora"
+// in the language the app shows.
+func AccentThemeAurora() string { return In(i18n.Locale()).AccentThemeAurora() }
+
+// AccentThemeAurora says "Aurora"
+// in the language of msgs.
+func (msgs Messages) AccentThemeAurora() string {
+	return Catalog.Format(msgs.locale, "accentThemeAurora", nil)
+}
+
+// AccentThemeDune says "Dune"
+// in the language the app shows.
+func AccentThemeDune() string { return In(i18n.Locale()).AccentThemeDune() }
+
+// AccentThemeDune says "Dune"
+// in the language of msgs.
+func (msgs Messages) AccentThemeDune() string {
+	return Catalog.Format(msgs.locale, "accentThemeDune", nil)
+}
+
+// AccentThemePaper says "Paper"
+// in the language the app shows.
+func AccentThemePaper() string { return In(i18n.Locale()).AccentThemePaper() }
+
+// AccentThemePaper says "Paper"
+// in the language of msgs.
+func (msgs Messages) AccentThemePaper() string {
+	return Catalog.Format(msgs.locale, "accentThemePaper", nil)
+}
+
+// AccentThemePlain says "Plain"
+// in the language the app shows.
+func AccentThemePlain() string { return In(i18n.Locale()).AccentThemePlain() }
+
+// AccentThemePlain says "Plain"
+// in the language of msgs.
+func (msgs Messages) AccentThemePlain() string {
+	return Catalog.Format(msgs.locale, "accentThemePlain", nil)
+}
+
 // DocCopy says "Copy"
 // in the language the app shows.
 func DocCopy() string { return In(i18n.Locale()).DocCopy() }

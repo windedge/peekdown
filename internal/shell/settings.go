@@ -268,7 +268,7 @@ func (s *Shell) segment(c *ui.Context, b ui.Element, n, chosen int, label string
 		if n == chosen {
 			col = t.Text
 		}
-		ui.Text(c, label).FontSize(11.5).FontWeight(550).TextColor(col)
+		ui.Text(c, label).FontSize(12).FontWeight(550).TextColor(col)
 	})
 }
 
