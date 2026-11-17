@@ -111,6 +111,9 @@ type State struct {
 	// wheel notches and scrolls them at once, mygo's glide being without
 	// a per-container switch to turn it off.
 	NoInertia bool
+	// Inertia is the wheel glide ScrollView advances each frame while the
+	// handler turns notches into velocity.
+	Inertia InertiaScroll
 
 	// Progress, AtTop and AtBottom are the last frame's scroll place,
 	// refreshed by ScrollView: the fraction 0..1 the list is scrolled
@@ -218,6 +221,95 @@ type State struct {
 	CodeTheme *editor.Theme
 }
 
+// InertiaScroll is the wheel's velocity, in DIPs per second, decaying as the
+// Rust viewer's does: a flick keeps the page moving after the wheel stops,
+// which mygo's per-notch ease does not.
+type InertiaScroll struct {
+	Velocity float32
+	last     time.Time // zero until the first step
+	wroteY   float32   // the Y the inertia last wrote, to spot foreign moves
+}
+
+// The constants of the Rust version's InertiaScrollState (src/text/state.rs),
+// kept at its values and named after it, so a flick rides the same curve.
+const (
+	inertiaMinVelocity     float32 = 10   // MIN_VELOCITY, below which it stops
+	inertiaFriction        float64 = 0.94 // 1 - FRICTION, per 1/60s
+	inertiaMaxVelocity     float32 = 8000 // MAX_VELOCITY, the clamp
+	inertiaVelocityScale   float32 = 8    // VELOCITY_MULTIPLIER
+	inertiaSmoothThreshold float32 = 8000 // SMOOTH_THRESHOLD, times the speed
+	inertiaLinearDecel     float32 = 8000 // LINEAR_DECEL, DIPs per second
+	// A step longer than this is a stall (a hidden window, a slow frame),
+	// not a flick: capped so the page does not leap in one frame.
+	inertiaMaxStep = 100 * time.Millisecond
+	// A first step has no previous frame to measure from: one frame, the
+	// Rust version's 1/60s, rather than a zero-time gap.
+	inertiaFirstStep = time.Second / 60
+)
+
+// active reports whether the velocity still moves the view.
+func (in *InertiaScroll) active() bool {
+	return in.Velocity >= inertiaMinVelocity || in.Velocity <= -inertiaMinVelocity
+}
+
+// stop ends the glide: the next one starts its own clock. The offset the
+// last step wrote stays, for the next impulse to re-sync.
+func (in *InertiaScroll) stop() {
+	in.Velocity, in.last = 0, time.Time{}
+}
+
+// impulse adds a wheel notch's dy, as the Rust add_impulse does, the speed
+// multiplier riding it in here and nowhere else: the same direction
+// accumulates, the opposite one keeps 30% of the old velocity. y is the
+// offset the glide starts from, which the frame loop compares to spot moves
+// it did not make; only a start from rest takes it, so a notch that keeps a
+// glide running does not reset the clock another frame already advanced.
+func (in *InertiaScroll) impulse(dy, speed, y float32) {
+	if !in.active() {
+		in.wroteY, in.last = y, time.Time{}
+	}
+	if speed <= 0 {
+		speed = 1
+	}
+	impulse := dy * inertiaVelocityScale * speed
+	if in.Velocity == 0 || (in.Velocity > 0) == (impulse > 0) {
+		in.Velocity += impulse
+	} else {
+		in.Velocity = in.Velocity*0.3 + impulse
+	}
+	in.Velocity = max(-inertiaMaxVelocity, min(in.Velocity, inertiaMaxVelocity))
+}
+
+// step advances the glide by dt and returns the distance to scroll: the
+// pre-decay velocity's, as the Rust update multiplies it before decaying.
+// Two decays meet the Rust curve: exponential above the smooth threshold,
+// which scales with the speed setting as its does, and linear below it for
+// a crisp stop.
+func (in *InertiaScroll) step(dt time.Duration, speed float32) float32 {
+	if speed <= 0 {
+		speed = 1
+	}
+	secs := float32(dt.Seconds())
+	distance := in.Velocity * secs
+	abs := max(in.Velocity, -in.Velocity)
+	if abs > inertiaSmoothThreshold*speed {
+		in.Velocity *= float32(math.Pow(inertiaFriction, float64(secs*60)))
+	} else if decel := inertiaLinearDecel * secs; abs <= decel {
+		in.Velocity = 0
+	} else if in.Velocity > 0 {
+		in.Velocity -= decel
+	} else {
+		in.Velocity += decel
+	}
+	// A velocity below the floor lands nothing more: the Rust version stops
+	// there and drops the step's distance, so the page does not creep.
+	if in.Velocity < inertiaMinVelocity && in.Velocity > -inertiaMinVelocity {
+		in.stop()
+		return 0
+	}
+	return distance
+}
+
 // MenuActions are the document area's context menu commands, bound by the
 // shell to the active tab. A nil func does nothing; HasSelection greys Copy
 // out when there is nothing to copy.
@@ -269,41 +361,53 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 		case ui.InputScroll:
 			// The wheel dies on a vertical-only list unless a handler
 			// turns it (the engine only takes a notch for the axes the
-			// container scrolls), so the handler scrolls here: dy rides
-			// the scroll_speed multiplier, Shift swaps the axis sideways
-			// like the engine does, and touchpad drags (Precise) pass
-			// through unmultiplied to the engine. The default speed 1
-			// passes through too: with nothing to multiply, the engine's
-			// own glide is the better ride.
-			if ev.DY == 0 || ev.Precise {
+			// container scrolls), so the handler turns it here: into the
+			// view's own glide while inertia is on, into an offset write
+			// while it is off. Shift swaps the axis sideways like the
+			// engine does, and a sideways wheel keeps its route.
+			//
+			// A notch that moves nothing keeps its route too: the strip
+			// handlers and the list see a zero notch as they always did.
+			if ev.DY == 0 {
 				return false
 			}
-			dy := ev.DY
-			if ev.Mods&ui.Shift != 0 && ev.DX == 0 {
-				dy, ev.DX = ev.DX, dy
-			}
-			if ev.DX != 0 {
+			// The body's own shifts keep their routes: the code block and
+			// the wide table scroll sideways on DX, and Shift turns the
+			// wheel sideways.
+			if ev.DX != 0 || ev.Mods&ui.Shift != 0 {
 				return false
 			}
-			speed := st.ScrollSpeed
-			if speed <= 0 {
-				speed = 1
+			// A touchpad's drags, and the momentum the platform adds after
+			// them, follow the fingers: the engine glides those itself, and
+			// a glide of ours would fight it. A drag arriving mid-flick
+			// hands the ride over, so the flick ends.
+			if ev.Precise || ev.Momentum {
+				st.Inertia.stop()
+				return false
+			}
+			// Inertia on: the notch becomes velocity, and the view's own
+			// loop rides it out, decaying as the Rust viewer does. The
+			// multiplier rides the impulse, once, so a speed past 1 glides
+			// further rather than landing at once.
+			if !st.NoInertia {
+				st.Inertia.impulse(ev.DY, st.ScrollSpeed, st.Scroll.Y)
+				return true
 			}
 			// The inertia setting off turns the engine's wheel glide off:
 			// mygo glides every notch and has no per-container switch, so
 			// the handler scrolls the notch at once instead, the instant
 			// ride the setting asks for. Windows never reports momentum,
 			// so this branch covers the whole wheel there.
-			if st.NoInertia || speed != 1 {
-				// A direct offset write: TrackScroll lands it next layout,
-				// and the wheelless list takes it from there. Scrolling at
-				// once rather than gliding keeps the multiplier predictable
-				// under repeated notches; a touchpad drag never reaches
-				// this branch.
-				st.Scroll.Y = max(0, min(st.Scroll.Y+dy*speed, st.Scroll.MaxY))
-				return true
+			speed := st.ScrollSpeed
+			if speed <= 0 {
+				speed = 1
 			}
-			return false
+			// A direct offset write: TrackScroll lands it next layout, and
+			// the wheelless list takes it from there. Scrolling at once
+			// rather than gliding keeps the multiplier predictable under
+			// repeated notches; a touchpad drag never reaches this branch.
+			st.Scroll.Y = max(0, min(st.Scroll.Y+ev.DY*speed, st.Scroll.MaxY))
+			return true
 		case ui.InputPointerDown:
 			if ev.Button != 0 {
 				return false
@@ -581,12 +685,19 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.Matches = m.Matches
 	st.Current = m.Current
 	st.anchorModel = m
+	// The glide writes the offset before the list is built, so its
+	// TrackScroll takes the new place in this frame: a write after the list
+	// exists reaches the container only after the list laid its rows out,
+	// which writes the old place back.
+	st.glide(c)
 	list := ui.List(c, &st.List, m.Len(), func(r int) {
 		st.Row(c, m, r)
 	}).Grow(1).TrackScroll(&st.Scroll)
 	st.updateScrollPlace(c, list)
-	// The handler takes the pointer for the drag selection and returns
-	// false for the rest, the wheel among it, so the list keeps scrolling.
+	// The handler takes the pointer for the drag selection and the wheel
+	// for its glide, and returns false for the rest, so the list keeps
+	// scrolling what the handler leaves it: touchpad drags, sideways
+	// wheels, and every notch the inertia setting is off for.
 	list.HandleInput(st.Handler(m))
 	if st.Menu != nil {
 		list.ContextMenu(func(menu *ui.Menu) { st.documentMenu(menu) })
@@ -596,6 +707,52 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	}
 	st.scrollPendingAnchor(m)
 	st.scrollPendingMatch(m)
+}
+
+// glide advances the wheel's inertia by this frame's step and writes the
+// distance to the offset, then asks for the frame that steps again. A move
+// of the offset it did not write wins: anything else that scrolled the view
+// since its last write (a jump, a List command, the keys, a thumb drag, a
+// reload) ends the glide before the two fight.
+func (st *State) glide(c *ui.Context) {
+	if !st.Inertia.active() {
+		return
+	}
+	if st.Scroll.Y != st.Inertia.wroteY {
+		st.Inertia.stop()
+		return
+	}
+	now := c.Now()
+	dt := now.Sub(st.Inertia.last)
+	if st.Inertia.last.IsZero() {
+		dt = inertiaFirstStep
+	} else if dt <= 0 {
+		// The clock did not move since the last step, as a second build of
+		// one frame: no time passed, so nothing moves.
+		c.AnimationFrame()
+		return
+	}
+	dt = min(dt, inertiaMaxStep)
+	st.Inertia.last = now
+	distance := st.Inertia.step(dt, st.ScrollSpeed)
+	if distance != 0 {
+		next := st.Scroll.Y + distance
+		// Below a zero MaxY the container has not laid the content out yet,
+		// and MaxY is still 0: clamping there would pin the offset at the
+		// top and stop a glide that is only starting.
+		if st.Scroll.MaxY > 0 {
+			next = max(0, min(next, st.Scroll.MaxY))
+		}
+		if next == st.Scroll.Y {
+			// The edge holds the view: nothing more of this glide lands.
+			st.Inertia.stop()
+		} else {
+			st.Scroll.Y, st.Inertia.wroteY = next, next
+		}
+	}
+	// The engine stops asking for frames once the event that started the
+	// glide is handled: the glide asks for its own.
+	c.AnimationFrame()
 }
 
 // updateScrollPlace reads the scroll place the last laid-out frame left

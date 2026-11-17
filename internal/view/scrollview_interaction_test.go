@@ -55,8 +55,10 @@ func TestScrollViewWheelStillScrolls(t *testing.T) {
 	}
 }
 
-// At a speed past 1 the handler scrolls the notch itself, the multiplier
-// riding the offset write: a 2x speed lands twice a notch's travel.
+// At a speed past 1 the handler still multiplies, but the notch becomes the
+// velocity that many times and the view rides it out: the wheel takes the
+// page further instead of landing the notch at once, as the Rust version's
+// does (design §8.2), so the travel is the curve's, not the notch's.
 func TestScrollViewWheelSpeedMultiplies(t *testing.T) {
 	long := strings.Repeat("Paragraph of filler text to scroll past.\n\n", 60)
 	m := doc.New(long)
@@ -68,8 +70,14 @@ func TestScrollViewWheelSpeedMultiplies(t *testing.T) {
 	}, 400, 300)
 	tt.Frame()
 	tt.Wheel(200, 150, 0, 120)
-	tt.Advance(200 * time.Millisecond)
-	if got := state.Scroll.Y; !near(got, 240) {
-		t.Fatalf("scroll y = %v after one notch, want the 2x 240", got)
+	tt.Advance(500 * time.Millisecond)
+	// 120 DIPs * 8 * 2 is 1920 DIP/s, decaying linearly at 8000 DIP/s: the
+	// glide lands near v0*v0/(2*8000), about 230 DIPs, where one notch at
+	// speed 1 lands about 58.
+	if got := state.Scroll.Y; got < 200 || got > 280 {
+		t.Fatalf("scroll y = %v after one notch at 2x, want the glide's ~230", got)
+	}
+	if state.Inertia.Velocity != 0 {
+		t.Fatalf("velocity = %v after the glide, want 0", state.Inertia.Velocity)
 	}
 }
