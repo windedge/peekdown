@@ -1085,9 +1085,26 @@ type style struct {
 }
 
 func (st *State) heading(c *ui.Context, m *doc.Model, i, level int) {
-	s := style{weight: 700}
+	s := style{weight: headingWeight(level)}
 	s.size, s.color = headingStyle(c, st, level)
 	st.richParagraph(c, m, i, s, true)
+}
+
+// headingWeight is the level's font weight, the Rust renderer's ladder:
+// h1 stands out alone at bold, h2-h5 share semibold and h6 lands at
+// medium, just above the body's 400 (src/text/node.rs:1828-1835). A
+// non-heading level reads as body.
+func headingWeight(level int) int {
+	switch {
+	case level <= 0:
+		return 400
+	case level == 1:
+		return 700
+	case level <= 5:
+		return 600
+	default:
+		return 500
+	}
 }
 
 func (st *State) paragraph(c *ui.Context, m *doc.Model, i int, s style) {

@@ -530,6 +530,31 @@ func absDiff(a, b uint8) int {
 	return int(b) - int(a)
 }
 
+// TestHeadingWeightFollowsTheLadder checks the headings' font weights
+// grade by level as the Rust renderer's do: h1 bold, h2-h5 semibold, h6
+// medium, the body below them all at 400. The mapping is the port; the
+// second half pins the weight onto the rendered spans, so a dropped
+// Weight in spans() fails here too.
+func TestHeadingWeightFollowsTheLadder(t *testing.T) {
+	for _, tc := range []struct {
+		level int
+		want  int
+	}{{1, 700}, {2, 600}, {3, 600}, {4, 600}, {5, 600}, {6, 500}, {0, 400}, {9, 500}} {
+		if got := headingWeight(tc.level); got != tc.want {
+			t.Fatalf("headingWeight(%d) = %d, want %d", tc.level, got, tc.want)
+		}
+	}
+	m := doc.New("#### Four\n")
+	var got []ui.Span
+	_ = ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		got = (&State{}).spans(c, m, m.Blocks()[0].Index, style{weight: headingWeight(4), size: 18})
+	}, 640, 400)
+	if len(got) == 0 || got[0].Weight != 600 {
+		t.Fatalf("spans %v: weight not carried, want 600", got)
+	}
+}
+
 // TestInlineCodeChipReadableInBothThemes checks the chip stands off the
 // page in either appearance: a tint that faded into the background would
 // leave the code as bare text again.
