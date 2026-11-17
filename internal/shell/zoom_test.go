@@ -168,7 +168,7 @@ func TestZoomNotPersisted(t *testing.T) {
 	if saves != 0 {
 		t.Fatalf("%d saves after the zoom, want the zoom out of settings.json", saves)
 	}
-	if s.Saved.FontSize != 16 || s.Draft.FontSize != 16 {
-		t.Fatalf("settings font size %v / %v after the zoom, want 16", s.Saved.FontSize, s.Draft.FontSize)
+	if s.Saved.FontSize != 16 {
+		t.Fatalf("settings font size %v after the zoom, want 16", s.Saved.FontSize)
 	}
 }

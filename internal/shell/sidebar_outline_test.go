@@ -232,8 +232,8 @@ func TestSidebarDragPersistsWidth(t *testing.T) {
 	if s.Saved.SidebarWidth != float64(s.Sidebar.Width) {
 		t.Fatalf("saved %.0f, want the settled %.0f", s.Saved.SidebarWidth, s.Sidebar.Width)
 	}
-	if s.Draft.SidebarWidth != s.Saved.SidebarWidth {
-		t.Fatalf("draft %.0f not synced with saved %.0f", s.Draft.SidebarWidth, s.Saved.SidebarWidth)
+	if s.Saved.SidebarWidth != float64(s.Sidebar.Width) {
+		t.Fatalf("saved %.0f not synced with the sidebar's %.0f", s.Saved.SidebarWidth, s.Sidebar.Width)
 	}
 }
 

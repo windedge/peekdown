@@ -63,7 +63,7 @@ func openTree(t *testing.T, s *Shell, proj string) *ui.Tester {
 	saved.ProjectRootMarkers = []string{"go.mod"}
 	saved.ExplorerSortMode = "name_asc"
 	saved.ExpandedDirs = nil
-	s.Saved, s.Draft = saved, saved
+	s.Saved = saved
 	if err := s.OpenFile(filepath.Join(proj, "root.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestFileTreeRestoresExpandedFromSettings(t *testing.T) {
 	saved := s.Saved
 
 	s2, _ := newShell(t)
-	s2.Saved, s2.Draft = saved, saved
+	s2.Saved = saved
 	if err := s2.OpenFile(filepath.Join(proj, "root.md")); err != nil {
 		t.Fatal(err)
 	}

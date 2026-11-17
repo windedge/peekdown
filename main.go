@@ -115,18 +115,6 @@ func (a *app) OnTitleChange(title string) {
 	}
 }
 
-// themeSource maps the saved theme to mygo's appearance source.
-func themeSource(theme string) mygo.ThemeSource {
-	switch theme {
-	case "light":
-		return mygo.ThemeLight
-	case "dark":
-		return mygo.ThemeDark
-	default:
-		return mygo.ThemeSystem
-	}
-}
-
 // syncWindowButtons draws the system's window controls in the bar's
 // colors, from the theme the shell holds: the light or dark the bar
 // paints, not the system's appearance the window defaults to.
@@ -134,7 +122,7 @@ func (a *app) syncWindowButtons() {
 	if a.win == nil {
 		return
 	}
-	a.win.SetWindowButtonsTheme(themeSource(a.shell.Saved.Theme))
+	a.win.SetWindowButtonsTheme(shell.ThemeSource(a.shell.Saved.Theme))
 }
 
 // loadSettings reads the settings from the user data directory.

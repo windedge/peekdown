@@ -37,6 +37,7 @@
   "clear": "清除",
   "noDocumentOpen": "未打开文档",
   "zoomTooltip": "缩放: Ctrl+= / Ctrl+- / Ctrl+0",
+  "fpsTooltip": "每秒帧数",
   "jumpTop": "滚动到顶部",
   "jumpBottom": "滚动到底部",
 
@@ -79,11 +80,13 @@
   "searchCount": "{current}/{total}",
 
   "settingsTitle": "设置",
+  "settingsDone": "完成",
   "settingsSectionAppearance": "外观",
   "settingsSectionEditor": "编辑器",
   "settingsSectionFiles": "文件",
   "settingsSectionSystem": "系统",
   "settingsTheme": "主题",
+  "settingsThemeDetail": "Auto 跟随系统的浅色或深色外观。",
   "settingsLayout": "布局",
   "layoutCentered": "居中",
   "layoutFullWidth": "全宽",
@@ -98,6 +101,7 @@
   "explorerProjectDirectory": "项目目录",
   "settingsProjectRootMarkers": "项目根标记",
   "settingsAutoRefresh": "自动刷新",
+  "settingsShowFPS": "显示帧率",
   "settingsLanguage": "语言",
   "languageSystem": "跟随系统",
   "languageEnglish": "English",
@@ -131,6 +135,7 @@
 
   "mermaidRendered": "图表已渲染。打开 SVG 查看完整视图。",
   "mermaidFailed": "图表渲染失败",
+  "monoBadge": "等宽",
 
   "couldNotReadDocument": "无法读取此文档: {error}",
 

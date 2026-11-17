@@ -37,6 +37,7 @@
   "clear": "Clear",
   "noDocumentOpen": "No document open",
   "zoomTooltip": "Zoom: Ctrl+= / Ctrl+- / Ctrl+0",
+  "fpsTooltip": "Frames per second",
   "jumpTop": "Scroll to top",
   "jumpBottom": "Scroll to bottom",
 
@@ -81,11 +82,13 @@
   "@searchCount": { "placeholders": { "current": { "type": "String" }, "total": { "type": "String" } } },
 
   "settingsTitle": "Settings",
+  "settingsDone": "Done",
   "settingsSectionAppearance": "Appearance",
   "settingsSectionEditor": "Editor",
   "settingsSectionFiles": "Files",
   "settingsSectionSystem": "System",
   "settingsTheme": "Theme",
+  "settingsThemeDetail": "Light and dark follow the system when Auto.",
   "settingsLayout": "Layout",
   "layoutCentered": "Centered",
   "layoutFullWidth": "Full Width",
@@ -100,6 +103,7 @@
   "explorerProjectDirectory": "Project Directory",
   "settingsProjectRootMarkers": "Project Root Markers",
   "settingsAutoRefresh": "Auto Refresh",
+  "settingsShowFPS": "Show FPS",
   "settingsLanguage": "Language",
   "languageSystem": "System Default",
   "languageEnglish": "English",
@@ -134,6 +138,7 @@
 
   "mermaidRendered": "Diagram rendered. Open SVG for full view.",
   "mermaidFailed": "Diagram failed to render",
+  "monoBadge": "Mono",
 
   "couldNotReadDocument": "Could not read this document: {error}",
   "@couldNotReadDocument": { "placeholders": { "error": { "type": "String" } } },

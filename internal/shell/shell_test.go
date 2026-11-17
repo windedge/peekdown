@@ -39,7 +39,9 @@ func newShell(t *testing.T) (*Shell, string) {
 		saved = v
 		return nil
 	}
-	s.SetTheme = func(mygo.ThemeSource) {}
+
+	var applied []string
+	s.SetTheme = func(src mygo.ThemeSource) { applied = append(applied, string(src)) }
 	s.Recent = func() []string { return append([]string(nil), recent...) }
 	// The mygo store dedupes and moves the opened path to the front; a
 	// stub that only prepends would list one path twice and panic on
@@ -60,7 +62,6 @@ func newShell(t *testing.T) (*Shell, string) {
 	}
 	s.OpenDialog = func() ([]string, error) { return []string{a, b}, nil }
 	s.Saved = s.Load()
-	s.Draft = s.Saved
 	s.Sidebar.Visible = false
 	return s, dir
 }
@@ -310,8 +311,10 @@ func TestSidebarToggleAndWidth(t *testing.T) {
 	}
 }
 
-func TestSettingsRoundTrip(t *testing.T) {
+func TestSettingsApplyImmediately(t *testing.T) {
 	s, _ := newShell(t)
+	var applied string
+	s.SetTheme = func(src mygo.ThemeSource) { applied = string(src) }
 	tt := s.renderSize(t, 800, 1000)
 	s.OpenSettings()
 	tt.Frame()
@@ -319,50 +322,43 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("dialog missing: %v", tt.Texts())
 	}
 
-	s.Draft.Theme = "dark"
-	s.Draft.Layout = "full_width"
-	s.Draft.ScrollSpeed = 2
-	s.markersText = " go.mod , package.json "
-	tt.Frame()
-
-	if err := tt.Click("Save"); err != nil {
+	// Choosing Dark applies at once: the saved settings and the host
+	// theme both hold it without any Save press.
+	if err := tt.Click("Dark"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if s.SettingsOpen {
-		t.Fatal("dialog still open after save")
+	if s.Saved.Theme != settings.ThemeDark {
+		t.Fatalf("theme = %q right after the click, want Dark applied at once", s.Saved.Theme)
 	}
-	if s.Saved.Theme != "dark" || s.Saved.Layout != "full_width" || s.Saved.ScrollSpeed != 2 {
-		t.Fatalf("saved = %+v", s.Saved)
-	}
-	want := []string{"go.mod", "package.json"}
-	if len(s.Saved.ProjectRootMarkers) != len(want) {
-		t.Fatalf("markers = %v, want %v", s.Saved.ProjectRootMarkers, want)
-	}
-	for i := range want {
-		if s.Saved.ProjectRootMarkers[i] != want[i] {
-			t.Fatalf("markers = %v, want %v", s.Saved.ProjectRootMarkers, want)
-		}
+	if applied != "dark" {
+		t.Fatalf("host theme = %q, want dark applied immediately", applied)
 	}
 
-	// Reopening the dialog starts from the saved values again.
-	s.OpenSettings()
-	if s.Draft.Theme != "dark" || s.Draft.Layout != "full_width" {
-		t.Fatalf("draft = %+v", s.Draft)
+	// The layout segmented applies too.
+	if err := tt.Click("Full Width"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.Saved.Layout != "full_width" {
+		t.Fatalf("layout = %q after the click, want full_width", s.Saved.Layout)
 	}
 	if s.draftLayout != 1 {
 		t.Fatalf("draftLayout = %d, want 1", s.draftLayout)
 	}
+
+	// Reopening the dialog reads the applied values.
+	s.OpenSettings()
+	if s.draftLayout != 1 {
+		t.Fatalf("draftLayout after reopen = %d, want 1", s.draftLayout)
+	}
 	tt.Frame()
-	if err := tt.Click("Cancel"); err != nil {
+	if err := tt.Click("Done"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if s.SettingsOpen {
-		t.Fatal("dialog still open after cancel")
-	}
-	if s.Draft.Theme != s.Saved.Theme {
-		t.Fatalf("cancel did not restore the draft: %+v", s.Draft)
+		t.Fatal("dialog still open after Done")
 	}
 }
 
@@ -373,7 +369,9 @@ func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
 	s.OpenSettings()
 	tt.Frame()
 
-	if err := tt.Click("Save"); err != nil {
+	// A control's change persists at once; a failing write shows its
+	// error and leaves the dialog open with the choice standing.
+	if err := tt.Click("Dark"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -383,18 +381,27 @@ func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
 	if !tt.HasText("disk full") {
 		t.Fatalf("texts %q: want the save error", tt.Texts())
 	}
+
+	// Done still closes it.
+	if err := tt.Click("Done"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.SettingsOpen {
+		t.Fatal("dialog still open after Done")
+	}
 }
 
 // TestRestoreFromSettings walks the startup restore: the saved sidebar
-// width, tab and visibility land on the shell, the draft follows the
-// saved values, and the theme reaches the host. An unknown tab name
+// width, tab and visibility land on the shell and the theme reaches
+// the host. An unknown tab name
 // falls back to the explorer, a hidden sidebar stays hidden.
 func TestRestoreFromSettings(t *testing.T) {
 	s := New()
 	var theme string
 	s.SetTheme = func(source mygo.ThemeSource) { theme = string(source) }
 	var saved settings.Settings
-	saved.Theme = "dark"
+	saved.Theme = settings.ThemeDark
 	saved.SidebarWidth = 333
 	saved.SidebarTab = "outline"
 	saved.SidebarVisible = true
@@ -403,8 +410,8 @@ func TestRestoreFromSettings(t *testing.T) {
 	if s.Sidebar.Width != 333 || s.Sidebar.Tab != 1 || !s.Sidebar.Visible {
 		t.Fatalf("sidebar after restore: %+v", s.Sidebar)
 	}
-	if !reflect.DeepEqual(s.Draft, saved) || !reflect.DeepEqual(s.Saved, saved) {
-		t.Fatalf("draft = %+v, saved = %+v, want the restored %+v", s.Draft, s.Saved, saved)
+	if !reflect.DeepEqual(s.Saved, saved) {
+		t.Fatalf("saved = %+v, want the restored %+v", s.Saved, saved)
 	}
 	if theme != "dark" {
 		t.Fatalf("theme = %q, want dark", theme)

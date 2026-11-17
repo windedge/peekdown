@@ -52,10 +52,7 @@ func (s *Shell) openFontPicker(open *bool) {
 // fontPicker draws the searchable font picker as a popover anchored to
 // the font trigger that opened it, built after the settings dialog so it
 // stacks over it. Dismissing it only closes it: like every dialog field,
-// the picker writes the draft, and Save persists it. Without a scrim, a
-// press outside reaches what it went down on, as a select's popup does;
-// a press on the settings backdrop therefore lands on the modal, whose
-// dismissal the caller reverts when it carries this panel's.
+// the picker's row click applies through persist at once.
 func (s *Shell) fontPicker(c *ui.Context, anchor ui.Element, open *bool, which int) {
 	if !*open || !anchor.Valid() {
 		return
@@ -121,7 +118,7 @@ func (s *Shell) fontPickerRow(c *ui.Context, f ui.FontFamily, which int) {
 	// the draft's empty string.
 	name := f.Name
 	if name == "" {
-		name = "System Default"
+		name = locales.SystemDefault()
 	}
 	// The row's accessible name carries " row" past the text it shows:
 	// a trigger shows the same family's name beside it, and a click on
@@ -151,10 +148,10 @@ func (s *Shell) fontPickerRow(c *ui.Context, f ui.FontFamily, which int) {
 		if f.Name != "" {
 			label.Font(f.Name)
 		}
-		// A compact "Mono" chip marks the families a code font needs.
+		// A compact chip marks the families a code font needs.
 		if f.Monospaced {
 			ui.Box(c).Padding(2, 6).Radius(4).Background(t.Border).Children(func() {
-				ui.Text(c, "Mono").FontSize(9).TextColor(t.TextMuted)
+				ui.Text(c, locales.MonoBadge()).FontSize(9).TextColor(t.TextMuted)
 			})
 		}
 		// The draft's own value carries the check: the row the picker
@@ -167,26 +164,28 @@ func (s *Shell) fontPickerRow(c *ui.Context, f ui.FontFamily, which int) {
 		}
 	})
 	if row.Clicked() {
-		s.setFontPickValue(which, f.Name)
+		s.setFontPickValue(c, which, f.Name)
 		s.fontPickOpen, s.fontPickMonoOpen = false, false
 	}
 }
 
-// fontPickValue is the draft family the picker edits.
+// fontPickValue is the saved family the picker edits.
 func (s *Shell) fontPickValue(which int) string {
 	if which == fontMono {
-		return s.Draft.MonoFontFamily
+		return s.Saved.MonoFontFamily
 	}
-	return s.Draft.FontFamily
+	return s.Saved.FontFamily
 }
 
-// setFontPickValue writes the draft family the picker edits.
-func (s *Shell) setFontPickValue(which int, v string) {
+// setFontPickValue writes the family the picker edits into the saved
+// settings and applies it at once.
+func (s *Shell) setFontPickValue(c *ui.Context, which int, v string) {
 	if which == fontMono {
-		s.Draft.MonoFontFamily = v
-		return
+		s.Saved.MonoFontFamily = v
+	} else {
+		s.Saved.FontFamily = v
 	}
-	s.Draft.FontFamily = v
+	s.persist()
 }
 
 // fontFilter passes a family whose name holds every word of the query,

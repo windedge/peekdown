@@ -4,12 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestDefault(t *testing.T) {
 	s := Default()
-	if s.Version != 1 || s.Theme != "auto" || s.Layout != "centered" {
+	if s.Version != 1 || s.Theme != "Auto" || s.Layout != "centered" {
 		t.Fatalf("defaults: %+v", s)
 	}
 	if s.FontSize != 16 || s.MonoFontSize != 13 || s.ScrollSpeed != 1 {
@@ -81,7 +82,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
 	want := Default()
-	want.Theme = "dark"
+	want.Theme = "Dark"
 	want.FontFamily = "Georgia"
 	want.FontSize = 18
 	want.ExpandedDirs = []string{"/a", "/b"}
@@ -108,7 +109,7 @@ func TestUnknownKeysIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Theme != "light" || got.FontSize != 16 || got.Layout != "centered" {
+	if got.Theme != "Light" || got.FontSize != 16 || got.Layout != "centered" {
 		t.Fatalf("unknown keys: %+v", got)
 	}
 }
@@ -164,7 +165,7 @@ func TestSaveReplacesTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := Default()
-	second.Theme = "dark"
+	second.Theme = "Dark"
 	if err := Save(path, second); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,47 @@ func TestSaveReplacesTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Theme != "dark" {
+	if got.Theme != "Dark" {
 		t.Fatalf("theme after the second save: %q", got.Theme)
+	}
+}
+
+// TestLoadNormalizesLegacyTheme checks a file written before the theme's
+// choices were Title Case loads as this build spells them, and that saving
+// it writes the new spelling.
+func TestLoadNormalizesLegacyTheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"theme":"auto"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != ThemeAuto {
+		t.Fatalf("legacy auto loaded as %q, want %q", got.Theme, ThemeAuto)
+	}
+	if err := Save(path, got); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"theme": "Auto"`) {
+		t.Fatalf("saved file keeps the old spelling: %s", data)
+	}
+
+	// The other spellings, in either case, map the same way.
+	for in, want := range map[string]string{
+		"light":  ThemeLight,
+		"DARK":   ThemeDark,
+		"Auto":   ThemeAuto,
+		"Light":  ThemeLight,
+		"system": "system", // unknown values stay put
+	} {
+		if got := normalizeTheme(in); got != want {
+			t.Errorf("normalizeTheme(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

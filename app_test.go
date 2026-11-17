@@ -19,7 +19,7 @@ func newTestApp(t *testing.T) *app {
 	s.Save = func(settings.Settings) error { return nil }
 	s.SetTheme = func(mygo.ThemeSource) {}
 	s.Saved = s.Load()
-	s.Draft = s.Saved
+
 	return &app{shell: s}
 }
 
@@ -170,10 +170,15 @@ func TestThemeSource(t *testing.T) {
 		"light": mygo.ThemeLight,
 		"dark":  mygo.ThemeDark,
 		"other": mygo.ThemeSystem,
+		// The dialog's spellings, and an old file's lowercase ones above:
+		// both map to the same appearance.
+		"Auto":  mygo.ThemeSystem,
+		"Light": mygo.ThemeLight,
+		"Dark":  mygo.ThemeDark,
 	}
 	for in, want := range cases {
-		if got := themeSource(in); got != want {
-			t.Errorf("themeSource(%q) = %q, want %q", in, got, want)
+		if got := shell.ThemeSource(in); got != want {
+			t.Errorf("ThemeSource(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

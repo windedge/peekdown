@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -23,13 +24,22 @@ const FileName = "settings.json"
 // cannot represent.
 const currentVersion = 1
 
+// The theme values this build stores, spelled as the settings dialog lists
+// them. Files written before the choices went Title Case carry the lowercase
+// spellings; Load maps those onto these.
+const (
+	ThemeAuto  = "Auto"
+	ThemeLight = "Light"
+	ThemeDark  = "Dark"
+)
+
 // Settings are the preferences the settings dialog edits. The JSON keys keep
 // the Rust implementation's names where the meaning is the same, so the file
 // stays recognizable.
 type Settings struct {
 	Version int `json:"version"`
 
-	Theme          string  `json:"theme"`  // auto, light or dark
+	Theme          string  `json:"theme"`  // Auto, Light or Dark
 	Layout         string  `json:"layout"` // centered or full_width
 	ScrollSpeed    float64 `json:"scroll_speed"`
 	FontFamily     string  `json:"font_family"`
@@ -39,7 +49,7 @@ type Settings struct {
 	ShowFPS        bool    `json:"show_fps"`
 	InertiaScroll  bool    `json:"inertia_scroll"`
 
-	ExplorerRootMode   string   `json:"explorer_root_mode"` // current_dir or project_root
+	ExplorerRootMode   string   `json:"explorer_root_mode"` // project_root (default) or current_dir
 	ExplorerSortMode   string   `json:"explorer_sort_mode"` // name_asc, name_desc, time_desc or time_asc
 	ProjectRootMarkers []string `json:"project_root_markers"`
 	ExpandedDirs       []string `json:"expanded_dirs"`
@@ -53,13 +63,13 @@ type Settings struct {
 func Default() Settings {
 	return Settings{
 		Version:          1,
-		Theme:            "auto",
+		Theme:            ThemeAuto,
 		Layout:           "centered",
 		ScrollSpeed:      1,
 		FontSize:         16,
 		MonoFontSize:     13,
 		InertiaScroll:    true,
-		ExplorerRootMode: "current_dir",
+		ExplorerRootMode: "project_root",
 		ExplorerSortMode: "name_asc",
 		ProjectRootMarkers: []string{
 			"Cargo.toml",
@@ -100,7 +110,24 @@ func Load(path string) (Settings, error) {
 	if s.Version > currentVersion {
 		return Default(), fmt.Errorf("%s: settings version %d is newer than %d", path, s.Version, currentVersion)
 	}
+	s.Theme = normalizeTheme(s.Theme)
 	return s, nil
+}
+
+// normalizeTheme reads an older file's theme as this build spells it. The
+// match ignores case, so a file that says "auto" or "AUTO" loads as Auto;
+// a value this build does not know stays as it was, and ThemeSource treats
+// it as the system appearance.
+func normalizeTheme(theme string) string {
+	switch strings.ToLower(theme) {
+	case "", "auto":
+		return ThemeAuto
+	case "light":
+		return ThemeLight
+	case "dark":
+		return ThemeDark
+	}
+	return theme
 }
 
 // Save writes s to path, replacing the file atomically so a crash cannot

@@ -62,12 +62,12 @@ type Shell struct {
 	}
 	tree         treeState
 	SettingsOpen bool
-	Draft        settings.Settings
 	Saved        settings.Settings
-	// before is the draft as the dialog opened it: a popover's outside
-	// press lands on the settings backdrop, so a dismissal that carries
-	// one restores this instead of Saved.
-	before settings.Settings
+	// rows counts the rows the settings dialog's card draws, for the
+	// hairline between them; persistTimer holds the debounced persist a
+	// text-like control armed.
+	rows         int
+	persistTimer time.Time
 	// fontPickOpen shows the content font's popover, fontPickMonoOpen the
 	// mono one; fontSearch is the open one's field text. fontList is
 	// the virtual list's state across frames.
@@ -81,6 +81,10 @@ type Shell struct {
 	// untouched (ticket #25).
 	Zoom    int
 	saveErr string
+	// fps measures the frames the window draws for the status bar's
+	// optional readout; it is idle, and pulls no frames, while the switch
+	// is off.
+	fps fpsMeter
 	// widthSaveTimer is when a sidebar drag's width lands in the
 	// settings: armed by a divider move, cleared once saved.
 	widthSaveTimer time.Time
@@ -88,6 +92,11 @@ type Shell struct {
 	// SearchOpen shows the search bar; search is its state.
 	SearchOpen bool
 	search     searchBar
+
+	// progressBody is the body box's identity: the reading progress bar
+	// reads its committed bounds, so the fill stops at the body's right
+	// edge when the sidebar narrows it.
+	progressBody ui.Handle
 
 	// mermaidCache renders the mermaid blocks of every tab: one app-wide
 	// LRU, shared across tabs and theme or zoom changes.
@@ -460,24 +469,22 @@ const widthSaveDelay = 300 * time.Millisecond
 // is instant state, not a settings-dialog field.
 func (s *Shell) persistSidebarWidth() {
 	s.Saved.SidebarWidth = float64(s.Sidebar.Width)
-	s.Draft.SidebarWidth = s.Saved.SidebarWidth
 	if s.Save != nil {
 		_ = s.Save(s.Saved)
 	}
 }
 
 // RestoreFromSettings puts the saved settings on the shell at startup:
-// the draft, the sidebar's width, tab and visibility, and the theme. It
-// does not persist; the host mirrors the theme on the window.
+// the sidebar's width, tab and visibility, and the theme. It does not
+// persist; the host mirrors the theme on the window.
 func (s *Shell) RestoreFromSettings(t settings.Settings) {
 	s.Saved = t
-	s.Draft = t
 	s.SetSidebarWidth(float32(t.SidebarWidth))
 	s.Sidebar.Visible = t.SidebarVisible
 	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
 	s.applyAutoRefresh()
 	if s.SetTheme != nil {
-		s.SetTheme(themeSource(t.Theme))
+		s.SetTheme(ThemeSource(t.Theme))
 	}
 }
 
@@ -554,10 +561,9 @@ func (s *Shell) fontSizes() (body, mono float32) {
 	return body * f, mono * f
 }
 
-// Apply persists t and syncs the draft plus the host theme.
+// Apply persists t and syncs the host theme.
 func (s *Shell) Apply(t settings.Settings) error {
 	s.Saved = t
-	s.Draft = t
 	// The root mode, the markers and the sort mode all decide what the
 	// tree lists: drop the listings so the next frame reads them again.
 	s.invalidateTree()
@@ -567,7 +573,7 @@ func (s *Shell) Apply(t settings.Settings) error {
 	s.applyAutoRefresh()
 	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
 	if s.SetTheme != nil {
-		s.SetTheme(themeSource(t.Theme))
+		s.SetTheme(ThemeSource(t.Theme))
 	}
 	s.markersText = strings.Join(t.ProjectRootMarkers, ", ")
 	if s.Save != nil {
@@ -576,14 +582,12 @@ func (s *Shell) Apply(t settings.Settings) error {
 	return nil
 }
 
-// OpenSettings opens the dialog with a pristine draft, and the snapshot
-// a font popover's outside press hands the draft back to.
+// OpenSettings opens the dialog: the controls read Saved, and the frame
+// bindings (segmented indexes, the markers text) start from it.
 func (s *Shell) OpenSettings() {
-	s.Draft = s.Saved
-	s.before = s.Draft
-	s.draftLayout = layoutIndex(s.Draft.Layout)
-	s.draftExplorer = explorerIndex(s.Draft.ExplorerRootMode)
-	s.markersText = strings.Join(s.Draft.ProjectRootMarkers, ", ")
+	s.draftLayout = layoutIndex(s.Saved.Layout)
+	s.draftExplorer = explorerIndex(s.Saved.ExplorerRootMode)
+	s.markersText = strings.Join(s.Saved.ProjectRootMarkers, ", ")
 	s.SettingsOpen = true
 }
 
@@ -618,6 +622,8 @@ func (s *Shell) RegisterShortcuts(c *ui.Context) {
 
 // View renders the whole shell.
 func (s *Shell) View(c *ui.Context) {
+	s.trackFrames(c)
+	s.settlePersist(c)
 	s.RegisterShortcuts(c)
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
@@ -632,9 +638,14 @@ func (s *Shell) View(c *ui.Context) {
 			return
 		}
 		// The bar floats over the body's top right inside the clipped body
-		// container, so opening it never pushes the document around.
+		// container, so opening it never pushes the document around. The
+		// box the bar's fill is measured against is the body itself, not
+		// the window: with the sidebar visible the body is narrower, and
+		// the bar must stop at the body's right edge (progressBody).
 		body := func() {
-			s.content(c)
+			ui.Box(c).Fill().Bind(&s.progressBody).Label("Body").Children(func() {
+				s.content(c)
+			})
 			if s.SearchOpen {
 				s.searchView(c)
 			}
@@ -792,7 +803,7 @@ func (s *Shell) readingProgress(c *ui.Context) {
 	if tab == nil || tab.Model == nil || tab.State.Progress <= 0 {
 		return
 	}
-	ui.Box(c).Absolute().Top(0).Left(0).Height(2).Width(max(0, min(tab.State.Progress, 1)) * float32(bodyWidth(c))).
+	ui.Box(c).Absolute().Top(0).Left(0).Height(2).Width(max(0, min(tab.State.Progress, 1)) * s.bodyWidth(c)).
 		Background(c.Theme().Accent).ZIndex(5)
 }
 
@@ -821,11 +832,13 @@ func (s *Shell) jumpButtons(c *ui.Context) {
 	})
 }
 
-// bodyWidth is the width of the body container the progress bar and the
-// jump buttons float in, read off the frame's window.
-func bodyWidth(c *ui.Context) float32 {
-	w, _ := c.Size()
-	return w
+// bodyWidth is the width of the body container the progress bar floats
+// in: the committed bounds of the box Content binds progressBody to, so
+// a visible sidebar narrows the fill instead of letting it overrun the
+// body's right edge. Zero before the first layout, or on the welcome
+// page where the box never built; the bar's caller skips those frames.
+func (s *Shell) bodyWidth(c *ui.Context) float32 {
+	return s.progressBody.Bounds(c).W
 }
 
 // openLocalLink resolves dest, as a document's link wrote it, against
@@ -949,10 +962,19 @@ func (s *Shell) welcome(c *ui.Context) {
 	})
 }
 
-// statusBar renders the strip under the body: the zoom readout, right
-// aligned where the bar's entries used to sit. mygo exposes no frame-rate
-// API (a surface's refresh rate only, not a counter), so the Rust
-// version's optional FPS readout has no counterpart here.
+// trackFrames feeds the FPS readout and asks for the next frame while it
+// shows: the readout counts real frames, so it keeps them coming. With the
+// switch off, or on the welcome page where the bar is not drawn, nothing is
+// sampled and no frame is pulled, so it costs nothing.
+func (s *Shell) trackFrames(c *ui.Context) {
+	if !s.Saved.ShowFPS || s.Home || len(s.Tabs) == 0 {
+		s.fps.reset()
+		return
+	}
+	s.fps.sample(c.Now())
+	c.AnimationFrame()
+}
+
 // welcomeRoom is the height the welcome page spends above its recent
 // list: the greeting, the open button, the hint and the list's caption,
 // with their gaps.
@@ -978,20 +1000,38 @@ const centeredWidth = float32(900)
 // it.
 const recentRowPadEnd = 14
 
+// statusBar renders the strip under the body: the FPS readout at the left
+// edge, the zoom readout at the right, the room between them empty.
 func (s *Shell) statusBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Height(28).Padding(2, 8).Gap(6).Background(t.Surface).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).AlignItems(ui.Center).Children(func() {
 		// The readout is a label, not a control: the menu's chords drive
-		// the zoom, and the bar keeps its entries on the right edge.
+		// the zoom, so the zoom line stays a label at the bar's other end.
+		//
+		// The readout keeps the box fpsWidth wide whichever text it shows, so
+		// the zoom label never slides as the text changes.
+		if text := s.fps.label(); text != "" {
+			// Muted even when a frame was dropped: a stall shows in the
+			// meter, not as an error colour in the corner.
+			ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).Width(fpsWidth).Shrink(0).
+				MaxLines(1).Tooltip(locales.FpsTooltip())
+		} else if s.Saved.ShowFPS && !s.Home && len(s.Tabs) > 0 {
+			// Hold the room the readout takes before its first window fills:
+			// the zoom label must not jump when the text arrives.
+			ui.Box(c).Width(fpsWidth).Shrink(0)
+		}
 		ui.Box(c).Grow(1)
 		ui.Text(c, s.ZoomLabel()).FontSize(11).TextColor(t.TextMuted).MarginX(6).
 			Tooltip(locales.ZoomTooltip())
 	})
 }
 
-func themeSource(theme string) mygo.ThemeSource {
-	switch theme {
+// ThemeSource maps the saved theme to mygo's appearance source. The match
+// ignores case: settings files written before the choices were Title Case
+// carry "auto", "light" and "dark".
+func ThemeSource(theme string) mygo.ThemeSource {
+	switch strings.ToLower(theme) {
 	case "light":
 		return mygo.ThemeLight
 	case "dark":

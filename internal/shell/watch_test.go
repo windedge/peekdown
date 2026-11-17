@@ -107,15 +107,11 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 
 	clickSwitch(tt, sw)
 	tt.Frame()
-	if !s.Draft.AutoRefresh {
-		t.Fatal("click did not flip the draft")
+	if !s.Saved.AutoRefresh {
+		t.Fatal("click did not apply the switch")
 	}
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if s.SettingsOpen || !s.Saved.AutoRefresh {
-		t.Fatalf("after save: open %v, auto refresh %v", s.SettingsOpen, s.Saved.AutoRefresh)
+	if s.watchCancel == nil {
+		t.Fatal("watcher not started after the switch")
 	}
 	if s.watchCancel == nil {
 		t.Fatal("watcher not started after save")
@@ -128,12 +124,9 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 	if off, ok := tt.AccessByRole(ui.RoleSwitch, "Auto Refresh"); ok {
 		clickSwitch(tt, off)
 	}
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
-	}
 	tt.Frame()
 	if s.Saved.AutoRefresh || s.watchCancel != nil {
-		t.Fatalf("after save: auto refresh %v, watcher running %v", s.Saved.AutoRefresh, s.watchCancel != nil)
+		t.Fatalf("after the switch: auto refresh %v, watcher running %v", s.Saved.AutoRefresh, s.watchCancel != nil)
 	}
 }
 

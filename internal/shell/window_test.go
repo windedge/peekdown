@@ -177,26 +177,24 @@ func welcomeRecent(t *testing.T, w, h int) {
 }
 
 // TestSettingsDialogReachesSave pins the dialog's height budget in a
-// window too short for the whole form: Cancel and Save stay in the
-// window, and the fields scroll above them.
-func TestSettingsDialogReachesSave(t *testing.T) {
+// window too short for the whole form: Done stays in the
+// window, and the fields scroll above it.
+func TestSettingsDialogReachesDone(t *testing.T) {
 	for _, h := range []int{503, 400} {
 		s, _ := newShell(t)
 		tt := s.renderSize(t, 800, h)
 		s.OpenSettings()
 		tt.Frame()
 
-		for _, label := range []string{"Cancel", "Save"} {
-			r, ok := tt.Find(label)
-			if !ok {
-				t.Fatalf("height %d: texts %v: want the %q button", h, tt.Texts(), label)
-			}
-			if r.H < 16 {
-				t.Fatalf("height %d: %q is %v: want a drawn button", h, label, r)
-			}
-			if r.Y < 0 || r.Y+r.H > float32(h) {
-				t.Fatalf("height %d: %q at %v sits outside the window", h, label, r)
-			}
+		r, ok := tt.Find("Done")
+		if !ok {
+			t.Fatalf("height %d: texts %v: want the %q button", h, tt.Texts(), "Done")
+		}
+		if r.H < 16 {
+			t.Fatalf("height %d: %q is %v: want a drawn button", h, "Done", r)
+		}
+		if r.Y < 0 || r.Y+r.H > float32(h) {
+			t.Fatalf("height %d: %q at %v sits outside the window", h, "Done", r)
 		}
 		// The fields scroll: the last group is out of view at the top of
 		// the list and comes in on a scroll over it.
@@ -213,12 +211,12 @@ func TestSettingsDialogReachesSave(t *testing.T) {
 			t.Fatalf("height %d: the last group at %v did not scroll into view", h, r)
 		}
 
-		if err := tt.Click("Save"); err != nil {
+		if err := tt.Click("Done"); err != nil {
 			t.Fatalf("height %d: %v", h, err)
 		}
 		tt.Frame()
 		if s.SettingsOpen {
-			t.Fatalf("height %d: the dialog stayed open after Save", h)
+			t.Fatalf("height %d: the dialog stayed open after Done", h)
 		}
 	}
 }

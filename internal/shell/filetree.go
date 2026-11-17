@@ -129,7 +129,6 @@ func (s *Shell) expandedDir(dir string) bool {
 // persistExpanded writes the expanded set through the settings, which is
 // where it survives a restart.
 func (s *Shell) persistExpanded() {
-	s.Draft.ExpandedDirs = append([]string(nil), s.Saved.ExpandedDirs...)
 	if s.Save != nil {
 		_ = s.Save(s.Saved)
 	}

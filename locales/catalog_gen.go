@@ -374,6 +374,16 @@ func (msgs Messages) ZoomTooltip() string {
 	return Catalog.Format(msgs.locale, "zoomTooltip", nil)
 }
 
+// FpsTooltip says "Frames per second"
+// in the language the app shows.
+func FpsTooltip() string { return In(i18n.Locale()).FpsTooltip() }
+
+// FpsTooltip says "Frames per second"
+// in the language of msgs.
+func (msgs Messages) FpsTooltip() string {
+	return Catalog.Format(msgs.locale, "fpsTooltip", nil)
+}
+
 // JumpTop says "Scroll to top"
 // in the language the app shows.
 func JumpTop() string { return In(i18n.Locale()).JumpTop() }
@@ -746,6 +756,16 @@ func (msgs Messages) SettingsTitle() string {
 	return Catalog.Format(msgs.locale, "settingsTitle", nil)
 }
 
+// SettingsDone says "Done"
+// in the language the app shows.
+func SettingsDone() string { return In(i18n.Locale()).SettingsDone() }
+
+// SettingsDone says "Done"
+// in the language of msgs.
+func (msgs Messages) SettingsDone() string {
+	return Catalog.Format(msgs.locale, "settingsDone", nil)
+}
+
 // SettingsSectionAppearance says "Appearance"
 // in the language the app shows.
 func SettingsSectionAppearance() string { return In(i18n.Locale()).SettingsSectionAppearance() }
@@ -794,6 +814,16 @@ func SettingsTheme() string { return In(i18n.Locale()).SettingsTheme() }
 // in the language of msgs.
 func (msgs Messages) SettingsTheme() string {
 	return Catalog.Format(msgs.locale, "settingsTheme", nil)
+}
+
+// SettingsThemeDetail says "Light and dark follow the system when Auto."
+// in the language the app shows.
+func SettingsThemeDetail() string { return In(i18n.Locale()).SettingsThemeDetail() }
+
+// SettingsThemeDetail says "Light and dark follow the system when Auto."
+// in the language of msgs.
+func (msgs Messages) SettingsThemeDetail() string {
+	return Catalog.Format(msgs.locale, "settingsThemeDetail", nil)
 }
 
 // SettingsLayout says "Layout"
@@ -934,6 +964,16 @@ func SettingsAutoRefresh() string { return In(i18n.Locale()).SettingsAutoRefresh
 // in the language of msgs.
 func (msgs Messages) SettingsAutoRefresh() string {
 	return Catalog.Format(msgs.locale, "settingsAutoRefresh", nil)
+}
+
+// SettingsShowFPS says "Show FPS"
+// in the language the app shows.
+func SettingsShowFPS() string { return In(i18n.Locale()).SettingsShowFPS() }
+
+// SettingsShowFPS says "Show FPS"
+// in the language of msgs.
+func (msgs Messages) SettingsShowFPS() string {
+	return Catalog.Format(msgs.locale, "settingsShowFPS", nil)
 }
 
 // SettingsLanguage says "Language"
@@ -1234,6 +1274,16 @@ func MermaidFailed() string { return In(i18n.Locale()).MermaidFailed() }
 // in the language of msgs.
 func (msgs Messages) MermaidFailed() string {
 	return Catalog.Format(msgs.locale, "mermaidFailed", nil)
+}
+
+// MonoBadge says "Mono"
+// in the language the app shows.
+func MonoBadge() string { return In(i18n.Locale()).MonoBadge() }
+
+// MonoBadge says "Mono"
+// in the language of msgs.
+func (msgs Messages) MonoBadge() string {
+	return Catalog.Format(msgs.locale, "monoBadge", nil)
 }
 
 // CouldNotReadDocument says "Could not read this document: {error}"

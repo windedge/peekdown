@@ -87,8 +87,8 @@ func TestFontPickerForCodeFont(t *testing.T) {
 		t.Fatalf("the System Default row is not clickable: %v", err)
 	}
 	tt.Frame()
-	if s.Draft.MonoFontFamily != "" {
-		t.Fatalf("MonoFontFamily = %q, want the empty default", s.Draft.MonoFontFamily)
+	if s.Saved.MonoFontFamily != "" {
+		t.Fatalf("MonoFontFamily = %q, want the empty default", s.Saved.MonoFontFamily)
 	}
 	if s.fontPickOpen || s.fontPickMonoOpen {
 		t.Fatalf("the picker stayed open over its row click")
@@ -137,7 +137,7 @@ func TestFontPickerSearchFilters(t *testing.T) {
 
 // TestFontPickerRowWritesDraft checks a family row: clicking it writes
 // the draft's family, closes the popover, and Save alone persists it.
-func TestFontPickerRowWritesDraft(t *testing.T) {
+func TestFontPickerRowWritesSaved(t *testing.T) {
 	s, _ := newShell(t)
 	tt := s.renderSize(t, 1400, 880)
 	openFontPickerFor(t, s, tt, "Content Font")
@@ -146,15 +146,11 @@ func TestFontPickerRowWritesDraft(t *testing.T) {
 		t.Fatalf("the System Default row is not clickable: %v", err)
 	}
 	tt.Frame()
-	if s.Draft.FontFamily != "" {
-		t.Fatalf("FontFamily = %q, want the empty default", s.Draft.FontFamily)
+	if s.Saved.FontFamily != "" {
+		t.Fatalf("FontFamily = %q, want the empty default", s.Saved.FontFamily)
 	}
 	if s.fontPickOpen || s.fontPickMonoOpen {
 		t.Fatalf("the picker stayed open over its row click")
-	}
-	// The draft model: the picker writes the draft, Save persists it.
-	if s.Saved.FontFamily == s.Draft.FontFamily && s.Saved.FontFamily != "" {
-		t.Fatalf("Saved.FontFamily = %q, want the save held back", s.Saved.FontFamily)
 	}
 }
 
@@ -241,15 +237,15 @@ func TestFontPickerDismissKeepsDraft(t *testing.T) {
 		t.Skip("no font families on this machine")
 	}
 	openFontPickerFor(t, s, tt, "Content Font")
-	before := s.Draft.FontFamily
+	before := s.Saved.FontFamily
 
 	tt.TypeKey(0, ui.KeyEscape, "")
 	tt.Frame()
 	if s.fontPickOpen || s.fontPickMonoOpen {
 		t.Fatalf("the empty query's Escape left the picker open")
 	}
-	if s.Draft.FontFamily != before {
-		t.Fatalf("FontFamily = %q, want the dismissed picker to keep %q", s.Draft.FontFamily, before)
+	if s.Saved.FontFamily != before {
+		t.Fatalf("FontFamily = %q, want the dismissed picker to keep %q", s.Saved.FontFamily, before)
 	}
 	if _, ok := tt.Find("Settings"); !ok {
 		t.Fatalf("the settings dialog is gone after the picker closed")
@@ -267,8 +263,8 @@ func TestFontPickerDismissKeepsDraft(t *testing.T) {
 	if s.fontPickOpen || s.fontPickMonoOpen {
 		t.Fatalf("a press outside left the picker open")
 	}
-	if s.Draft.FontFamily != before {
-		t.Fatalf("FontFamily = %q, want the dismissed picker to keep %q", s.Draft.FontFamily, before)
+	if s.Saved.FontFamily != before {
+		t.Fatalf("FontFamily = %q, want the dismissed picker to keep %q", s.Saved.FontFamily, before)
 	}
 	if _, ok := tt.Find("Settings"); !ok {
 		t.Fatalf("the outside press closed the settings dialog itself")
