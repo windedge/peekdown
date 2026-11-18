@@ -222,6 +222,14 @@ type State struct {
 	// selection, as the Rust version does.
 	docVersion uint64
 
+	// tableWidths caches each table's measured column widths by block
+	// index, so scrolling does not re-shape every cell each frame: the
+	// doc's Version and the measuring font key the cache, and a miss
+	// measures and stores. Widths are read-only once cached.
+	tableWidths      map[int][]float32
+	tableWidthsKey   string
+	tableWidthsModel *doc.Model
+
 	// Theme of the view's code: the window's by default.
 	CodeTheme *editor.Theme
 }
@@ -1885,6 +1893,18 @@ func tableGridWidth(widths []float32) float32 {
 // capped at 300; a header cell measures bold, as it renders at weight 600,
 // and a table without text takes the default 80.
 func tableColumnWidths(st *State, m *doc.Model, table int) []float32 {
+	// Measuring shapes every cell's text through DirectWrite with no
+	// reuse (ui.ShapeText never caches), a cost of tens of ms on a big
+	// acceptance-matrix table each frame it runs. The widths depend only
+	// on the doc's Version and the measuring font, so cache them until
+	// either moves.
+	key := fmt.Sprintf("%d|%s|%g", m.Version(), st.FontFamily, st.bodySize())
+	if st.tableWidthsKey != key || st.tableWidthsModel != m {
+		st.tableWidths, st.tableWidthsKey, st.tableWidthsModel = map[int][]float32{}, key, m
+	}
+	if widths, ok := st.tableWidths[table]; ok {
+		return widths
+	}
 	size := tableSizeAt(st.bodySize())
 	widths := []float32{}
 	for r, row := range m.TableRows(table) {
@@ -1905,6 +1925,10 @@ func tableColumnWidths(st *State, m *doc.Model, table int) []float32 {
 			widths[k] = max(widths[k], w)
 		}
 	}
+	if st.tableWidths == nil {
+		st.tableWidths = map[int][]float32{}
+	}
+	st.tableWidths[table] = widths
 	return widths
 }
 
