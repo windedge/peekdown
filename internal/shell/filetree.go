@@ -190,7 +190,7 @@ func (s *Shell) underRoot(root, dir string) bool {
 // scrolls its row into view; the next frame does the scrolling.
 func (s *Shell) RevealFile(path string) {
 	root := s.explorerRoot(path)
-	s.SetSidebarTab(0)
+	s.SetFilesVisible(true)
 	s.expandAncestors(root, path)
 	s.tree.reveal = path
 }

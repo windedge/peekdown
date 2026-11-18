@@ -45,11 +45,11 @@ func TestTableColumnRulesSpanTheRow(t *testing.T) {
 	theme := ui.LightTheme()
 	tt, _ := tableFrame(t, ruleTableDoc())
 	img := tt.Image()
-	_, _, band := surfaceRows(img, theme.Surface)
+	_, _, band := surfaceRows(img, panelColor(theme))
 	if band < 0 {
 		t.Fatal("the header's surface did not draw")
 	}
-	runs := colorRuns(img, band, theme.Surface)
+	runs := colorRuns(img, band, panelColor(theme))
 	if len(runs) != 3 {
 		t.Fatalf("y=%d: %v, want one surface run per column", band, runs)
 	}
@@ -102,11 +102,11 @@ func TestHTMLTableColumnRulesSpanTheRow(t *testing.T) {
 	theme := ui.LightTheme()
 	tt, _ := tableFrame(t, src)
 	img := tt.Image()
-	_, _, band := surfaceRows(img, theme.Surface)
+	_, _, band := surfaceRows(img, panelColor(theme))
 	if band < 0 {
 		t.Fatal("the header's surface did not draw")
 	}
-	runs := colorRuns(img, band, theme.Surface)
+	runs := colorRuns(img, band, panelColor(theme))
 	if len(runs) != 3 {
 		t.Fatalf("y=%d: %v, want one surface run per column", band, runs)
 	}

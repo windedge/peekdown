@@ -1070,9 +1070,11 @@ func (st *State) tokens(c *ui.Context) docTokens {
 		body = defaultBodySize
 	}
 	return docTokens{
-		text:     t.Text,
-		muted:    t.TextMuted,
-		panel:    t.Surface,
+		text:  t.Text,
+		muted: t.TextMuted,
+		// The document sits on a card now: a pure Surface panel would
+		// disappear into its white face, so it steps toward the hover tint.
+		panel:    t.Surface.Mix(t.SurfaceHover, 0.45),
 		inline:   t.Background.Mix(t.Accent, inlineCodeTint),
 		quote:    t.Border.Mix(t.Accent, quoteBarTint),
 		link:     t.Accent,

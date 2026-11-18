@@ -12,50 +12,45 @@ import (
 	"github.com/windedge/peekdown/locales"
 )
 
-// sidebar renders the file list or the outline of the active tab. The
-// header copies the Rust sidebar's (mod.rs around line 2070): small
-// text tabs on the left, a ghost close on the right, a hairline under
-// both; no chip track like a Segmented control builds.
-func (s *Shell) sidebar(c *ui.Context) {
+// The panels share one header: a 33 DIP row with a 12.5/600 title at a
+// 14 DIP inset, a growing gap and the ghost close button at the end.
+const (
+	panelHeaderHeight   = float32(33)
+	panelHeaderFont     = float32(12.5)
+	panelHeaderPadStart = float32(14)
+	panelHeaderPadEnd   = float32(8)
+)
+
+// panelHeader draws the title and close button both panes share.
+func panelHeader(c *ui.Context, key, label, closeLabel string, close func()) {
 	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Surface).Children(func() {
-		ui.Row(c).Padding(4, 8).Gap(2).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-			s.sidebarTab(c, "sidebar-files-tab", 0, locales.SidebarFiles())
-			s.sidebarTab(c, "sidebar-outline-tab", 1, locales.SidebarOutline())
-			ui.Box(c).Grow(1)
-			iconButton(c, "close-sidebar", closeIcon, locales.SidebarClose(), 20, 10, func() { s.Sidebar.Visible = false })
-		})
-		if s.Sidebar.Tab == 0 {
-			s.filesPane(c)
-			return
-		}
-		s.outlinePane(c)
+	ui.Row(c).Height(panelHeaderHeight).Padding(0, panelHeaderPadEnd, 0, panelHeaderPadStart).
+		AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+		ui.Text(c, label).FontSize(panelHeaderFont).FontWeight(600).Grow(1).
+			MinWidth(0).MaxLines(1)
+		iconButton(c, key, closeIcon, closeLabel, 20, 10, close)
 	})
 }
 
-// sidebarTab is one header tab, the Rust one's plain small label: muted
-// text that turns accent on the active side with a faint accent wash,
-// radius 4, nothing else.
-func (s *Shell) sidebarTab(c *ui.Context, key string, index int, label string) {
+// sidebar renders the file pane. The outline is its own panel on the
+// right now, so there are no tabs to switch here.
+func (s *Shell) sidebar(c *ui.Context) {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).Label(label).Padding(2, 8).Radius(4).
-		AlignItems(ui.Center).Justify(ui.Center).FocusRing(false).
-		FontSize(11).FontWeight(500)
-	// Hover is read before the branch so the active tab tracks it too,
-	// even though its look stays as it is.
-	hover := b.Hovered()
-	if s.Sidebar.Tab == index {
-		b.Background(t.Accent.Alpha(0.15)).TextColor(t.Accent)
-	} else if hover {
-		b.Background(t.SurfaceHover).TextColor(t.Text)
-	} else {
-		b.TextColor(t.TextMuted)
-	}
-	b.Children(func() { ui.Text(c, label).FontSize(11).FontWeight(500) })
-	if b.Clicked() {
-		s.SetSidebarTab(index)
-	}
+	k := s.accentColors(c)
+	// The file pane is the quiet card: more of the gradient shows through
+	// it than through the focused document card.
+	ui.Box(c).Fill().Padding(8, 0, 8, 8).Children(func() {
+		// Clip mirrors the prototype's .sidebar overflow:hidden: the tree's
+		// List must scroll inside the card, never paint past its corners.
+		ui.Column(c).Fill().Clip().Background(k.Card).Label("Files card").
+			Border(1, cardRim(t, false)).Radius(10).
+			Shadow(0, 1, 2, 0, cardShadow(t, false)).
+			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
+			panelHeader(c, "close-sidebar", locales.SidebarFiles(), locales.SidebarClose(),
+				func() { s.Sidebar.Visible = false })
+			s.filesPane(c)
+		})
+	})
 }
 
 // explorerRoot is the directory the file pane shows: the document's own
@@ -214,55 +209,68 @@ func readSortedEntries(dir, mode string) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
-func (s *Shell) outlinePane(c *ui.Context) {
+// outlinePanel draws the outline as a card on the right: the same
+// header as the file pane, then the headings in a scrolling column.
+func (s *Shell) outlinePanel(c *ui.Context) {
 	t := c.Theme()
+	k := s.accentColors(c)
 	tab := s.ActiveTab()
-	ui.Column(c).Fill().Children(func() {
-		if tab == nil || tab.Model == nil {
-			ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
-				Padding(4, 12)
-			return
-		}
-		headings := tab.Model.Headings()
-		if len(headings) == 0 {
-			ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
-				Padding(4, 12)
-			return
-		}
-		// The entry the document is scrolled to shows on a surface, the
-		// section the reader is in; -1 for none. LinksWired is the shell's
-		// "this tab is drawn through the shell" flag: the outline skips
-		// the follow work for a view nobody wired (a bare test build).
-		current := -1
-		if s.Sidebar.Tab == 1 && tab.State.LinksWired {
-			current = currentHeadingBlock(tab)
-		}
-		// A long outline scrolls: the rows stack in a Scroll, each one
-		// as tall as its text (Fill would claim the pane's whole height).
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(1).Padding(2, 0).Children(func() {
-				for _, h := range headings {
-					// Rust outline.rs: the whole row indents per level, 12 DIPs
-					// a step off a 12 DIP base, not just the text inside it.
-					// PaddingStart overrides the row's own start padding.
-					indent := 12 + 12*float32(h.Level-1)
-					row := ui.ButtonBase(c).FillWidth().Padding(4, 12).PaddingStart(indent).Radius(4).Cursor(ui.CursorPointer).
-						AlignItems(ui.Center).Justify(ui.Start)
-					// Hover lights a row with the same surface the active
-					// section holds; the highlight wins and does not stack.
-					hover := row.Hovered()
-					if block, ok := tab.Model.AnchorBySlug(tab.Model.Anchor(h.BlockIndex)); (ok && block == current) || hover {
-						row.Background(t.SurfaceHover)
+	// LeftToRight answers the RTL split: the card's contents read left to
+	// right however the split orders its panes.
+	ui.Box(c).Fill().Padding(8, 8, 8, 4).Children(func() {
+		ui.Column(c).Fill().Direction(ui.LeftToRight).Background(k.Card).Label("Outline card").
+			Border(1, cardRim(t, false)).Radius(10).Clip().
+			Shadow(0, 1, 2, 0, cardShadow(t, false)).
+			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
+			panelHeader(c, "close-outline", locales.SidebarOutline(),
+				locales.SidebarClose()+" "+locales.SidebarOutline(),
+				func() { s.Outline.Visible = false })
+			if tab == nil || tab.Model == nil {
+				ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
+					Padding(4, 12)
+				return
+			}
+			headings := tab.Model.Headings()
+			if len(headings) == 0 {
+				ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
+					Padding(4, 12)
+				return
+			}
+			// The entry the document is scrolled to shows on a surface, the
+			// section the reader is in; -1 for none. LinksWired is the shell's
+			// "this tab is drawn through the shell" flag: the outline skips
+			// the follow work for a view nobody wired (a bare test build).
+			current := -1
+			if s.Outline.Visible && tab.State.LinksWired {
+				current = currentHeadingBlock(tab)
+			}
+			// A long outline scrolls: the rows stack in a Scroll, each one
+			// as tall as its text (Fill would claim the pane's whole height).
+			ui.Scroll(c).Grow(1).Children(func() {
+				ui.Column(c).Gap(1).Padding(2, 0).Children(func() {
+					for _, h := range headings {
+						// Rust outline.rs: the whole row indents per level, 12 DIPs
+						// a step off a 12 DIP base, not just the text inside it.
+						// PaddingStart overrides the row's own start padding.
+						indent := 12 + 12*float32(h.Level-1)
+						row := ui.ButtonBase(c).FillWidth().Padding(4, 12).PaddingStart(indent).Radius(4).Cursor(ui.CursorPointer).
+							AlignItems(ui.Center).Justify(ui.Start)
+						// Hover lights a row with the same surface the active
+						// section holds; the highlight wins and does not stack.
+						hover := row.Hovered()
+						if h.BlockIndex == current || hover {
+							row.Background(t.SurfaceHover)
+						}
+						row.Children(func() {
+							ui.Text(c, h.Text).FontSize(13).SingleLine().Ellipsis("...").
+								Grow(1).MinWidth(0).PaddingEnd(14)
+						})
+						if row.Clicked() {
+							tab.State.JumpToBlock(h.BlockIndex)
+							// The Rust version keeps the sidebar open after a jump.
+						}
 					}
-					row.Children(func() {
-						ui.Text(c, h.Text).FontSize(13).SingleLine().Ellipsis("...").
-							Grow(1).MinWidth(0).PaddingEnd(14)
-					})
-					if row.Clicked() {
-						tab.State.ScrollTargetBlock = h.BlockIndex
-						// The Rust version keeps the sidebar open after a jump.
-					}
-				}
+				})
 			})
 		})
 	})

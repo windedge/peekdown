@@ -9,12 +9,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// TestScrollbarHugsWindowEdge walks the scrollbar geometry: the shell
-// pads the content's right edge 0, so the document's list reaches the
-// window's right edge and its overlay scrollbar hugs it; each row and
-// the frontmatter card pad their own right 16 DIPs, so the text clears
-// the 6 DIP bar without the bar covering any glyphs.
-func TestScrollbarHugsWindowEdge(t *testing.T) {
+// TestScrollbarHugsCardEdge walks the scrollbar geometry: the shell
+// pads the document card's right edge 0, so the list reaches that edge
+// and its overlay scrollbar hugs the card, 8 DIPs inside the window;
+// each row and the frontmatter card pad their own right 16 DIPs, so the
+// text clears the bar without it covering any glyphs.
+func TestScrollbarHugsCardEdge(t *testing.T) {
 	s, dir := newShell(t)
 	path := filepath.Join(dir, "scroll.md")
 	var b strings.Builder
@@ -32,34 +32,31 @@ func TestScrollbarHugsWindowEdge(t *testing.T) {
 	tt.Frame()
 
 	// The mygo scrollbar is the list's own overlay: scrollBars paints
-	// the thumb with its right edge 3 DIPs inside the list's box right
-	// edge (paint.go, g.v = box.X+box.W-right-width-3), and the list
-	// spans the window in both layouts, so the bar hugs the window's
-	// edge; TestCenteredScrollbarHugsWindowEdge pins that for the capped
-	// column too.
+	// the thumb within the list's right 9 DIPs, and the list spans the
+	// document card, so the bar now hugs the card's inner right edge;
+	// TestCenteredScrollbarHugsCardEdge pins that for the capped column.
 
 	// The body rows clear the scrollbar: a line's text box ends at least
-	// 12 DIPs before the window's right edge (the bar paints within 3),
-	// and the frontmatter card pads its own right the same way.
+	// 12 DIPs before the card's right edge, and the frontmatter card
+	// pads its own right the same way.
 	r, ok := paragraphRect(tt, "Scrollbar geometry probe")
 	if !ok {
 		t.Fatalf("texts %v: want the paragraph", tt.Texts())
 	}
-	if got := 1400 - (r.X + r.W); got < 12 {
-		t.Fatalf("paragraph text ends %v DIPs from the window's edge, want >= 12", got)
+	card, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatalf("no document card: %v", tt.Texts())
+	}
+	if got := card.X + card.W - (r.X + r.W); got < 12 {
+		t.Fatalf("paragraph text ends %v DIPs from the card's edge, want >= 12", got)
 	}
 
-	// The shell's left padding stays: the text keeps its 24 DIP left
-	// margin against the window (the sidebar is hidden in these tests).
-	if r.X < 24 {
-		t.Fatalf("paragraph text starts at x=%v, want the 24 DIP left padding", r.X)
-	}
 }
 
-// TestScrollbarListReachesWindowEdge pins the list's geometry end to
-// end: its box right edge sits within the bar's own 3 DIP inset of the
-// window's right edge, so the overlay bar hugs the edge.
-func TestScrollbarListReachesWindowEdge(t *testing.T) {
+// TestScrollbarListReachesCardEdge pins the list's geometry end to end:
+// its box right edge meets the document card's inner right edge, so the
+// overlay bar hugs the card whether or not the side panels are open.
+func TestScrollbarListReachesCardEdge(t *testing.T) {
 	s, dir := newShell(t)
 	path := filepath.Join(dir, "scroll.md")
 	if err := os.WriteFile(path, []byte("# T\n\nbody\n"), 0o644); err != nil {
@@ -86,17 +83,36 @@ func TestScrollbarListReachesWindowEdge(t *testing.T) {
 	if list.W <= 0 {
 		t.Fatal("the list has no committed bounds")
 	}
-	if got := 1400 - (list.X + list.W); got > 4 {
-		t.Fatalf("list right edge sits %v DIPs from the window's edge, want <= 4", got)
+	// The outline open by default narrows the card; the list must still
+	// reach the card's inner right edge, not the pane's outer one.
+	card, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatalf("no document card: %v", tt.Texts())
+	}
+	if got := card.X + card.W - 1 - (list.X + list.W); got > 4 || got < -4 {
+		t.Fatalf("list right edge sits %v DIPs from the card's inner edge, want <= 4", got)
+	}
+
+	// With every panel closed the card sits 8 DIPs inside the window.
+	s.Outline.Visible = false
+	tt = s.renderSize(t, 1400, 500)
+	tt.Frame()
+	list = s.ActiveTab().State.List.Handle.Bounds(viewCtx)
+	card, ok = tt.Find("Document card")
+	if !ok {
+		t.Fatalf("no document card: %v", tt.Texts())
+	}
+	if got := card.X + card.W - 1 - (list.X + list.W); got > 4 || got < -4 {
+		t.Fatalf("list right edge sits %v DIPs from the card's inner edge, want <= 4", got)
 	}
 }
 
-// TestCenteredScrollbarHugsWindowEdge pins the centered layout's split:
+// TestCenteredScrollbarHugsCardEdge pins the centered layout's split:
 // the text column alone caps at 900 DIPs and centers, while the list, and
-// so its overlay scrollbar, keep spanning the window. Before the split the
-// cap landed on the list itself, which floated the bar in from the edge to
-// the column's right side.
-func TestCenteredScrollbarHugsWindowEdge(t *testing.T) {
+// so its overlay scrollbar, keep spanning the card. Before the split the
+// cap landed on the list itself, which floated the bar in from the card's
+// edge to the column's right side.
+func TestCenteredScrollbarHugsCardEdge(t *testing.T) {
 	for _, tc := range []struct {
 		layout string
 		capped bool
@@ -105,6 +121,7 @@ func TestCenteredScrollbarHugsWindowEdge(t *testing.T) {
 		{"full_width", false},
 	} {
 		s, dir := newShell(t)
+		s.Outline.Visible = false
 		path := filepath.Join(dir, "long.md")
 		long := strings.Repeat("word ", 200) + "\n"
 		if err := os.WriteFile(path, []byte(long), 0o644); err != nil {
@@ -127,8 +144,12 @@ func TestCenteredScrollbarHugsWindowEdge(t *testing.T) {
 		if list.W <= 0 {
 			t.Fatalf("%s: the list has no committed bounds", tc.layout)
 		}
-		if got := 1600 - (list.X + list.W); got > 4 {
-			t.Fatalf("%s: the list's right edge sits %v DIPs from the window's edge, want <= 4 (the bar hugs it)",
+		card, ok := tt.Find("Document card")
+		if !ok {
+			t.Fatalf("%s: no document card: %v", tc.layout, tt.Texts())
+		}
+		if got := card.X + card.W - 1 - (list.X + list.W); got > 4 || got < -4 {
+			t.Fatalf("%s: the list's right edge sits %v DIPs from the card's inner edge, want <= 4 (the bar hugs it)",
 				tc.layout, got)
 		}
 
@@ -138,8 +159,8 @@ func TestCenteredScrollbarHugsWindowEdge(t *testing.T) {
 		}
 		// The bar paints within the list's right 9 DIPs; the text ends well
 		// left of that in both layouts.
-		if got := 1600 - (r.X + r.W); got < barClearance {
-			t.Fatalf("%s: the text ends %v DIPs from the window's edge, want >= %d", tc.layout, got, barClearance)
+		if got := card.X + card.W - (r.X + r.W); got < barClearance {
+			t.Fatalf("%s: the text ends %v DIPs from the card's edge, want >= %d", tc.layout, got, barClearance)
 		}
 		if !tc.capped {
 			if r.W < 1500 {
@@ -163,7 +184,7 @@ func TestCenteredScrollbarHugsWindowEdge(t *testing.T) {
 
 // TestCenteredColumnFitsNarrowWindow keeps the cap off a window narrower
 // than it: the column follows the room and the text stays clear of the bar
-// and the window's edges.
+// and the card's edges.
 func TestCenteredColumnFitsNarrowWindow(t *testing.T) {
 	s, dir := newShell(t)
 	path := filepath.Join(dir, "long.md")
@@ -185,14 +206,18 @@ func TestCenteredColumnFitsNarrowWindow(t *testing.T) {
 	if !ok {
 		t.Fatalf("texts %v: want the paragraph", tt.Texts())
 	}
-	if r.X < 24 {
-		t.Fatalf("the text starts at x=%v, want the 24 DIP left padding", r.X)
+	card, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatalf("no document card: %v", tt.Texts())
 	}
-	if got := 700 - (r.X + r.W); got < barClearance {
-		t.Fatalf("the text ends %v DIPs from the window's edge, want >= %d (the bar's strip)", got, barClearance)
+	if got := r.X - card.X; got < 16 || got > 40 {
+		t.Fatalf("the text starts %v DIPs inside the card, want its reading inset", got)
 	}
-	if r.W > 700-24-barClearance {
-		t.Fatalf("the text is %v wide, wider than a 700 DIP window leaves", r.W)
+	if got := card.X + card.W - (r.X + r.W); got < barClearance {
+		t.Fatalf("the text ends %v DIPs from the card's edge, want >= %d (the bar's strip)", got, barClearance)
+	}
+	if r.W > card.W-32 {
+		t.Fatalf("the text is %v wide, wider than the card leaves", r.W)
 	}
 }
 
@@ -208,6 +233,7 @@ func TestCenteredFrontmatterCapped(t *testing.T) {
 		{"full_width", false},
 	} {
 		s, dir := newShell(t)
+		s.Outline.Visible = false
 		path := filepath.Join(dir, "front.md")
 		if err := os.WriteFile(path, []byte("---\ntitle: Note\ntags:\n  - a\n---\n\nbody\n"), 0o644); err != nil {
 			t.Fatal(err)

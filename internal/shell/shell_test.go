@@ -272,26 +272,27 @@ func TestTabFollowsActive(t *testing.T) {
 
 func TestSidebarToggleAndWidth(t *testing.T) {
 	s, dir := newShell(t)
-	tt := s.render(t)
+	s.Outline.Visible = false
+	tt := s.renderSize(t, 1200, 600)
 	s.OpenFile(filepath.Join(dir, "a.md"))
 	tt.Frame()
 
 	if s.Sidebar.Visible {
 		t.Fatal("sidebar starts hidden in the test shell")
 	}
-	s.Sidebar.Visible = true
+	s.SetFilesVisible(true)
 	tt.Frame()
 	if !s.Sidebar.Visible {
-		t.Fatal("show did not show the sidebar")
+		t.Fatal("show did not show the file pane")
 	}
-	if !tt.HasText("Outline") {
-		t.Fatalf("sidebar not rendered: %v", tt.Texts())
+	if !tt.HasText("Files") {
+		t.Fatalf("file pane not rendered: %v", tt.Texts())
 	}
 
-	s.SetSidebarTab(1)
+	s.SetOutlineVisible(true)
 	tt.Frame()
-	if s.Sidebar.Tab != 1 || !s.Sidebar.Visible {
-		t.Fatalf("tab = %d visible = %v", s.Sidebar.Tab, s.Sidebar.Visible)
+	if !s.Outline.Visible {
+		t.Fatal("show did not show the outline")
 	}
 	if !tt.HasText("A two") {
 		t.Fatalf("outline missing heading: %v", tt.Texts())
@@ -305,9 +306,13 @@ func TestSidebarToggleAndWidth(t *testing.T) {
 	if s.Sidebar.Width != 400 {
 		t.Fatalf("width = %v, want 400", s.Sidebar.Width)
 	}
-	s.Sidebar.Visible = false
+	s.SetFilesVisible(false)
 	if s.Sidebar.Visible {
-		t.Fatal("hide did not hide the sidebar")
+		t.Fatal("hide did not hide the file pane")
+	}
+	s.SetOutlineVisible(false)
+	if s.Outline.Visible {
+		t.Fatal("hide did not hide the outline")
 	}
 }
 
@@ -392,10 +397,9 @@ func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
 	}
 }
 
-// TestRestoreFromSettings walks the startup restore: the saved sidebar
-// width, tab and visibility land on the shell and the theme reaches
-// the host. An unknown tab name
-// falls back to the explorer, a hidden sidebar stays hidden.
+// TestRestoreFromSettings walks the startup restore: both panes' widths
+// and visibility land on the shell and the theme reaches the host. A
+// hidden pane stays hidden.
 func TestRestoreFromSettings(t *testing.T) {
 	s := New()
 	var theme string
@@ -403,12 +407,16 @@ func TestRestoreFromSettings(t *testing.T) {
 	var saved settings.Settings
 	saved.Theme = settings.ThemeDark
 	saved.SidebarWidth = 333
-	saved.SidebarTab = "outline"
 	saved.SidebarVisible = true
+	saved.OutlineWidth = 288
+	saved.OutlineVisible = true
 
 	s.RestoreFromSettings(saved)
-	if s.Sidebar.Width != 333 || s.Sidebar.Tab != 1 || !s.Sidebar.Visible {
+	if s.Sidebar.Width != 333 || !s.Sidebar.Visible {
 		t.Fatalf("sidebar after restore: %+v", s.Sidebar)
+	}
+	if s.Outline.Width != 288 || !s.Outline.Visible {
+		t.Fatalf("outline after restore: %+v", s.Outline)
 	}
 	if !reflect.DeepEqual(s.Saved, saved) {
 		t.Fatalf("saved = %+v, want the restored %+v", s.Saved, saved)
@@ -417,12 +425,12 @@ func TestRestoreFromSettings(t *testing.T) {
 		t.Fatalf("theme = %q, want dark", theme)
 	}
 
-	saved.SidebarTab = "nonsense"
 	saved.SidebarVisible = false
+	saved.OutlineVisible = false
 	s2 := New()
 	s2.RestoreFromSettings(saved)
-	if s2.Sidebar.Tab != 0 || s2.Sidebar.Visible {
-		t.Fatalf("fallback restore: tab %d visible %v, want the explorer hidden", s2.Sidebar.Tab, s2.Sidebar.Visible)
+	if s2.Sidebar.Visible || s2.Outline.Visible {
+		t.Fatalf("hidden restore: files %v outline %v", s2.Sidebar.Visible, s2.Outline.Visible)
 	}
 }
 
@@ -547,14 +555,13 @@ func TestTabCloseButtonDoesNotSwitch(t *testing.T) {
 // labels, since the icons carry no text of their own.
 func TestIconButtonsLabeled(t *testing.T) {
 	s, dir := newShell(t)
-	tt := s.render(t)
+	s.Outline.Visible = false
+	tt := s.renderSize(t, 1200, 600)
 	s.OpenFile(filepath.Join(dir, "a.md"))
-	s.Sidebar.Visible = true
 	tt.Frame()
-	// The status bar is labels now, its zoom readout included: the
-	// remaining icons live in the sidebar header and the title bar. The
-	// tabs go before the close, which takes the sidebar off the window.
-	for _, label := range []string{"Files", "Outline", "Close sidebar", "Find in document", "App settings"} {
+	// The two bar toggles bring the panes back; the headers' close buttons
+	// then take them away, and the bar's other icons stay reachable.
+	for _, label := range []string{"Files panel", "Outline panel", "Close sidebar", "Close sidebar Outline", "Find in document", "App settings"} {
 		if err := tt.Click(label); err != nil {
 			t.Fatalf("%q is not the input target: %v", label, err)
 		}

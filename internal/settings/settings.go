@@ -25,15 +25,15 @@ const FileName = "settings.json"
 const currentVersion = 1
 
 // AccentThemeDefault is the accent theme a new install draws, and what
-// an unknown saved value normalizes to: mojian's warm paper.
-const AccentThemeDefault = "petal"
+// an unknown saved value normalizes to: the neutral paper gray.
+const AccentThemeDefault = "paper"
 
 // AccentThemeIDs are the accent themes this build knows, in the order
 // the theme picker lists them. The shell's color table (acctheme.go)
 // carries a row per id; its tests keep the two in step.
 var AccentThemeIDs = []string{
-	"petal", "mist", "meadow", "dusk", "tide",
-	"apricot", "aurora", "dune", "paper", "plain",
+	"paper", "petal", "mist", "meadow", "dusk",
+	"tide", "apricot", "aurora", "dune", "plain",
 }
 
 // The theme values this build stores, spelled as the settings dialog lists
@@ -52,7 +52,7 @@ type Settings struct {
 	Version int `json:"version"`
 
 	Theme          string  `json:"theme"`        // Auto, Light or Dark
-	AccentTheme    string  `json:"accent_theme"` // petal (default), mist, meadow, ...
+	AccentTheme    string  `json:"accent_theme"` // paper (default), petal, mist, meadow, ...
 	Layout         string  `json:"layout"`       // centered or full_width
 	ScrollSpeed    float64 `json:"scroll_speed"`
 	FontFamily     string  `json:"font_family"`
@@ -68,8 +68,9 @@ type Settings struct {
 	ExpandedDirs       []string `json:"expanded_dirs"`
 	AutoRefresh        bool     `json:"auto_refresh"`
 	SidebarWidth       float64  `json:"sidebar_width"`
-	SidebarTab         string   `json:"sidebar_tab"` // explorer or outline
 	SidebarVisible     bool     `json:"sidebar_visible"`
+	OutlineWidth       float64  `json:"outline_width"`
+	OutlineVisible     bool     `json:"outline_visible"`
 }
 
 // Default returns the settings of a first run.
@@ -95,9 +96,10 @@ func Default() Settings {
 			"build.gradle.kts",
 			"CMakeLists.txt",
 		},
-		AutoRefresh:  true,
-		SidebarWidth: 200,
-		SidebarTab:   "explorer",
+		AutoRefresh:    true,
+		SidebarWidth:   200,
+		OutlineWidth:   232,
+		OutlineVisible: true,
 	}
 }
 

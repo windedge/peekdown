@@ -100,8 +100,8 @@ func TestDocumentContextMenuFileCommands(t *testing.T) {
 	if err := tt.ChooseMenuItem("Reveal in Sidebar"); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Sidebar.Visible || s.Sidebar.Tab != 0 {
-		t.Fatalf("reveal left sidebar hidden or on tab %d", s.Sidebar.Tab)
+	if !s.Sidebar.Visible {
+		t.Fatal("reveal left the file pane hidden")
 	}
 	if !tt.HasText("a.md") {
 		t.Fatalf("texts %v: the file pane does not list the document", tt.Texts())

@@ -65,8 +65,8 @@ func TestPaletteShot(t *testing.T) {
 	tt.Frame()
 	// Back to the default accent, so this shot shows the dark window and
 	// the next one its meadow repaint as two distinct states.
-	if err := tt.Click("Theme petal"); err != nil {
-		t.Fatalf("petal card in the dark window: %v", err)
+	if err := tt.Click("Theme paper"); err != nil {
+		t.Fatalf("paper card in the dark window: %v", err)
 	}
 	tt.Frame()
 	testshot.WritePng(t, tt.Image(), "C:/tmp/palette-dark.png")

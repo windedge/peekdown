@@ -5,8 +5,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The View menu's document commands: scrolling, a manual reload and the two
-// sidebar segments.
+// The View menu's document commands: scrolling, a manual reload and the
+// two panel toggles.
 
 // ScrollToStart scrolls the active document to its first block, as Ctrl+Home
 // does. No document, nothing to do.
@@ -35,24 +35,12 @@ func (s *Shell) RefreshActiveTab() {
 	s.reloadTab(s.ActiveTab())
 }
 
-// ToggleOutline shows the outline segment and hides the sidebar when it
-// already shows it, as the Rust version's ToggleOutline does.
-func (s *Shell) ToggleOutline() {
-	if s.Sidebar.Visible && s.Sidebar.Tab == 1 {
-		s.Sidebar.Visible = false
-		return
-	}
-	s.SetSidebarTab(1)
-}
+// ToggleOutline flips the right-hand panel, independently of the files
+// pane on the left.
+func (s *Shell) ToggleOutline() { s.Outline.Visible = !s.Outline.Visible }
 
-// ToggleFiles does the same for the explorer segment.
-func (s *Shell) ToggleFiles() {
-	if s.Sidebar.Visible && s.Sidebar.Tab == 0 {
-		s.Sidebar.Visible = false
-		return
-	}
-	s.SetSidebarTab(0)
-}
+// ToggleFiles flips the left-hand file pane and leaves the outline be.
+func (s *Shell) ToggleFiles() { s.Sidebar.Visible = !s.Sidebar.Visible }
 
 // OpenInFileManager reveals path in the OS file manager, selecting the file
 // where the platform can. mygo's shell covers the three platforms

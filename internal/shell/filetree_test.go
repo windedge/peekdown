@@ -68,7 +68,7 @@ func openTree(t *testing.T, s *Shell, proj string) *ui.Tester {
 		t.Fatal(err)
 	}
 	s.Sidebar.Visible = true
-	s.SetSidebarTab(0)
+	s.SetFilesVisible(true)
 	tt := s.render(t)
 	tt.Frame()
 	return tt
@@ -162,7 +162,7 @@ func TestFileTreeRestoresExpandedFromSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2.Sidebar.Visible = true
-	s2.SetSidebarTab(0)
+	s2.SetFilesVisible(true)
 	tt2 := s2.render(t)
 	tt2.Frame()
 	wantRows(t, proj, s2.tree.rows, "a", "a/b", "a/y.md", "root.md")
@@ -403,8 +403,8 @@ func TestRevealFileExpandsAndScrolls(t *testing.T) {
 	if r.Y < 0 || r.Y+r.H > 600 { // the test window is 800x600
 		t.Fatalf("revealed row at %v is outside the 600 high window", r)
 	}
-	if !s.Sidebar.Visible || s.Sidebar.Tab != 0 {
-		t.Fatalf("sidebar after reveal: %+v, want the explorer shown", s.Sidebar)
+	if !s.Sidebar.Visible {
+		t.Fatalf("sidebar after reveal: %+v, want the file pane shown", s.Sidebar)
 	}
 }
 

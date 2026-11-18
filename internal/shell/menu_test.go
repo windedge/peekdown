@@ -172,8 +172,8 @@ func TestMenuCloseTabShortcuts(t *testing.T) {
 	}
 }
 
-// TestMenuSidebarToggles walks Ctrl+B and Ctrl+Shift+E: each shows its own
-// sidebar segment and hides the sidebar when it already shows it.
+// TestMenuSidebarToggles walks Ctrl+B and Ctrl+Shift+E: each flips its own
+// panel and leaves the other one alone.
 func TestMenuSidebarToggles(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
@@ -183,26 +183,28 @@ func TestMenuSidebarToggles(t *testing.T) {
 	tt.Frame()
 	m := BuildMenu(s)
 
+	s.Outline.Visible = false
+	s.Sidebar.Visible = false
 	chooseMenuItem(t, m, "Toggle Outline", "CmdOrCtrl+B")
 	tt.Frame()
-	if !s.Sidebar.Visible || s.Sidebar.Tab != 1 {
-		t.Fatalf("Ctrl+B: visible %v tab %d, want the outline", s.Sidebar.Visible, s.Sidebar.Tab)
+	if !s.Outline.Visible || s.Sidebar.Visible {
+		t.Fatalf("Ctrl+B: outline %v files %v, want only the outline", s.Outline.Visible, s.Sidebar.Visible)
 	}
 	chooseMenuItem(t, m, "Toggle Outline", "CmdOrCtrl+B")
 	tt.Frame()
-	if s.Sidebar.Visible {
-		t.Fatal("Ctrl+B again did not hide the sidebar")
+	if s.Outline.Visible {
+		t.Fatal("Ctrl+B again did not hide the outline")
 	}
 
 	chooseMenuItem(t, m, "Toggle Files", "CmdOrCtrl+Shift+E")
 	tt.Frame()
-	if !s.Sidebar.Visible || s.Sidebar.Tab != 0 {
-		t.Fatalf("Ctrl+Shift+E: visible %v tab %d, want the files", s.Sidebar.Visible, s.Sidebar.Tab)
+	if !s.Sidebar.Visible || s.Outline.Visible {
+		t.Fatalf("Ctrl+Shift+E: files %v outline %v, want only the files", s.Sidebar.Visible, s.Outline.Visible)
 	}
 	chooseMenuItem(t, m, "Toggle Files", "CmdOrCtrl+Shift+E")
 	tt.Frame()
 	if s.Sidebar.Visible {
-		t.Fatal("Ctrl+Shift+E again did not hide the sidebar")
+		t.Fatal("Ctrl+Shift+E again did not hide the files")
 	}
 }
 
@@ -374,6 +376,7 @@ func TestMenuHelpOpensTheProjectPages(t *testing.T) {
 // would.
 func TestMenuButtonDrawsTheAppMenu(t *testing.T) {
 	s, dir := newShell(t)
+	s.Outline.Visible = false
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -406,8 +409,8 @@ func TestMenuButtonDrawsTheAppMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !s.Sidebar.Visible || s.Sidebar.Tab != 1 {
-		t.Fatalf("Toggle Outline from the bar: visible %v tab %d", s.Sidebar.Visible, s.Sidebar.Tab)
+	if !s.Outline.Visible {
+		t.Fatal("Toggle Outline from the bar did not show the right panel")
 	}
 }
 

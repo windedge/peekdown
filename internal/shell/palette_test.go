@@ -24,7 +24,7 @@ func openPaletteFor(t *testing.T, s *Shell, tt *ui.Tester) {
 	if !s.paletteOpen {
 		t.Fatalf("the palette trigger left the popover closed")
 	}
-	if _, ok := tt.Find("Theme petal"); !ok {
+	if _, ok := tt.Find("Theme paper"); !ok {
 		t.Fatalf("no theme cards in the popover: %v", tt.Texts())
 	}
 }
@@ -67,9 +67,9 @@ func TestPaletteAppearanceSitsOverTheThemes(t *testing.T) {
 	if !ok {
 		t.Fatalf("no appearance note: %v", tt.Texts())
 	}
-	card, ok := tt.Find("Theme petal")
+	card, ok := tt.Find("Theme paper")
 	if !ok {
-		t.Fatalf("no petal card: %v", tt.Texts())
+		t.Fatalf("no paper card: %v", tt.Texts())
 	}
 	if heading.Y+heading.H > track.Y+1 {
 		t.Fatalf("the heading ends at %v, the track starts at %v", heading.Y+heading.H, track.Y)
@@ -125,7 +125,19 @@ func TestPaletteGridIsTwoRowsOfFive(t *testing.T) {
 		}
 		return r
 	}
-	first, fifth, sixth := card("petal"), card("tide"), card("apricot")
+	first, second, fifth, sixth := card("paper"), card("petal"), card("dusk"), card("tide")
+	if math.Abs(float64(second.Y-first.Y)) > 1 || second.X <= first.X {
+		t.Fatalf("petal is not right of paper on the first row: %v then %v", first, second)
+	}
+	for _, id := range settings.AccentThemeIDs {
+		r := card(id)
+		if math.Abs(float64(r.Y-first.Y)) > 1 {
+			continue
+		}
+		if r.X < first.X || (r.X > first.X && r.X < second.X) {
+			t.Fatalf("card %q at %v breaks the paper/petal order at %v/%v", id, r, first, second)
+		}
+	}
 	if math.Abs(float64(first.Y-fifth.Y)) > 1 {
 		t.Fatalf("the fifth card sits on row %v, want the first card's %v", fifth.Y, first.Y)
 	}
@@ -277,13 +289,13 @@ func TestPaletteSelectedCardOutline(t *testing.T) {
 	tt := s.renderSize(t, 1400, 880)
 	openPaletteFor(t, s, tt)
 
-	chosen, ok := tt.Find("preview petal")
+	chosen, ok := tt.Find("preview paper")
+	if !ok {
+		t.Fatalf("no paper preview: %v", tt.Texts())
+	}
+	unchosen, ok := tt.Find("preview petal")
 	if !ok {
 		t.Fatalf("no petal preview: %v", tt.Texts())
-	}
-	plain, ok := tt.Find("preview mist")
-	if !ok {
-		t.Fatalf("no mist preview: %v", tt.Texts())
 	}
 	// The accent stroke is the 2 DIP Painter.Stroke over the preview's
 	// paints, its center on the edge: the sampled pixel may sit half a
@@ -292,7 +304,7 @@ func TestPaletteSelectedCardOutline(t *testing.T) {
 	img := tt.Image()
 	stroke := accentThemeByID(s.Saved.AccentTheme).of(false).Accent
 	c1 := img.At(int(chosen.X)+1, int(chosen.Y+chosen.H/2))
-	c2 := img.At(int(plain.X)+1, int(plain.Y+plain.H/2))
+	c2 := img.At(int(unchosen.X)+1, int(unchosen.Y+unchosen.H/2))
 	r, g, b, _ := c1.RGBA()
 	if absDiff(uint8(r>>8), stroke.R) > 2 || absDiff(uint8(g>>8), stroke.G) > 2 || absDiff(uint8(b>>8), stroke.B) > 2 {
 		t.Fatalf("the chosen preview's edge shows %v, want the accent stroke %v +-2", c1, stroke)

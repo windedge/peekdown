@@ -93,6 +93,10 @@ func colorRuns(img *image.RGBA, y int, c ui.Color) [][2]int {
 	return runs
 }
 
+// panelColor is the document panel fill: a step off Surface so the
+// block still reads on the document card.
+func panelColor(t *ui.Theme) ui.Color { return t.Surface.Mix(t.SurfaceHover, 0.45) }
+
 // surfaceRows returns the first and the last row of the page's surface
 // fills, the widest of them, and -1 when nothing filled.
 func surfaceRows(img *image.RGBA, surface ui.Color) (first, last, widest int) {
@@ -125,11 +129,11 @@ func TestTableHeaderIsOneBand(t *testing.T) {
 	theme := ui.LightTheme()
 	_, tt, _ := frame(t, "| aaa | bbb | ccc |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n", 640, 400)
 	img := tt.Image()
-	_, _, band := surfaceRows(img, theme.Surface)
+	_, _, band := surfaceRows(img, panelColor(theme))
 	if band < 0 {
 		t.Fatal("the header's surface did not draw")
 	}
-	runs := colorRuns(img, band, theme.Surface)
+	runs := colorRuns(img, band, panelColor(theme))
 	if len(runs) != 3 {
 		t.Fatalf("y=%d: %v, want one surface run per column", band, runs)
 	}
@@ -158,12 +162,12 @@ func TestTableHeaderFillsInsideTheFrame(t *testing.T) {
 	theme := ui.LightTheme()
 	_, tt, _ := frame(t, "| aaa | bbb | ccc |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n", 640, 400)
 	img := tt.Image()
-	first, last, band := surfaceRows(img, theme.Surface)
+	first, last, band := surfaceRows(img, panelColor(theme))
 	if first < 0 {
 		t.Fatal("the header's surface did not draw")
 	}
-	top := colorRuns(img, first, theme.Surface)
-	body := colorRuns(img, band, theme.Surface)
+	top := colorRuns(img, first, panelColor(theme))
+	body := colorRuns(img, band, panelColor(theme))
 	if len(top) == 0 || len(body) == 0 {
 		t.Fatalf("no surface on y=%d or y=%d", first, band)
 	}
@@ -360,7 +364,7 @@ func TestTableKeepsItsContentWidth(t *testing.T) {
 	theme := ui.LightTheme()
 	_, tt, _ := frame(t, "| a | b |\n|---|---|\n| 1 | 2 |\n\n", 640, 400)
 	// The header's surface fill ends where the table ends.
-	right := rightmostColorX(tt.Image(), theme.Surface)
+	right := rightmostColorX(tt.Image(), panelColor(theme))
 	if right < 0 {
 		t.Fatal("the header's surface did not draw")
 	}

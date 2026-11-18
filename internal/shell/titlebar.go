@@ -93,10 +93,10 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 		}).Tooltip(locales.BarOpenTooltip())
 		iconButton(c, "bar-find", searchIcon, locales.BarFind(), 24, 14, s.OpenSearch).
 			Tooltip(locales.BarFindTooltip())
-		iconButton(c, "bar-files", folderTreeIcon, locales.BarFilesPanel(), 24, 14, func() { s.SetSidebarTab(0) }).
-			Tooltip(locales.BarFilesTooltip())
-		iconButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(), 24, 14, func() { s.SetSidebarTab(1) }).
-			Tooltip(locales.BarOutlineTooltip())
+		s.barToggleButton(c, "bar-files", folderTreeIcon, locales.BarFilesPanel(),
+			s.Sidebar.Visible, func() { s.ToggleFiles() }).Tooltip(locales.BarFilesTooltip())
+		s.barToggleButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(),
+			s.Outline.Visible, func() { s.SetOutlineVisible(!s.Outline.Visible) }).Tooltip(locales.BarOutlineTooltip())
 		pal := iconButton(c, "bar-palette", paletteIcon, locales.BarThemeTooltip(), 24, 14, s.openPalette)
 		pal.Tooltip(locales.BarThemeTooltip())
 		iconButton(c, "bar-settings", gearIcon, locales.BarSettingsPanel(), 24, 14, s.OpenSettings).
@@ -104,6 +104,29 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 		s.menuButton(c)
 		s.palettePopover(c, pal)
 	})
+}
+
+// barToggleButton is the bar's panel switch: an open panel takes the
+// accent theme's selected-panel wash and an accent glyph, so the button
+// shows the state it toggles.
+func (s *Shell) barToggleButton(c *ui.Context, key string, icon *ui.SVG, label string, active bool, onClick func()) ui.Element {
+	t := c.Theme()
+	color := t.TextMuted
+	b := ui.ButtonBase(c.Key(key)).Label(label).Size(24, 24).Padding(0).Radius(5).
+		AlignItems(ui.Center).Justify(ui.Center).FocusRing(false)
+	if active {
+		k := s.accentColors(c)
+		b.Background(k.PanelSel)
+		color = k.Accent
+	} else if b.Hovered() {
+		b.Background(t.SurfaceHover)
+		color = t.Text
+	}
+	b.TextColor(color).Children(func() { ui.Icon(c, icon).Size(14, 14) })
+	if b.Clicked() && onClick != nil {
+		onClick()
+	}
+	return b
 }
 
 // menuButton is the bar's entry into the app menu: the native menu bar is

@@ -40,14 +40,17 @@ type AccentColors struct {
 	// Panel and Card are the floating surfaces; PanelSel the fill a
 	// selected row takes; SurfaceHover the fill a hovered one takes.
 	Panel, Card, CardFocused, PanelSel, SurfaceHover ui.Color
+	// Backdrop dims the window behind a dialog; it follows the window's
+	// appearance rather than the accent hue, as mojian's Backdrop does.
+	Backdrop ui.Color
 	// Syntax are the code highlight's tokens: keyword, type, function,
 	// number, string and comment.
 	Syntax [6]ui.Color
 }
 
-// petalID is the default: mojian's own warm paper. The petal set is the
-// literal palette mojian's theme.go has always drawn, so the default
-// window is pixel-equal to the build before the token layer.
+// petalID is mojian's own DefaultID. Its set keeps the literal palette
+// mojian's theme.go has always drawn, including the DefaultID special
+// case, independent of this build's default.
 const petalID = "petal"
 
 func rgba(r, g, b uint8, a float32) ui.Color { return ui.RGBA(r, g, b, a) }
@@ -58,9 +61,28 @@ func syntaxColors(kw, ty, fn, num, str, cm string) [6]ui.Color {
 	}
 }
 
-// accentThemes lists the accent themes in the design's order, petal
-// first.
+// accentThemes lists the picker's order, paper first, with the remaining
+// hue families grouped by warmth.
 var accentThemes = []AccentTheme{
+	{
+		ID: "paper", NameKey: "accentThemePaper",
+		Light: AccentColors{
+			BgTop: ui.Hex("#f6f6f7"), BgMid: ui.Hex("#f7f7f8"), BgLow: ui.Hex("#f8f8f8"), BgBottom: ui.Hex("#f8f8f8"),
+			BgTint: ui.Transparent,
+			Accent: ui.Hex("#466fbd"), Danger: ui.Hex("#b54e5a"), Attention: ui.Hex("#a2812d"),
+			Panel: rgba(255, 255, 255, 0.97), Card: rgba(255, 255, 255, 0.78), CardFocused: rgba(255, 255, 255, 0.97),
+			PanelSel: rgba(70, 111, 189, 0.12), SurfaceHover: ui.Hex("#f2f2f2"),
+			Syntax: syntaxColors("#b54e5a", "#a2812d", "#8557a4", "#216ccc", "#1f895b", "#7a7a7a"),
+		},
+		Dark: AccentColors{
+			BgTop: ui.Hex("#141416"), BgMid: ui.Hex("#151517"), BgLow: ui.Hex("#161618"), BgBottom: ui.Hex("#161618"),
+			BgTint: rgba(90, 120, 200, 0.10),
+			Accent: ui.Hex("#7daafd"), Danger: ui.Hex("#e17c85"), Attention: ui.Hex("#dcb968"),
+			Panel: rgba(44, 44, 44, 0.97), Card: rgba(28, 28, 30, 0.58), CardFocused: rgba(36, 36, 39, 0.95),
+			PanelSel: rgba(125, 170, 253, 0.18), SurfaceHover: ui.Hex("#373737"),
+			Syntax: syntaxColors("#e17c85", "#dcb968", "#bc8fdb", "#5c9ffb", "#61c191", "#9b9b9b"),
+		},
+	},
 	{
 		ID: "petal", NameKey: "accentThemePetal",
 		Light: AccentColors{
@@ -214,25 +236,6 @@ var accentThemes = []AccentTheme{
 		},
 	},
 	{
-		ID: "paper", NameKey: "accentThemePaper",
-		Light: AccentColors{
-			BgTop: ui.Hex("#f6f6f7"), BgMid: ui.Hex("#f7f7f8"), BgLow: ui.Hex("#f8f8f8"), BgBottom: ui.Hex("#f8f8f8"),
-			BgTint: ui.Transparent,
-			Accent: ui.Hex("#466fbd"), Danger: ui.Hex("#b54e5a"), Attention: ui.Hex("#a2812d"),
-			Panel: rgba(255, 255, 255, 0.97), Card: rgba(255, 255, 255, 0.78), CardFocused: rgba(255, 255, 255, 0.97),
-			PanelSel: rgba(70, 111, 189, 0.12), SurfaceHover: ui.Hex("#f2f2f2"),
-			Syntax: syntaxColors("#b54e5a", "#a2812d", "#8557a4", "#216ccc", "#1f895b", "#7a7a7a"),
-		},
-		Dark: AccentColors{
-			BgTop: ui.Hex("#141416"), BgMid: ui.Hex("#151517"), BgLow: ui.Hex("#161618"), BgBottom: ui.Hex("#161618"),
-			BgTint: rgba(90, 120, 200, 0.10),
-			Accent: ui.Hex("#7daafd"), Danger: ui.Hex("#e17c85"), Attention: ui.Hex("#dcb968"),
-			Panel: rgba(44, 44, 44, 0.97), Card: rgba(28, 28, 30, 0.58), CardFocused: rgba(36, 36, 39, 0.95),
-			PanelSel: rgba(125, 170, 253, 0.18), SurfaceHover: ui.Hex("#373737"),
-			Syntax: syntaxColors("#e17c85", "#dcb968", "#bc8fdb", "#5c9ffb", "#61c191", "#9b9b9b"),
-		},
-	},
-	{
 		ID: "plain", NameKey: "accentThemePlain",
 		Light: AccentColors{
 			BgTop: ui.Hex("#eceef4"), BgMid: ui.Hex("#eceef4"), BgLow: ui.Hex("#eceef4"), BgBottom: ui.Hex("#eceef4"),
@@ -254,7 +257,7 @@ var accentThemes = []AccentTheme{
 }
 
 // accentThemeByID resolves an accent theme's id, unknown and empty ids
-// falling back to the default petal, as mojian's Resolve does.
+// falling back to the default paper, as mojian's Resolve does.
 func accentThemeByID(id string) AccentTheme {
 	for i := range accentThemes {
 		if accentThemes[i].ID == id {
@@ -273,12 +276,17 @@ func AccentThemeIDs() []string {
 	return ids
 }
 
-// of returns the colors of one accent theme in one appearance.
+// of returns the colors of one accent theme in one appearance. The
+// backdrop is shared by every accent theme, so it is filled in here.
 func (a AccentTheme) of(dark bool) AccentColors {
 	if dark {
-		return a.Dark
+		c := a.Dark
+		c.Backdrop = rgba(0, 0, 0, 0.45)
+		return c
 	}
-	return a.Light
+	c := a.Light
+	c.Backdrop = rgba(28, 16, 26, 0.18)
+	return c
 }
 
 // applyAccentTheme copies the frame's theme over with the accent
@@ -322,6 +330,35 @@ func accentTextOf(c ui.Color) ui.Color {
 		return ui.RGB(24, 24, 27)
 	}
 	return ui.RGB(255, 255, 255)
+}
+
+// cardRim is mojian's card border token: a white hairline on the
+// focused document card, a fainter one on the translucent side panels.
+func cardRim(t *ui.Theme, focused bool) ui.Color {
+	if t.Dark {
+		if focused {
+			return rgba(255, 255, 255, 0.14)
+		}
+		return rgba(255, 255, 255, 0.06)
+	}
+	if focused {
+		return rgba(255, 255, 255, 1)
+	}
+	return rgba(255, 255, 255, 0.85)
+}
+
+// cardShadow is mojian's shadow token for the two card layers.
+func cardShadow(t *ui.Theme, focused bool) ui.Color {
+	if t.Dark {
+		if focused {
+			return rgba(0, 0, 0, 0.45)
+		}
+		return rgba(0, 0, 0, 0.28)
+	}
+	if focused {
+		return rgba(48, 36, 48, 0.12)
+	}
+	return rgba(48, 36, 48, 0.07)
 }
 
 // paintAccentBackground paints the window's background below the bars

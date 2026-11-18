@@ -13,10 +13,14 @@ func TestDefault(t *testing.T) {
 	if s.Version != 1 || s.Theme != "Auto" || s.Layout != "centered" {
 		t.Fatalf("defaults: %+v", s)
 	}
+	if s.AccentTheme != "paper" {
+		t.Fatalf("default accent theme = %q, want paper", s.AccentTheme)
+	}
 	if s.FontSize != 16 || s.MonoFontSize != 13 || s.ScrollSpeed != 1 {
 		t.Fatalf("default sizes: %+v", s)
 	}
-	if !s.InertiaScroll || !s.AutoRefresh || s.SidebarWidth != 200 || s.SidebarTab != "explorer" {
+	if !s.InertiaScroll || !s.AutoRefresh || s.SidebarWidth != 200 ||
+		s.OutlineWidth != 232 || !s.OutlineVisible {
 		t.Fatalf("default behavior: %+v", s)
 	}
 	// The Rust implementation's default_project_root_markers(); VCS
@@ -33,6 +37,36 @@ func TestDefault(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.ProjectRootMarkers, want) {
 		t.Fatalf("default markers: got %q, want %q", s.ProjectRootMarkers, want)
+	}
+}
+
+// A file written when petal was the default keeps the user's choice;
+// normalization only replaces ids this build does not know.
+func TestLoadKeepsSavedPetalAccentTheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"version":1,"accent_theme":"petal"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccentTheme != "petal" {
+		t.Fatalf("saved petal loaded as %q, want petal", got.AccentTheme)
+	}
+}
+
+func TestLoadNormalizesUnknownAccentTheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, []byte(`{"version":1,"accent_theme":"soup"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccentTheme != "paper" {
+		t.Fatalf("unknown accent theme loaded as %q, want paper", got.AccentTheme)
 	}
 }
 
@@ -88,6 +122,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	want.ExpandedDirs = []string{"/a", "/b"}
 	want.SidebarVisible = true
 	want.SidebarWidth = 321
+	want.OutlineVisible = false
+	want.OutlineWidth = 287
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +138,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 
 func TestUnknownKeysIgnored(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName)
-	if err := os.WriteFile(path, []byte(`{"theme":"light","something_new":42}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"theme":"light","something_new":42,"sidebar_tab":"outline"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(path)
@@ -111,6 +147,9 @@ func TestUnknownKeysIgnored(t *testing.T) {
 	}
 	if got.Theme != "Light" || got.FontSize != 16 || got.Layout != "centered" {
 		t.Fatalf("unknown keys: %+v", got)
+	}
+	if !got.OutlineVisible || got.OutlineWidth != 232 {
+		t.Fatalf("the old sidebar_tab key changed the outline defaults: %+v", got)
 	}
 }
 

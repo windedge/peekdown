@@ -29,6 +29,7 @@ func paragraphRect(tt *ui.Tester, want string) (ui.Rect, bool) {
 // body at 900 DIPs and centers it, full_width follows the window.
 func TestLayoutAppliedToContent(t *testing.T) {
 	s, dir := newShell(t)
+	s.Outline.Visible = false
 	long := strings.Repeat("word ", 120)
 	path := filepath.Join(dir, "long.md")
 	if err := os.WriteFile(path, []byte(long+"\n"), 0o644); err != nil {
@@ -70,24 +71,25 @@ func TestLayoutAppliedToContent(t *testing.T) {
 	}
 }
 
-// TestApplySidebarTab walks the saved tab: Apply selects it, an unknown
-// name falls back to the explorer.
-func TestApplySidebarTab(t *testing.T) {
+// TestApplyOutlineSettings walks Apply with the saved right panel:
+// out-of-range widths are clamped without forcing the pane open.
+func TestApplyOutlineSettings(t *testing.T) {
 	s, _ := newShell(t)
+	s.Outline.Visible = false
 	saved := s.Saved
-	saved.SidebarTab = "outline"
+	saved.OutlineWidth = 999
 	if err := s.Apply(saved); err != nil {
 		t.Fatal(err)
 	}
-	if s.Sidebar.Tab != 1 {
-		t.Fatalf("tab = %d, want 1", s.Sidebar.Tab)
+	if s.Outline.Visible || s.Outline.Width != outlineWidthMax {
+		t.Fatalf("outline after apply: %+v", s.Outline)
 	}
-	saved.SidebarTab = "nonsense"
+	saved.OutlineWidth = 10
 	if err := s.Apply(saved); err != nil {
 		t.Fatal(err)
 	}
-	if s.Sidebar.Tab != 0 {
-		t.Fatalf("tab for a bad name = %d, want 0", s.Sidebar.Tab)
+	if s.Outline.Width != outlineWidthMin {
+		t.Fatalf("outline min = %v, want %v", s.Outline.Width, outlineWidthMin)
 	}
 }
 

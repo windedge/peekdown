@@ -1,39 +1,17 @@
 package shell
 
 import (
-	"image"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/egoist/mygo/ui"
 )
 
 // The composed page clears the scrollbar on the right at every level: the
 // body rows take the clearance as padding, and the frontmatter card, which
 // sits above the list rather than in a row, takes the same room as a right
-// margin. Without it the card's frame ran to the window's edge, under the
-// bar, and the reader saw the card's right side cut.
-
-// rightmostSurfaceX returns the right edge of the last pixel of color c in
-// rows y0..y1, or -1 when nothing painted it.
-func rightmostSurfaceX(img *image.RGBA, c ui.Color, y0, y1 int) int {
-	right := -1
-	b := img.Bounds()
-	for y := max(y0, b.Min.Y); y < min(y1, b.Max.Y); y++ {
-		for x := b.Max.X - 1; x > right; x-- {
-			r, g, bl, a := img.RGBAAt(x, y).RGBA()
-			if uint8(r>>8) == c.R && uint8(g>>8) == c.G && uint8(bl>>8) == c.B && uint8(a>>8) == c.A {
-				if x > right {
-					right = x
-				}
-				break
-			}
-		}
-	}
-	return right
-}
+// margin. Both clear the document card's right edge, where the overlay
+// bar now paints, rather than the window's edge.
 
 func TestFrontmatterAndBodyClearTheScrollbar(t *testing.T) {
 	s, dir := newShell(t)
@@ -51,21 +29,20 @@ func TestFrontmatterAndBodyClearTheScrollbar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const width = 1400
-	tt := s.renderSize(t, width, 600)
+	tt := s.renderSize(t, 1400, 600)
 	tt.Frame()
 	// The window is DIPs in the tester, so the clearance is the same 16.
-	clearance := 16 // view.rowClearance, the rows' scrollbar clearance
-
-	// The card is the only surface on the page, and it sits above the
-	// body: its frame ends where the rows' text does. The scan starts
-	// under the title bar, whose tray is the same surface color now.
-	card := rightmostSurfaceX(tt.Image(), ui.LightTheme().Surface, TitleBarHeight, 400)
-	if card < 0 {
-		t.Skip("the card did not paint")
+	clearance := float32(16) // view.rowClearance, the rows' scrollbar clearance
+	doc, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatalf("no document card: %v", tt.Texts())
 	}
-	if got := width - 1 - card; got < clearance {
-		t.Fatalf("the frontmatter card ends %d DIPs from the window's edge, want %d", got, clearance)
+	card, ok := tt.Find("Frontmatter card")
+	if !ok {
+		t.Fatalf("no frontmatter card: %v", tt.Texts())
+	}
+	if got := doc.X + doc.W - (card.X + card.W); got < clearance {
+		t.Fatalf("the frontmatter card ends %v DIPs from the document card's edge, want %v", got, clearance)
 	}
 
 	// The body's line box clears it too.
@@ -73,8 +50,8 @@ func TestFrontmatterAndBodyClearTheScrollbar(t *testing.T) {
 	if !ok {
 		t.Fatalf("texts %v: want the paragraph", tt.Texts())
 	}
-	if got := width - (r.X + r.W); got < float32(clearance) {
-		t.Fatalf("the body ends %v DIPs from the window's edge, want %d (rect %v)", got, clearance, r)
+	if got := doc.X + doc.W - (r.X + r.W); got < 12 {
+		t.Fatalf("the body ends %v DIPs from the document card's edge, want >= 12 (rect %v)", got, r)
 	}
 }
 

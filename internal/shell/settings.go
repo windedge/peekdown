@@ -28,30 +28,36 @@ const (
 // settingsDialog renders the settings modal: every control applies at
 // once through persist (no Save button), the Done button just closes.
 func (s *Shell) settingsDialog(c *ui.Context) {
-	m := ui.Modal(c, &s.SettingsOpen, func() {
+	winW, winH := c.Size()
+	m := ui.DialogBase(c, &s.SettingsOpen, func(backdrop, panel ui.Element) {
 		// The font popovers draw over the dialog: mygo stacks overlays in
 		// build order, so a layer built inside it sits on top, and the
 		// anchor needs the trigger's frame, which only exists here.
 		t := c.Theme()
-		winW, winH := c.Size()
+		k := s.accentColors(c)
+		backdrop.Background(k.Backdrop).Label("Settings backdrop")
+		panel.Width(min(settingsWidth, winW-48)).MaxHeight(winH-48).
+			Padding(settingsPadding).Gap(14).Radius(10).
+			Background(k.CardFocused).Border(1, cardRim(t, true)).
+			Shadow(0, 1, 3, 0, cardShadow(t, true)).
+			Shadow(0, 6, 22, -2, cardShadow(t, true)).
+			Clip().Label("Settings panel")
 		fields := max(winH-settingsRoom, settingsMinFields)
-		ui.Column(c).Width(min(settingsWidth, winW-48)).Padding(settingsPadding).Gap(14).Children(func() {
-			ui.Text(c, locales.SettingsTitle()).FontSize(15).FontWeight(650).TextColor(t.Text)
+		ui.Text(c, locales.SettingsTitle()).FontSize(15).FontWeight(650).TextColor(t.Text)
 
-			ui.Scroll(c).Label("Settings fields").MaxHeight(fields).Children(func() {
-				ui.Column(c).Gap(settingsCardGap).PaddingEnd(12).Children(func() {
-					s.groups(c)
-				})
-				if s.saveErr != "" {
-					ui.Text(c, s.saveErr).FontSize(12).TextColor(t.Danger)
-				}
+		ui.Scroll(c).Label("Settings fields").MaxHeight(fields).Children(func() {
+			ui.Column(c).Gap(settingsCardGap).PaddingEnd(12).Children(func() {
+				s.groups(c)
 			})
-			if ui.PrimaryButton(c, locales.SettingsDone()).Clicked() {
-				s.fontPickOpen, s.fontPickMonoOpen = false, false
-				s.SettingsOpen = false
-				s.saveErr = ""
+			if s.saveErr != "" {
+				ui.Text(c, s.saveErr).FontSize(12).TextColor(t.Danger)
 			}
 		})
+		if ui.PrimaryButton(c, locales.SettingsDone()).Label("Settings Done").Clicked() {
+			s.fontPickOpen, s.fontPickMonoOpen = false, false
+			s.SettingsOpen = false
+			s.saveErr = ""
+		}
 	})
 	if m.Dismissed() {
 		// A popover's outside press lands here too; it closes both, and
@@ -190,13 +196,15 @@ func (s *Shell) settingRow(c *ui.Context, title, detail string, control func()) 
 // over one rounded card of rows.
 func (s *Shell) group(c *ui.Context, title string, fields func()) {
 	t := c.Theme()
+	k := s.accentColors(c)
 	s.rows = 0
 	ui.Column(c).Gap(8).FillWidth().Children(func() {
 		ui.Row(c).MinHeight(24).Padding(2, 0).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(11).FontWeight(650).TextColor(t.TextMuted).LetterSpacing(0.5)
 		})
-		ui.Column(c).FillWidth().Background(t.Surface).BorderWidth(1).BorderColor(t.Border).
-			Radius(10).Shadow(0, 1, 3, 0, t.Border).Clip().Children(fields)
+		ui.Column(c).FillWidth().Background(k.Card).Border(1, cardRim(t, false)).
+			Radius(10).Shadow(0, 1, 3, 0, cardShadow(t, false)).Clip().
+			Label(title + " card").Children(fields)
 	})
 }
 

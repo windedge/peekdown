@@ -58,7 +58,10 @@ type Shell struct {
 	watchHits   chan string
 	Sidebar     struct {
 		Width   float32
-		Tab     int // 0 files, 1 outline
+		Visible bool
+	}
+	Outline struct {
+		Width   float32
 		Visible bool
 	}
 	tree         treeState
@@ -99,10 +102,18 @@ type Shell struct {
 	SearchOpen bool
 	search     searchBar
 
-	// progressBody is the body box's identity: the reading progress bar
-	// reads its committed bounds, so the fill stops at the body's right
-	// edge when the sidebar narrows it.
+	// progressBody is the content area's identity: the reading progress
+	// bar reads its committed bounds, so the fill spans the whole area
+	// under the title bar, across the file pane, the document and the
+	// outline, however the splits divide it.
 	progressBody ui.Handle
+
+	// bgRect is the gradient's root rect, which the divider cover's
+	// columns repaint against; gripHover remembers which gutter the
+	// pointer sits in between the hotspot's rebuild and the split's
+	// DrawOver, which runs after the subtree's own paint.
+	bgRect    ui.Rect
+	gripHover [2]bool
 
 	// mermaidCache renders the mermaid blocks of every tab: one app-wide
 	// LRU, shared across tabs and theme or zoom changes.
@@ -167,6 +178,8 @@ func New() *Shell {
 	s.Active = -1
 	s.Sidebar.Width = 200
 	s.Sidebar.Visible = true
+	s.Outline.Width = outlineWidthDefault
+	s.Outline.Visible = true
 	return s
 }
 
@@ -444,14 +457,12 @@ func sameFile(tabPath, path string) bool {
 	return tabPath == path
 }
 
-// SetSidebarTab selects the sidebar segment and shows the sidebar.
-func (s *Shell) SetSidebarTab(i int) {
-	if i != 0 && i != 1 {
-		return
-	}
-	s.Sidebar.Tab = i
-	s.Sidebar.Visible = true
-}
+// SetFilesVisible makes sure the file pane is on screen, for the bar
+// button and the reveal commands.
+func (s *Shell) SetFilesVisible(v bool) { s.Sidebar.Visible = v }
+
+// SetOutlineVisible shows or hides the right-hand outline panel.
+func (s *Shell) SetOutlineVisible(v bool) { s.Outline.Visible = v }
 
 // SetSidebarWidth clamps the sidebar width to a usable range.
 func (s *Shell) SetSidebarWidth(w float32) {
@@ -465,29 +476,64 @@ func (s *Shell) SetSidebarWidth(w float32) {
 	s.Sidebar.Width = w
 }
 
+// The outline's width, its first-run value and its drag limits.
+const (
+	outlineWidthDefault = float32(232)
+	outlineWidthMin     = float32(160)
+	outlineWidthMax     = float32(360)
+)
+
+// SetOutlineWidth clamps the outline width to a usable range.
+func (s *Shell) SetOutlineWidth(w float32) {
+	s.Outline.Width = min(max(w, outlineWidthMin), outlineWidthMax)
+}
+
 // widthSaveDelay waits out a drag: the divider moves every frame while
 // held, and only the width it stops on belongs in settings.json, the
 // way mygo's own window state settles before it writes.
 const widthSaveDelay = 300 * time.Millisecond
 
-// persistSidebarWidth records the sidebar width through the settings,
-// straight into Saved and disk like the tree's expanded dirs: the width
-// is instant state, not a settings-dialog field.
-func (s *Shell) persistSidebarWidth() {
+// outlineMinWindowWidth is the window width below which the outline
+// gives its room back to the document, without changing what was saved.
+const outlineMinWindowWidth = 1100
+
+// persistPaneWidths records both dividers through the settings, straight
+// into Saved and disk like the tree's expanded dirs: the widths are
+// instant state, not settings-dialog fields.
+func (s *Shell) persistPaneWidths() {
 	s.Saved.SidebarWidth = float64(s.Sidebar.Width)
+	s.Saved.OutlineWidth = float64(s.Outline.Width)
 	if s.Save != nil {
 		_ = s.Save(s.Saved)
 	}
 }
 
+// settleWidthSave debounces either divider's drag into one settings
+// write. It runs once per frame, after both splits were built.
+func (s *Shell) settleWidthSave(c *ui.Context, changed bool) {
+	if changed {
+		s.widthSaveTimer = c.Now().Add(widthSaveDelay)
+	}
+	if s.widthSaveTimer.IsZero() {
+		return
+	}
+	if now := c.Now(); now.Before(s.widthSaveTimer) {
+		c.After(s.widthSaveTimer.Sub(now))
+		return
+	}
+	s.widthSaveTimer = time.Time{}
+	s.persistPaneWidths()
+}
+
 // RestoreFromSettings puts the saved settings on the shell at startup:
-// the sidebar's width, tab and visibility, and the theme. It does not
-// persist; the host mirrors the theme on the window.
+// the panes' widths and visibility, and the theme. It does not persist;
+// the host mirrors the theme on the window.
 func (s *Shell) RestoreFromSettings(t settings.Settings) {
 	s.Saved = t
 	s.SetSidebarWidth(float32(t.SidebarWidth))
+	s.SetOutlineWidth(float32(t.OutlineWidth))
 	s.Sidebar.Visible = t.SidebarVisible
-	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
+	s.Outline.Visible = t.OutlineVisible
 	s.applyAutoRefresh()
 	if s.SetTheme != nil {
 		s.SetTheme(ThemeSource(t.Theme))
@@ -577,7 +623,7 @@ func (s *Shell) Apply(t settings.Settings) error {
 		s.SetSidebarWidth(float32(t.SidebarWidth))
 	}
 	s.applyAutoRefresh()
-	s.Sidebar.Tab = sidebarTabIndex(t.SidebarTab)
+	s.SetOutlineWidth(float32(t.OutlineWidth))
 	if s.SetTheme != nil {
 		s.SetTheme(ThemeSource(t.Theme))
 	}
@@ -636,9 +682,12 @@ func (s *Shell) View(c *ui.Context) {
 	// c.Theme(). The window's own background is painted, not filled, so
 	// the root keeps its (now matched) color under the gradient.
 	k := s.accentColors(c)
-	c.SetTheme(applyAccentTheme(c.Theme(), k))
+	c.SetTheme(s.applyAccentTheme(c, k))
 	ui.Column(c).Fill().
-		Draw(func(p *ui.Painter, r ui.Rect) { paintAccentBackground(p, r, k) }).
+		Draw(func(p *ui.Painter, r ui.Rect) {
+			s.bgRect = r
+			paintAccentBackground(p, r, k)
+		}).
 		Children(func() {
 			// The bar is the window's title bar, so it draws on the welcome
 			// page too: without it a window with a hidden title bar has no
@@ -650,20 +699,21 @@ func (s *Shell) View(c *ui.Context) {
 				s.welcome(c)
 				return
 			}
-			// The bar floats over the body's top right inside the clipped body
-			// container, so opening it never pushes the document around. The
-			// box the bar's fill is measured against is the body itself, not
-			// the window: with the sidebar visible the body is narrower, and
-			// the bar must stop at the body's right edge (progressBody).
+			// The search bar floats over the body's top right inside the clipped
+			// body container, so opening it never pushes the document around.
+			// The body's root answers LeftToRight: the RTL split below
+			// mirrors what it holds, and only the pane order, not the
+			// document's padding sides or scrollbar edge, may follow it.
 			body := func() {
-				ui.Box(c).Fill().Bind(&s.progressBody).Label("Body").Children(func() {
-					s.content(c)
+				ui.Box(c).Fill().Direction(ui.LeftToRight).Children(func() {
+					ui.Box(c).Fill().Label("Body").Children(func() {
+						s.content(c)
+					})
+					if s.SearchOpen {
+						s.searchView(c)
+					}
+					s.jumpButtons(c)
 				})
-				if s.SearchOpen {
-					s.searchView(c)
-				}
-				s.readingProgress(c)
-				s.jumpButtons(c)
 			}
 			// The body grows into the room the bars leave instead of asking
 			// for the whole column: a Fill here is a hundred percent of the
@@ -672,25 +722,71 @@ func (s *Shell) View(c *ui.Context) {
 			// the free space and drops the content-based minimum (mygo's
 			// flexLayout leaves a growing item's minimum at zero), so the
 			// document's list meets a bounded box and scrolls inside it.
-			if s.Sidebar.Visible {
-				s.SetSidebarWidth(s.Sidebar.Width)
-				split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, body).Grow(1)
-				// A divider move (drag or keyboard) re-arms the save; the width
-				// lands in the settings once the drag settles.
+			// The left split is outermost: its divider runs the full body
+			// height, while the right one only shares the reading column.
+			winW, _ := c.Size()
+			var widthChanged bool
+			withOutline := func() {
+				if !s.Outline.Visible || winW < outlineMinWindowWidth {
+					ui.Box(c).Grow(1).Clip().Children(func() { body() })
+					return
+				}
+				s.SetOutlineWidth(s.Outline.Width)
+				// The outline is the split's first pane, so *size widths it;
+				// Direction docks that pane at the window's right edge. It
+				// must go in the build chain, before the panes build: set on
+				// a built node it would swap logical edges under an already
+				// committed layout (direction.go's setDir).
+				//
+				// The split flips the drag delta only when it reads RTL from
+				// the window around it (split.go's handle.rtl()); under an
+				// LTR window its own Direction(RightToLeft) does not reach
+				// the flip, so a left drag narrows the first pane. Route
+				// *size through a mirror that undoes each move around the
+				// width the frame began at, and write the mirrored value
+				// back so the handle's overshoot resumes from where the
+				// divider really stands; keyboard moves on a focused divider
+				// ride the same path.
+				w := s.Outline.Width
+				split := ui.Split(c, &w,
+					func() { s.outlinePanel(c) }, body).Direction(ui.RightToLeft).Grow(1)
 				if split.Changed() {
-					s.widthSaveTimer = c.Now().Add(widthSaveDelay)
+					before := s.Outline.Width
+					moved := 2*before - w
+					s.SetOutlineWidth(moved)
+					w = 2*s.Outline.Width - moved
+					widthChanged = s.Outline.Width != before
 				}
-				if !s.widthSaveTimer.IsZero() {
-					if now := c.Now(); now.Before(s.widthSaveTimer) {
-						c.After(s.widthSaveTimer.Sub(now))
-					} else {
-						s.widthSaveTimer = time.Time{}
-						s.persistSidebarWidth()
-					}
-				}
-			} else {
-				ui.Box(c).Grow(1).Clip().Children(func() { body() })
 			}
+			// The progress bar floats over the content area itself, outside
+			// the panes: a window-level reading under the title bar, so the
+			// fill spans every pane's width instead of one pane's. The box
+			// wraps the whole area the panes divide, and binds the handle the
+			// fill measures against.
+			area := func() {
+				ui.Box(c).Grow(1).Clip().Label("Content area").Bind(&s.progressBody).Children(func() {
+					widthChanged = s.paneGripHotspots(c, winW) || widthChanged
+					if s.Sidebar.Visible {
+						s.SetSidebarWidth(s.Sidebar.Width)
+						// One DrawOver per element: a second call would replace
+						// the first, so this pass draws both gutters, the left
+						// boundary and (while the outline shows) the right one.
+						split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, withOutline).Grow(1).
+							DrawOver(func(p *ui.Painter, r ui.Rect) {
+								s.paneGrip(c, p, r, 0)
+								if s.Outline.Visible && winW >= outlineMinWindowWidth {
+									s.paneGrip(c, p, r, 1)
+								}
+							})
+						widthChanged = split.Changed() || widthChanged
+					} else {
+						ui.Box(c).Grow(1).Clip().Children(func() { withOutline() })
+					}
+					s.readingProgress(c)
+				})
+			}
+			area()
+			s.settleWidthSave(c, widthChanged)
 			s.statusBar(c)
 		})
 	if s.SettingsOpen {
@@ -700,9 +796,9 @@ func (s *Shell) View(c *ui.Context) {
 
 // accentCodeTheme colors code blocks by the accent theme: mygo's
 // GitHub default for the frame's appearance, with the theme's six
-// tokens over it. mojian keeps the default theme's editor whole for its
-// default petal, so the default document is pixel-equal; every other
-// theme recolors the tokens alone.
+// tokens over it. mojian keeps petal's DefaultID editor tokens whole,
+// so petal's document stays pixel-equal; every other theme recolors
+// the tokens alone.
 func (s *Shell) accentCodeTheme(c *ui.Context) *editor.Theme {
 	th := editor.DefaultTheme(c.Theme())
 	k := s.accentColors(c)
@@ -717,7 +813,7 @@ func (s *Shell) accentCodeTheme(c *ui.Context) *editor.Theme {
 }
 
 // accentTheme is the saved accent theme, resolved once. Empty and
-// unknown ids fall back to the default petal.
+// unknown ids fall back to the default paper.
 func (s *Shell) accentTheme() AccentTheme {
 	return accentThemeByID(s.Saved.AccentTheme)
 }
@@ -732,11 +828,8 @@ func (s *Shell) accentColors(c *ui.Context) AccentColors {
 // theme's tokens pressed onto a copy of it, as mojian's windowTheme
 // builds on mygo's theme: the frame's light or dark still rules, only
 // the hue tokens change. It returns the theme the frame draws with.
-func (s *Shell) applyAccentTheme(c *ui.Context) *ui.Theme {
-	k := s.accentColors(c)
-	t := applyAccentTheme(c.Theme(), k)
-	c.SetTheme(t)
-	return t
+func (s *Shell) applyAccentTheme(c *ui.Context, k AccentColors) *ui.Theme {
+	return applyAccentTheme(c.Theme(), k)
 }
 
 // Content renders the active document.
@@ -770,7 +863,7 @@ func (s *Shell) Content(c *ui.Context) {
 	}
 	// The code highlight follows the accent theme: its six tokens come
 	// from the same table as the window's colors, petal keeping the GitHub
-	// palette the document has always shown.
+	// palette from mojian's DefaultID special case.
 	tab.State.CodeTheme = s.accentCodeTheme(c)
 	// The document area's context menu: the commands act on the open
 	// document, whichever row the click landed on. Rebound every frame like
@@ -830,39 +923,55 @@ func (s *Shell) Content(c *ui.Context) {
 	// unmultiplied drag.
 	tab.State.ScrollSpeed = float32(s.Saved.ScrollSpeed)
 	tab.State.NoInertia = !s.Saved.InertiaScroll
-	// The right edge is 0 so the list's own scrollbar sits at the window's
-	// edge instead of floating 24 DIPs in; the rows give the text its
-	// clearance on the right themselves.
-	ui.Box(c).Fill().Padding(16, 0, 16, 24).Children(func() {
-		// Mirrors the Rust reader: centered caps the text column at 900
-		// DIPs, full_width lets it follow the window. The column itself
-		// spans the window either way, so the bar keeps hugging the
-		// window's edge; the view caps and centers the lines inside it.
-		if s.Saved.Layout == "full_width" {
-			tab.State.ContentWidth = 0
-		} else {
-			tab.State.ContentWidth = centeredWidth
-		}
-		ui.Column(c).Grow(1).AlignSelf(ui.Stretch).Children(func() {
-			view.Frontmatter(c, tab.Model, &tab.State)
-			view.ScrollView(c, tab.Model, &tab.State)
+	// The document cards the gradient: an 8 DIP gap around it lets the
+	// theme show through, while the inner padding keeps the old reading
+	// margins. The list reaches the card's right edge, so its overlay
+	// scrollbar hugs that edge instead of the window's.
+	k := s.accentColors(c)
+	ui.Box(c).Fill().Padding(8).Children(func() {
+		ui.Box(c).Fill().Background(k.CardFocused).Label("Document card").
+			Border(1, cardRim(c.Theme(), true)).Radius(10).Clip().
+			Shadow(0, 1, 2, 0, cardShadow(c.Theme(), true)).
+			Shadow(0, 6, 22, -2, cardShadow(c.Theme(), true)).
+			Padding(8, 0, 8, 16).Children(func() {
+			// Mirrors the Rust reader: centered caps the text column at 900
+			// DIPs, full_width lets it follow the window. The column itself
+			// spans the card either way, so the bar keeps hugging the card's
+			// edge; the view caps and centers the lines inside it.
+			if s.Saved.Layout == "full_width" {
+				tab.State.ContentWidth = 0
+			} else {
+				tab.State.ContentWidth = centeredWidth
+			}
+			ui.Column(c).Grow(1).AlignSelf(ui.Stretch).Children(func() {
+				view.Frontmatter(c, tab.Model, &tab.State)
+				view.ScrollView(c, tab.Model, &tab.State)
+			})
 		})
 	})
 }
 
 func (s *Shell) content(c *ui.Context) { s.Content(c) }
 
-// readingProgress draws the 2px reading progress bar across the body's
-// top edge, under the title bar: the fill spans the fraction the active
-// tab's view is scrolled through, in the accent color. A document with
-// no scroll room draws none, as the Rust version's max_scroll test does.
+// readingProgress draws the 2px reading progress bar across the content
+// area's top edge, under the title bar and above every pane: the fill
+// spans the fraction the active tab's view is scrolled through, in the
+// accent color, over the file pane, the document and the outline. The
+// area's bounds set the width, so the fill spans the whole reading area
+// however the splits divide it. A document with no scroll room draws
+// none, as the Rust version's max_scroll test does.
 func (s *Shell) readingProgress(c *ui.Context) {
 	tab := s.ActiveTab()
 	if tab == nil || tab.Model == nil || tab.State.Progress <= 0 {
 		return
 	}
-	ui.Box(c).Absolute().Top(0).Left(0).Height(2).Width(max(0, min(tab.State.Progress, 1)) * s.bodyWidth(c)).
-		Background(c.Theme().Accent).ZIndex(5)
+	w := s.progressBody.Bounds(c).W
+	if w <= 1 {
+		return
+	}
+	ui.Box(c).Absolute().Top(0).Left(0).Height(2).
+		Width(max(0, min(tab.State.Progress, 1)) * w).
+		Background(c.Theme().Accent).ZIndex(5).Label("Reading progress")
 }
 
 // jumpButtons are the scroll-to-top and scroll-to-bottom floating
@@ -888,15 +997,6 @@ func (s *Shell) jumpButtons(c *ui.Context) {
 			iconButton(c, "jump-bottom", chevronDownIcon, locales.JumpBottom(), 24, 14, s.ScrollToEnd)
 		}
 	})
-}
-
-// bodyWidth is the width of the body container the progress bar floats
-// in: the committed bounds of the box Content binds progressBody to, so
-// a visible sidebar narrows the fill instead of letting it overrun the
-// body's right edge. Zero before the first layout, or on the welcome
-// page where the box never built; the bar's caller skips those frames.
-func (s *Shell) bodyWidth(c *ui.Context) float32 {
-	return s.progressBody.Bounds(c).W
 }
 
 // openLocalLink resolves dest, as a document's link wrote it, against
@@ -941,7 +1041,7 @@ func (s *Shell) openLocalLink(base, dest string) {
 		return
 	}
 	if block, ok := tab.Model.AnchorBySlug(anchor); ok {
-		tab.State.ScrollTargetBlock = block
+		tab.State.JumpToBlock(block)
 		return
 	}
 	tab.State.ResetPendingAnchor(anchor)
@@ -1111,20 +1211,6 @@ func layoutName(i int) string {
 		return "full_width"
 	}
 	return "centered"
-}
-
-func sidebarTabIndex(tab string) int {
-	if tab == "outline" {
-		return 1
-	}
-	return 0
-}
-
-func sidebarTabName(i int) string {
-	if i == 1 {
-		return "outline"
-	}
-	return "explorer"
 }
 
 func explorerIndex(mode string) int {
