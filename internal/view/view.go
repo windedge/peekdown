@@ -230,9 +230,10 @@ type State struct {
 // Rust viewer's does: a flick keeps the page moving after the wheel stops,
 // which mygo's per-notch ease does not.
 type InertiaScroll struct {
-	Velocity float32
-	last     time.Time // zero until the first step
-	wroteY   float32   // the Y the inertia last wrote, to spot foreign moves
+	Velocity  float32
+	last      time.Time // zero until the first step
+	wroteY    float32   // the Y the inertia last wrote, to spot foreign moves
+	wroteMaxY float32   // the MaxY of that write, to tell a re-anchor from a move
 }
 
 // The constants of the Rust version's InertiaScrollState (src/text/state.rs),
@@ -253,14 +254,23 @@ const (
 )
 
 // active reports whether the velocity still moves the view.
+func absF(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func (in *InertiaScroll) active() bool {
 	return in.Velocity >= inertiaMinVelocity || in.Velocity <= -inertiaMinVelocity
 }
 
 // stop ends the glide: the next one starts its own clock. The offset the
-// last step wrote stays, for the next impulse to re-sync.
+// last step wrote stays, for the next impulse to re-sync; the MaxY of
+// that write is dropped, so a stale MaxY cannot pass a foreign move off
+// as re-anchoring once the glide is over.
 func (in *InertiaScroll) stop() {
-	in.Velocity, in.last = 0, time.Time{}
+	in.Velocity, in.last, in.wroteMaxY = 0, time.Time{}, 0
 }
 
 // impulse adds a wheel notch's dy, as the Rust add_impulse does, the speed
@@ -723,9 +733,22 @@ func (st *State) glide(c *ui.Context) {
 	if !st.Inertia.active() {
 		return
 	}
+	if st.Scroll.MaxY > 0 && st.Inertia.wroteMaxY == 0 {
+		st.Inertia.wroteMaxY = st.Scroll.MaxY
+	}
 	if st.Scroll.Y != st.Inertia.wroteY {
-		st.Inertia.stop()
-		return
+		// A layout that measured rows it had only estimated moves the
+		// content's end and, with it, the offset the list re-anchors to
+		// (a flick up into unmeasured tall rows): a drift no larger than
+		// the MaxY that moved with it is that reconciliation, not a move
+		// the glide must yield to, so the glide re-syncs to it.
+		dy, dm := st.Scroll.Y-st.Inertia.wroteY, st.Scroll.MaxY-st.Inertia.wroteMaxY
+		if st.Inertia.wroteMaxY > 0 && (dy > 0) == (dm > 0) && absF(dy) <= absF(dm) {
+			st.Inertia.wroteY, st.Inertia.wroteMaxY = st.Scroll.Y, st.Scroll.MaxY
+		} else {
+			st.Inertia.stop()
+			return
+		}
 	}
 	now := c.Now()
 	dt := now.Sub(st.Inertia.last)
@@ -752,7 +775,7 @@ func (st *State) glide(c *ui.Context) {
 			// The edge holds the view: nothing more of this glide lands.
 			st.Inertia.stop()
 		} else {
-			st.Scroll.Y, st.Inertia.wroteY = next, next
+			st.Scroll.Y, st.Inertia.wroteY, st.Inertia.wroteMaxY = next, next, st.Scroll.MaxY
 		}
 	}
 	// The engine stops asking for frames once the event that started the
