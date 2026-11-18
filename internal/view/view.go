@@ -86,12 +86,17 @@ type State struct {
 	PendingAnchor       string
 	pendingAnchorMisses int
 
-	// ScrollTargetBlock is the block the search found the current match
-	// in, which the view scrolls into view; -1 for none. The search bar
-	// sets it as the current match moves, and ScrollView consumes it: a
-	// value survives one scroll, so the next sets it again.
+	// ScrollTargetBlock is the block the current match or the outline found,
+	// which the view scrolls to; -1 for none. The search bar sets it as the
+	// current match moves, the outline and a heading link through JumpToBlock,
+	// and ScrollView consumes it: a value survives one scroll, so the next
+	// sets it again.
 	ScrollTargetBlock int
-	scrollTargetDone  int
+	// ScrollTargetTop aligns the jump at the view's top, as a heading link
+	// lands, instead of revealing the block as little as shows it whole.
+	// JumpToBlock sets it; a search hit leaves it clear, being in view enough.
+	ScrollTargetTop  bool
+	scrollTargetDone int
 
 	// Scroll tracks the list's offset: ScrollView wires the list to it,
 	// and the container writes Y and MaxY back as it lays out and
@@ -553,7 +558,7 @@ func (st *State) dispatchLink(dest string) {
 			return
 		}
 		if block, ok := st.anchorLookup(anchor); ok {
-			st.ScrollTargetBlock = block
+			st.JumpToBlock(block)
 		}
 		return
 	}
@@ -810,18 +815,34 @@ func callAction(fn func()) {
 	}
 }
 
-// scrollPendingMatch scrolls to the block the search's current match is
-// in, once per value the search bar sets: it finds the row that shows
-// the block and hands it to the list. It runs after the list built, so
-// the row is measured when the frame lays out.
+// JumpToBlock scrolls block to the view's top: the outline and a heading
+// link both land on the heading itself, not merely somewhere in view.
+func (st *State) JumpToBlock(block int) {
+	st.ScrollTargetBlock = block
+	st.ScrollTargetTop = true
+}
+
+// scrollPendingMatch scrolls to the block the current match or the outline
+// picked, once per value it is set to: it finds the row that shows the
+// block and hands it to the list. A search hit only needs to be in view;
+// a heading jump aligns its top, which ScrollIntoView's least-scroll would
+// park at the bottom whenever the heading sat below the viewport. It runs
+// after the list built, so the row is measured when the frame lays out.
 func (st *State) scrollPendingMatch(m *doc.Model) {
 	if st.ScrollTargetBlock < 0 || st.ScrollTargetBlock == st.scrollTargetDone {
+		st.ScrollTargetTop = false
 		return
 	}
 	st.scrollTargetDone = st.ScrollTargetBlock
+	top := st.ScrollTargetTop
+	st.ScrollTargetTop = false
 	for r := range m.Len() {
 		if m.RowBlock(r).Index == st.ScrollTargetBlock {
-			st.List.ScrollIntoView(r)
+			if top {
+				st.List.ScrollTo(r, ui.Start)
+			} else {
+				st.List.ScrollIntoView(r)
+			}
 			return
 		}
 	}
@@ -2067,7 +2088,7 @@ func (st *State) scrollPendingAnchor(m *doc.Model) {
 	}
 	for r, b := range m.Blocks() {
 		if slug := st.AnchorOf(b.Index); slug == st.Anchor {
-			st.List.ScrollIntoView(r)
+			st.List.ScrollTo(r, ui.Start)
 			st.anchorDone = key
 			return
 		}
