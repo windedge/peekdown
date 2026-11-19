@@ -47,6 +47,10 @@ func (s *Shell) titleBar(c *ui.Context) {
 		Background(t.Surface).
 		BorderWidth(0, 0, titleBarHairline, 0).BorderColor(t.Border).
 		DragWindow().Children(func() {
+		// The files switch opens the bar, ahead of the brand, like the
+		// prototype's leftmost control.
+		s.barToggleButton(c, "bar-files", folderTreeIcon, locales.BarFilesPanel(),
+			locales.BarFilesTooltip(), s.Sidebar.Visible, s.ToggleFiles)
 		// The brand is the way back to Home: the whole mark and name is one
 		// flat button, hovered and labelled, and its press takes the pointer
 		// off the bar's drag (mygo drags from the deepest interactive node
@@ -98,6 +102,10 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 		iconButton(c, "bar-settings", gearIcon, locales.BarSettingsPanel(), 24, 14, s.OpenSettings).
 			Tooltip(locales.BarSettingsTooltip())
 		s.menuButton(c)
+		// The outline switch ends the tool group, just before the
+		// system caption buttons the window itself draws.
+		s.barToggleButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(),
+			locales.BarOutlineTooltip(), s.Outline.Visible, s.ToggleOutline)
 		s.palettePopover(c, pal)
 	})
 }
@@ -109,5 +117,28 @@ func (s *Shell) menuButton(c *ui.Context) ui.Element {
 	b := iconButton(c, "bar-menu", menuIcon, locales.BarMainMenu(), 24, 14, nil)
 	b.Tooltip(locales.BarMenuTooltip())
 	b.Menu(func(m *ui.Menu) { drawMenu(c, m, MenuSpecs(s)) })
+	return b
+}
+
+// barToggleButton is the bar's panel switch: an open panel wears the
+// accent-tinted selection surface, the prototype's .ibtn.active state.
+func (s *Shell) barToggleButton(c *ui.Context, key any, icon *ui.SVG, label, tip string,
+	open bool, onClick func()) ui.Element {
+	t := c.Theme()
+	k := s.accentColors(c)
+	b := ui.ButtonBase(c.Key(key)).Label(label).Size(24, 24).Padding(0).Radius(5).
+		AlignItems(ui.Center).Justify(ui.Center).FocusRing(false).
+		Expanded(open).Tooltip(tip)
+	bg, color := ui.Transparent, t.TextMuted
+	if open {
+		bg, color = k.PanelSel, k.Accent
+	} else if b.Hovered() {
+		bg = t.SurfaceHover
+	}
+	b.Background(bg).TextColor(color)
+	b.Children(func() { ui.Icon(c, icon).Size(14, 14).TextColor(color) })
+	if b.Clicked() && onClick != nil {
+		onClick()
+	}
 	return b
 }

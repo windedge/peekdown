@@ -122,8 +122,7 @@ func TestTabBadgesRender(t *testing.T) {
 
 // TestTitleBarToolIconLabels keeps the bar's tool icons' commands named:
 // changing an SVG path must not lose a button or its label. The two
-// panel switches live on the content area's edges now, so the bar
-// carries three tools.
+// panel switches sit at the bar's ends alongside its three tools.
 func TestTitleBarToolIconLabels(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
@@ -134,7 +133,8 @@ func TestTitleBarToolIconLabels(t *testing.T) {
 	tt.Frame()
 
 	labels := []string{
-		locales.BarOpenFile(), locales.BarFind(), locales.BarSettingsPanel(),
+		locales.BarFilesPanel(), locales.BarOpenFile(), locales.BarFind(),
+		locales.BarSettingsPanel(), locales.BarOutlinePanel(),
 	}
 	count := 0
 	for _, a := range tt.AccessAll() {
