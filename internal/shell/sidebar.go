@@ -21,15 +21,65 @@ const (
 	panelHeaderPadEnd   = float32(8)
 )
 
-// panelHeader draws the title and close button both panes share.
-func panelHeader(c *ui.Context, key, label, closeLabel string, close func()) {
+// panelHeader draws the title and close button both panes share. Extra
+// controls sit before the close button, as in the Rust explorer's header.
+func panelHeader(c *ui.Context, key, label, closeLabel string, close func(), controls ...func(*ui.Context)) {
 	t := c.Theme()
 	ui.Row(c).Height(panelHeaderHeight).Padding(0, panelHeaderPadEnd, 0, panelHeaderPadStart).
 		AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, label).FontSize(panelHeaderFont).FontWeight(600).Grow(1).
 			MinWidth(0).MaxLines(1)
+		for _, control := range controls {
+			control(c)
+		}
 		iconButton(c, key, closeIcon, closeLabel, 20, 10, close)
 	})
+}
+
+// explorerSortOptions keeps the saved values in step with the menu labels;
+// an unknown saved value falls back to the default ascending name order.
+var explorerSortOptions = []struct {
+	value string
+	label func() string
+}{
+	{"name_asc", locales.SidebarSortNameAsc},
+	{"name_desc", locales.SidebarSortNameDesc},
+	{"time_desc", locales.SidebarSortTimeNewest},
+	{"time_asc", locales.SidebarSortTimeOldest},
+}
+
+func explorerSortLabel(mode string) string {
+	for _, option := range explorerSortOptions {
+		if option.value == mode {
+			return option.label()
+		}
+	}
+	return explorerSortOptions[0].label()
+}
+
+// filesSortControl opens the sort menu from the file pane's header. The
+// drawn menu keeps Rust's checked items and separator; its disabled title
+// is the closest mygo's Menu gets to the Rust menu's label.
+func (s *Shell) filesSortControl(c *ui.Context) {
+	tip := locales.SidebarSortTooltip(explorerSortLabel(s.Saved.ExplorerSortMode))
+	b := ui.ButtonBase(c.Key("explorer-sort-menu")).Label(tip).Tooltip(tip).
+		Size(20, 20).Padding(0).Radius(5).FocusRing(false).
+		AlignItems(ui.Center).Justify(ui.Center)
+	if b.Hovered() {
+		b.Background(c.Theme().SurfaceHover)
+	}
+	b.Children(func() { ui.Icon(c, sortIcon).Size(13, 13) })
+	b.PopoverMenuButton(func(m *ui.Menu) {
+		m.Item(locales.SidebarSortBy()).Disabled(true)
+		m.Separator()
+		for _, option := range explorerSortOptions {
+			if m.Item(option.label()).Checked(s.Saved.ExplorerSortMode == option.value).Chosen() {
+				s.Saved.ExplorerSortMode = option.value
+				s.invalidateTree()
+				s.persist()
+			}
+		}
+	}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
 }
 
 // sidebar renders the file pane. The outline is its own panel on the
@@ -47,7 +97,7 @@ func (s *Shell) sidebar(c *ui.Context) {
 			Shadow(0, 1, 2, 0, cardShadow(t, false)).
 			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
 			panelHeader(c, "close-sidebar", locales.SidebarFiles(), locales.SidebarClose(),
-				func() { s.Sidebar.Visible = false })
+				func() { s.Sidebar.Visible = false }, s.filesSortControl)
 			s.filesPane(c)
 		})
 	})
@@ -185,7 +235,7 @@ func readSortedEntries(dir, mode string) ([]os.DirEntry, error) {
 				}
 				return c
 			}
-			return strings.Compare(a.entry.Name(), b.entry.Name())
+			return strings.Compare(strings.ToLower(a.entry.Name()), strings.ToLower(b.entry.Name()))
 		})
 		out := make([]os.DirEntry, len(rows))
 		for i, v := range rows {
@@ -200,7 +250,8 @@ func readSortedEntries(dir, mode string) ([]os.DirEntry, error) {
 			}
 			return 1
 		}
-		c := strings.Compare(a.Name(), b.Name())
+		// Rust folds case before comparing, so capitals do not sort ahead.
+		c := strings.Compare(strings.ToLower(a.Name()), strings.ToLower(b.Name()))
 		if mode == "name_desc" {
 			return -c
 		}
