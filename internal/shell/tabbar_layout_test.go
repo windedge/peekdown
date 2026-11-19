@@ -97,7 +97,7 @@ func TestTitleBarHoldsTheTabs(t *testing.T) {
 // whatever room they take (none, as in the tester's default, or the 138
 // DIPs Win11 draws).
 func TestTitleBarButtonsAndTheirClearance(t *testing.T) {
-	controls := []string{"Open file", "Find in document", "Files panel", "Outline panel", "App settings", "Main menu"}
+	controls := []string{"Open file", "Find in document", "App settings", "Main menu"}
 	for _, tc := range []struct {
 		bar  ui.TitleBar
 		text string

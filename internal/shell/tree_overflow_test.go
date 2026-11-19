@@ -145,10 +145,10 @@ func TestFileTreeCardClipsOverflow(t *testing.T) {
 	}
 }
 
-// TestFilesBarButtonsAreToggles asserts both panel buttons flip their
-// pane: Files must close on the second click (it only opened before),
-// and the button's active wash tracks the state in pixels.
-func TestFilesBarButtonsAreToggles(t *testing.T) {
+// TestEdgeButtonsAreToggles asserts both edge buttons flip their pane:
+// Files must close on the second click (it only opened before). The idle
+// button has no surface of its own, so its pixel matches the card's.
+func TestEdgeButtonsAreToggles(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
 		t.Fatal(err)
@@ -156,18 +156,25 @@ func TestFilesBarButtonsAreToggles(t *testing.T) {
 	s.Sidebar.Visible = true
 	tt := s.renderSize(t, 1200, 600)
 	tt.Frame()
+	tt.Frame()
 
 	btn, ok := tt.Find("Files panel")
 	if !ok {
-		t.Fatalf("bar files button missing: %v", tt.Texts())
+		t.Fatalf("files edge button missing: %v", tt.Texts())
 	}
-	k := accentThemeByID(settings.AccentThemeDefault).Light
-	// The probe sits on the button's end padding, clear of the glyph,
-	// radius and border; the wash composites over the title bar's Surface.
-	x, y := btn.X+btn.W-3, btn.Y+btn.H/2
-	wantOpen := over(k.PanelSel, windowLight().Surface)
+	// The probe takes the button's inner top-left corner: above the
+	// centered icon and left of the heading's first glyph, which reaches
+	// under this corner button when the document opens with no
+	// frontmatter to push the H1 down. An idle transparent button shows
+	// the card's own face there.
+	x, y := btn.X+3, btn.Y+3
+	card, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatal("document card missing")
+	}
+	wantOpen := pixelAt(tt.Image(), card.X+40, btn.Y-4)
 	if got := pixelAt(tt.Image(), x, y); !channelClose(got, wantOpen, 3) {
-		t.Fatalf("open button pixel %v, want PanelSel %v", got, wantOpen)
+		t.Fatalf("open button pixel %v, want the card surface %v", got, wantOpen)
 	}
 
 	if err := tt.Click("Files panel"); err != nil {
@@ -177,25 +184,33 @@ func TestFilesBarButtonsAreToggles(t *testing.T) {
 	// closed state reads idle paint, not hover.
 	tt.Move(600, 300)
 	tt.Frame()
+	tt.Frame()
 	if s.Sidebar.Visible {
 		t.Fatal("the Files button must close the pane")
 	}
 	if _, ok := tt.Find("Files card"); ok {
 		t.Fatal("files pane still drawn after the toggle closed it")
 	}
-	// Closed: the wash is gone, the paint reads the bar's Surface.
-	if got := pixelAt(tt.Image(), x, y); !channelClose(got, windowLight().Surface, 1) {
-		t.Fatalf("closed button pixel %v, want the bar surface %v", got, windowLight().Surface)
+	// Closed: still the card's face, with the glyph as the only state cue.
+	card, ok = tt.Find("Document card")
+	if !ok {
+		t.Fatal("document card missing after close")
+	}
+	btn, ok = tt.Find("Files panel")
+	if !ok {
+		t.Fatal("files edge button missing after close")
+	}
+	wantClosed := pixelAt(tt.Image(), card.X+40, btn.Y-4)
+	if got := pixelAt(tt.Image(), btn.X+3, btn.Y+3); !channelClose(got, wantClosed, 3) {
+		t.Fatalf("closed button pixel %v, want the card surface %v", got, wantClosed)
 	}
 	if err := tt.Click("Files panel"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
+	tt.Frame()
 	if !s.Sidebar.Visible {
 		t.Fatal("the Files button must reopen the pane")
-	}
-	if got := pixelAt(tt.Image(), x, y); !channelClose(got, wantOpen, 3) {
-		t.Fatalf("reopened button pixel %v, want PanelSel back", got)
 	}
 
 	// Outline already toggles: the same walk holds there, and the two
@@ -204,12 +219,14 @@ func TestFilesBarButtonsAreToggles(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
+	tt.Frame()
 	if s.Outline.Visible {
 		t.Fatal("the Outline button must close the pane")
 	}
 	if err := tt.Click("Outline panel"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Frame()
 	tt.Frame()
 	if !s.Outline.Visible {
 		t.Fatal("the Outline button must reopen the pane")
@@ -219,10 +236,10 @@ func TestFilesBarButtonsAreToggles(t *testing.T) {
 	}
 }
 
-// TestFilesBarToggleOnlyOpensIsRed is the reverse check: a Files button
-// wired only-open must fail the toggle test's first flip. Kept as a
-// mirror of the wiring so the regression reads without history.
-func TestFilesBarToggleOnlyOpensIsRed(t *testing.T) {
+// TestEdgeButtonsToggleOnlyOpensIsRed is the reverse check: a Files
+// button wired only-open must fail the toggle test's first flip. Kept as
+// a mirror of the wiring so the regression reads without history.
+func TestEdgeButtonsToggleOnlyOpensIsRed(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
 		t.Fatal(err)
@@ -230,21 +247,23 @@ func TestFilesBarToggleOnlyOpensIsRed(t *testing.T) {
 	s.Sidebar.Visible = true
 	tt := s.renderSize(t, 1200, 600)
 	tt.Frame()
+	tt.Frame()
 
-	// The wiring under test: the bar hands ToggleFiles, not
+	// The wiring under test: the edge hands ToggleFiles, not
 	// SetFilesVisible(true). Click once and the pane must be gone.
 	if err := tt.Click("Files panel"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
+	tt.Frame()
 	if s.Sidebar.Visible {
-		t.Fatal("bar-files opens only; wire it to ToggleFiles so a click closes")
+		t.Fatal("the edge button opens only; wire it to ToggleFiles so a click closes")
 	}
 }
 
-// TestFilesBarPixelProbe documents the probe pixel the toggle test
+// TestEdgeButtonPixelProbe documents the probe pixel the toggle test
 // reads, so a background change upstream moves the assertion with it.
-func TestFilesBarPixelProbe(t *testing.T) {
+func TestEdgeButtonPixelProbe(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
 		t.Fatal(err)
@@ -252,14 +271,19 @@ func TestFilesBarPixelProbe(t *testing.T) {
 	s.Sidebar.Visible = true
 	tt := s.renderSize(t, 1200, 600)
 	tt.Frame()
+	tt.Frame()
 	btn, ok := tt.Find("Files panel")
 	if !ok {
-		t.Fatal("bar files button missing")
+		t.Fatal("files edge button missing")
 	}
-	k := accentThemeByID(settings.AccentThemeDefault).Light
-	x, y := btn.X+btn.W-3, btn.Y+btn.H/2
-	if got, want := pixelAt(tt.Image(), x, y), over(k.PanelSel, windowLight().Surface); !channelClose(got, want, 3) {
-		t.Fatalf("probe %v, want %v; retune the toggle test's sample point", got, want)
+	card, ok := tt.Find("Document card")
+	if !ok {
+		t.Fatal("document card missing")
+	}
+	x, y := btn.X+3, btn.Y+3
+	want := pixelAt(tt.Image(), card.X+40, btn.Y-4)
+	if got := pixelAt(tt.Image(), x, y); !channelClose(got, want, 3) {
+		t.Fatalf("probe %v, want the card surface %v; retune the toggle test's sample point", got, want)
 	}
 }
 

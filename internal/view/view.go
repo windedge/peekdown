@@ -1753,8 +1753,10 @@ func (st *State) copyButton(c *ui.Context, i int, text string) {
 	if copied {
 		label, tip, color = locales.Copied(), locales.Copied(), c.Theme().AccentText
 	}
+	// The card's corner toggle takes the outermost 34 DIPs; keep this
+	// button clear of it when a code block is the document's first row.
 	b := ui.ButtonBase(c).Label(label).Padding(4).Radius(5).
-		AlignItems(ui.Center).Absolute().Right(6).Top(6).Tooltip(tip)
+		AlignItems(ui.Center).Absolute().Right(18).Top(6).Tooltip(tip)
 	if st.copyHandles == nil {
 		st.copyHandles = map[int]*ui.Handle{}
 	}

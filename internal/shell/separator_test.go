@@ -69,7 +69,9 @@ func TestDividerIdleHasNoBorderColumn(t *testing.T) {
 	img := tt.Image()
 	for _, band := range [][2]int{{w, w + 7}, {edge - 4, edge + 3}} {
 		for x := band[0]; x <= band[1]; x++ {
-			for _, y := range []int{120, 300, 500} {
+			// y=120 also clears the card-corner toggles, which sit at
+			// the card's top edge (y=40 here) and end before it.
+			for _, y := range []int{120, 360, 500} {
 				r, g, b, _ := img.At(x, y).RGBA()
 				cr, cg, cb, _ := img.At(2, y).RGBA() // gutter strip at same y
 				// The native line reads ~30 units off the gradient; AA and
