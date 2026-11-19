@@ -20,8 +20,9 @@
      -> internal/shell/titlebar.go
         品牌区(18px logo + 13px/600)保留；工具按钮统一 mojian
         iconButton(30px 方钮、IconMuted 图标、hover Surface 转 Text)；
-        右侧加 Open/Find/Files/Outline/Settings；关闭键 hover 用
-        Danger(#d92d20/#f97066)。
+        标题栏最左加 Files 开关（面板/文件树图标），右侧工具组
+        最右（caption 前）加 Outline 开关；两者 active 态跟随面板
+        开合；关闭键 hover 用 Danger(#d92d20/#f97066)。
   3. region: tabs
      -> internal/shell/tabs.go
         轨道 32px(tabH28+2 内缩) 用 Track/TrackBorder；激活 =
@@ -771,8 +772,8 @@ body {
   width: 232px; flex: none;
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   background: var(--panel);
-  border: 1px solid var(--panel-border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
 }
 .outline-head {
   display: flex; align-items: center;
@@ -965,6 +966,8 @@ body {
 
   <!-- region: titlebar -->
   <div class="titlebar">
+    <button class="ibtn lg active" id="filesBtn" title="文件树" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+
     <div class="brand" title="返回欢迎页">
       <div class="logo">P</div>
       <div class="name">Peekdown</div>
@@ -992,12 +995,10 @@ body {
 
     <div class="tb-spacer"></div>
 
-    <!-- 标题栏右端工具：Open/Find/Files/Outline/Settings + 主题色 -->
+    <!-- 标题栏右端工具：Open/Find/Settings/主题色 + 最右端 Outline -->
     <div class="titlebar-tools">
       <button class="ibtn lg" title="打开文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg></button>
       <button class="ibtn lg" title="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
-      <button class="ibtn lg" title="文件树"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
-      <button class="ibtn lg active" id="outlineBtn" title="大纲" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></button>
       <button class="ibtn lg" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg></button>
       <!-- 主题色选择：调色板按钮 + THEME Popover（包裹层随按钮右对齐定位） -->
     <div class="palette-wrap">
@@ -1026,6 +1027,7 @@ body {
         <div class="seg-note">原型中跟随系统等同于浅色（无真实系统检测）</div>
       </div>
     </div>
+      <button class="ibtn lg active" id="outlineBtn" title="大纲" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></button>
     </div>
 
     <!-- Win11 caption 三键 -->
@@ -1222,7 +1224,20 @@ document.addEventListener('click', function (e) {
   }
 });
 
-// 大纲面板开合：标题栏 Outline 钮与面板关闭钮都切 .hidden-pane，钮的 active 态跟随面板
+// 文件树面板开合：标题栏最左 Files 钮切 .hidden-pane，active 态跟随面板
+var filesBtn = document.getElementById('filesBtn');
+var sidebarPane = document.querySelector('.sidebar');
+function syncFilesActive() {
+  var on = !sidebarPane.classList.contains('hidden-pane');
+  filesBtn.classList.toggle('active', on);
+  filesBtn.setAttribute('aria-pressed', on);
+}
+filesBtn.addEventListener('click', function () {
+  sidebarPane.classList.toggle('hidden-pane');
+  syncFilesActive();
+});
+
+// 大纲面板开合：标题栏最右 Outline 钮与面板关闭钮都切 .hidden-pane，钮的 active 态跟随面板
 var outlineBtn = document.getElementById('outlineBtn');
 var outlinePane = document.querySelector('.outline');
 function syncOutlineActive() {
