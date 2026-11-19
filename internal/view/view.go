@@ -609,7 +609,7 @@ func urlSafe(url string) bool {
 // address, so it is the one authority for which runes a link owns.
 func linkDestOf(m *doc.Model, i, off int) string {
 	var dest string
-	walk(m.Inlines(i), style{}, func(text string, kind runKind, link bool, d string) {
+	walk(m.Inlines(i), style{}, func(text string, rs runStyle, kind runKind, link bool, d string) {
 		if link && d != "" && off >= 0 && off < runeLen(text) {
 			dest = d
 		}
@@ -1138,6 +1138,26 @@ type style struct {
 	strike    bool
 }
 
+// runStyle is the style one walk run draws with: the block's style with
+// the inline emphasis picked up on the way down to it. Splits from style
+// because a leaf run cannot restate the block's size and color, only
+// carry the emphasis on.
+type runStyle struct {
+	size      float32
+	weight    int
+	color     ui.Color
+	underline bool
+	italic    bool
+	strike    bool
+}
+
+// inner copies a style for the inlines it wraps: a block's underline
+// (a link's, today) marks the whole block, the emphasis bits reset, an
+// emphasis node turns its own on as the walk descends into it.
+func (s style) inner() runStyle {
+	return runStyle{size: s.size, weight: s.weight, color: s.color}
+}
+
 func (st *State) heading(c *ui.Context, m *doc.Model, i, level int) {
 	s := style{weight: headingWeight(level)}
 	s.size, s.color = headingStyle(c, st, level)
@@ -1231,11 +1251,11 @@ func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, head
 func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 	tk := st.tokens(c)
 	spans := []ui.Span{}
-	walk(m.Inlines(i), s, func(text string, kind runKind, link bool, dest string) {
+	walk(m.Inlines(i), s, func(text string, rs runStyle, kind runKind, link bool, dest string) {
 		if text == "" {
 			return
 		}
-		base := s
+		base := rs
 		if base.color == (ui.Color{}) {
 			base.color = tk.text
 		}
@@ -1245,7 +1265,8 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 			base.color = tk.link
 			base.underline = true
 		}
-		sp := ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color, Underline: base.underline}
+		sp := ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color,
+			Italic: base.italic, Underline: base.underline, Strikethrough: base.strike}
 		switch kind {
 		case runCode:
 			// Code is the chip: the Rust version highlights it on the
@@ -1275,15 +1296,18 @@ const (
 	runLiteral
 )
 
-// walk flattens inlines to runs of text in style s, marking code, literals
-// and links. The spans' texts joined are the block's run text in doc's run
-// table, rune for rune: the offsets of the selection, the cuts and the
-// search all address that text. LineBreak and FootnoteRef follow
-// parser.PlainText (a break is a space, a note is "[^label]"); an
-// image's alt text stays in the text, as PlainText's flat walk over the
-// inline array emits it too.
-func walk(in []parser.Inline, s style, fn func(text string, kind runKind, link bool, dest string)) {
-	walkRange(in, 0, len(in), s, fn)
+// walk flattens inlines to runs of text, handing each run the inline
+// style in force where it sits (weight, italics, strikethrough) and
+// marking code, literals and links. The spans' texts joined are the
+// block's run text in doc's run table, rune for rune: the offsets of the
+// selection, the cuts and the search all address that text. LineBreak and
+// FootnoteRef follow parser.PlainText (a break is a space, a note is
+// "[^label]"); an image's alt text stays in the text, as PlainText's
+// flat walk over the inline array emits it too.
+func walk(in []parser.Inline, s style, fn func(text string, rs runStyle, kind runKind, link bool, dest string)) {
+	rs := s.inner()
+	rs.underline = s.underline
+	walkRange(in, 0, len(in), rs, fn)
 }
 
 // walkRange walks in[from:to) as one subtree in style s. A node's Next
@@ -1295,7 +1319,7 @@ func walk(in []parser.Inline, s style, fn func(text string, kind runKind, link b
 // past the subtree's own (a malformed table the streaming parser has
 // not healed yet) clamps too, so a bad index can never reach out of the
 // array the walk was handed.
-func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, kind runKind, link bool, dest string)) {
+func walkRange(in []parser.Inline, from, to int, s runStyle, fn func(text string, rs runStyle, kind runKind, link bool, dest string)) {
 	for k := from; k < to; k++ {
 		n := &in[k]
 		end := n.Next
@@ -1305,32 +1329,43 @@ func walkRange(in []parser.Inline, from, to int, s style, fn func(text string, k
 		if end < k {
 			end = k
 		}
+		// An emphasis node turns its own bit on and leaves the rest as it
+		// came in, so nesting composes, **bold with *italic* inside** and
+		// the like.
 		switch n.Kind {
 		case parser.Text:
-			fn(n.Text, runPlain, false, "")
+			fn(n.Text, s, runPlain, false, "")
 		case parser.SoftBreak:
-			fn(" ", runPlain, false, "")
+			fn(" ", s, runPlain, false, "")
 		case parser.LineBreak:
-			fn(" ", runPlain, false, "")
+			fn(" ", s, runPlain, false, "")
 		case parser.Code:
-			fn(n.Text, runCode, false, "")
+			fn(n.Text, s, runCode, false, "")
 		case parser.Emphasis:
-			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, fn)
+			inner := s
+			inner.italic = true
+			walkRange(in, k+1, end, inner, fn)
 		case parser.Strong:
-			walkRange(in, k+1, end, style{size: s.size, weight: 700, color: s.color, underline: s.underline}, fn)
+			inner := s
+			inner.weight = 700
+			walkRange(in, k+1, end, inner, fn)
+		case parser.Strikethrough:
+			inner := s
+			inner.strike = true
+			walkRange(in, k+1, end, inner, fn)
 		case parser.Link:
-			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, kind runKind, link bool, dest string) {
-				fn(text, kind, true, n.Dest)
+			walkRange(in, k+1, end, s, func(text string, rs runStyle, kind runKind, link bool, dest string) {
+				fn(text, rs, kind, true, n.Dest)
 			})
 		case parser.Image:
 			// Its description stands for it within the text.
-			walkRange(in, k+1, end, style{size: s.size, weight: s.weight, color: s.color, underline: s.underline}, func(text string, kind runKind, link bool, dest string) {
-				fn(text, kind, false, "")
+			walkRange(in, k+1, end, s, func(text string, rs runStyle, kind runKind, link bool, dest string) {
+				fn(text, rs, kind, false, "")
 			})
 		case parser.HTML, parser.Math:
-			fn(n.Text, runLiteral, false, "")
+			fn(n.Text, s, runLiteral, false, "")
 		case parser.FootnoteRef:
-			fn("[^"+n.Text+"]", runLiteral, false, "")
+			fn("[^"+n.Text+"]", s, runLiteral, false, "")
 		}
 		if n.Next > k {
 			k = n.Next - 1
