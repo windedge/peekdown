@@ -186,8 +186,8 @@ func TestCopySelectionWritesClipboard(t *testing.T) {
 	if !s.CopySelection(func(s string) { got = s }) {
 		t.Fatal("CopySelection = false, want true")
 	}
-	if got != "A\nfirst" {
-		t.Fatalf("clipboard = %q, want %q", got, "A\nfirst")
+	if got != "# A\nfirst" {
+		t.Fatalf("clipboard = %q, want %q", got, "# A\nfirst")
 	}
 }
 
@@ -205,8 +205,8 @@ func TestSelectAllSelectsWholeDocument(t *testing.T) {
 	if !tab.State.HasSelection() {
 		t.Fatal("no selection after SelectAll")
 	}
-	if got := tab.State.SelectionText(tab.Model); got != "A\nfirst\nA two" {
-		t.Fatalf("SelectionText = %q, want %q", got, "A\nfirst\nA two")
+	if got := tab.State.SelectionText(tab.Model); got != "# A\nfirst\n## A two" {
+		t.Fatalf("SelectionText = %q, want %q", got, "# A\nfirst\n## A two")
 	}
 }
 

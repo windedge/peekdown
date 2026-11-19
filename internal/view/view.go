@@ -2205,13 +2205,14 @@ func (st *State) HasSelection() bool {
 	return st.Selection.set && st.Selection.start != st.Selection.end
 }
 
-// SelectionText returns the selected text of the document.
+// SelectionText returns the selected text of the document, the
+// markdown source the selection covers, as the Rust version copies.
 func (st *State) SelectionText(m *doc.Model) string {
 	if !st.Selection.set {
 		return ""
 	}
 	s := selection.Selection{Anchor: st.Selection.start, Caret: st.Selection.end}
-	return s.TextOf(m)
+	return s.MarkdownOf(m)
 }
 
 // htmlBlock renders an embedded HTML block as the semantic content its

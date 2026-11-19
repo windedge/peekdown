@@ -136,8 +136,13 @@ func TestDragAcrossLinkDoesNotOpenIt(t *testing.T) {
 	if !st.HasSelection() {
 		t.Fatal("the drag made no selection")
 	}
-	if !strings.Contains(st.SelectionText(m), "here.") {
-		t.Fatalf("selected %q, want the link's trailing text in it", st.SelectionText(m))
+	if got := st.SelectionText(m); !strings.Contains(got, "Second p") {
+		t.Fatalf("selected %q, want the second paragraph in it", st.SelectionText(m))
+	}
+	// The copy is the markdown source now: the selection from inside the
+	// link's label carries the link's markup.
+	if !strings.Contains(st.SelectionText(m), "](htt") {
+		t.Fatalf("selected %q, want the link's source in it", st.SelectionText(m))
 	}
 	_ = m
 }
