@@ -270,7 +270,7 @@ func (s *Shell) outlinePanel(c *ui.Context) {
 	// right however the split orders its panes.
 	ui.Box(c).Fill().Padding(8, 8, 8, 4).Children(func() {
 		ui.Column(c).Fill().Direction(ui.LeftToRight).Background(k.Card).Label("Outline card").
-			Border(1, cardRim(t, false)).Radius(10).Clip().
+			Radius(10).Clip().
 			Shadow(0, 1, 2, 0, cardShadow(t, false)).
 			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
 			panelHeader(c, "close-outline", locales.SidebarOutline(),

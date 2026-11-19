@@ -111,10 +111,6 @@ type Shell struct {
 	// under the title bar, across the file pane, the document and the
 	// outline, however the splits divide it.
 	progressBody ui.Handle
-	// documentCard is the reading card's identity: the corner toggles
-	// pin themselves to its committed bounds as the splits resize.
-	documentCard ui.Handle
-
 	// bgRect is the gradient's root rect, which the divider cover's
 	// columns repaint against; gripHover remembers which gutter the
 	// pointer sits in between the hotspot's rebuild and the split's
@@ -802,7 +798,6 @@ func (s *Shell) View(c *ui.Context) {
 						ui.Box(c).Grow(1).Clip().Children(func() { withOutline() })
 					}
 					s.readingProgress(c)
-					s.paneEdgeToggles(c)
 				})
 			}
 			area()
@@ -950,7 +945,6 @@ func (s *Shell) Content(c *ui.Context) {
 	k := s.accentColors(c)
 	ui.Box(c).Fill().Padding(8).Children(func() {
 		ui.Box(c).Fill().Background(k.CardFocused).Label("Document card").
-			Bind(&s.documentCard).
 			Border(1, cardRim(c.Theme(), true)).Radius(10).Clip().
 			Shadow(0, 1, 2, 0, cardShadow(c.Theme(), true)).
 			Shadow(0, 6, 22, -2, cardShadow(c.Theme(), true)).
