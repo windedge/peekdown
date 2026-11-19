@@ -1839,9 +1839,9 @@ func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
 
 // table builds a Markdown table as a grid of rows: a cell per column,
 // ruled along every row and between every column, the header on a surface
-// at weight 600. The grid takes the width its columns measure, not the
-// row's: the Rust version draws a table at its content's width and leaves
-// the page's right side empty rather than stretching short cells apart.
+// at weight 600. The grid fills the reading column: the Rust version sizes
+// it to w_full with an estimated max width, so even short cells spread
+// across the page instead of leaving its right side empty.
 // A split table's slice renders as a table of its own: the header it
 // carries opens bold on a surface, only the first slice carries one, and
 // a "rows N-M of T" note closes a slice when the table has more slices.
@@ -1851,19 +1851,15 @@ func (st *State) mutedChildren(c *ui.Context, m *doc.Model, i int) {
 func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 	tk := st.tokens(c)
 	widths := tableColumnWidths(st, m, i)
-	// The centered column leaves the table that room; mygo does not clamp
-	// a fixed-width cell inside a MaxWidth'd grid, so a 4-column table's
-	// ~1205 DIPs would spill past the column's right edge (shot: the last
-	// column drawn outside the centered 900). Shrink the ratios into the
-	// room, and the longest columns wrap harder instead of escaping.
-	if room := st.ContentWidth - 2*rowClearance; room > 0 {
-		widths = shrinkWidths(widths, room-float32(len(widths))-2)
-	}
+	ratios, estimated := tableColumnRatios(widths)
+	// The Rust max width is an estimate in character units; on a wide
+	// reading column it must not undo w_full for short tables.
+	maxWidth := max(estimated, st.tableRoom(c))
 	// The frame owns the radius and clips its rows to it: the header's
 	// surface is one band across the row, so its square corners would
 	// otherwise poke out of the frame's rounded ones.
 	grid := ui.Column(c).Border(1, tk.border).Radius(tk.radius).Clip().
-		MaxWidth(tableGridWidth(widths)).AlignSelf(ui.Start).MinWidth(0)
+		FillWidth().MaxWidth(maxWidth).AlignSelf(ui.Start).MinWidth(0)
 	aligns := m.Block(i).Align
 	grid.Children(func() {
 		rows := m.TableRows(i)
@@ -1891,8 +1887,8 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 					// A Row centers its children, which would leave a cell as high
 					// as its own text and break its rule at every shorter cell:
 					// stretched, the cells fill the row's height instead.
-					box := ui.Box(c).Width(widths[min(k, len(widths)-1)]).Padding(6, 10).
-						AlignSelf(ui.Stretch)
+					box := ui.Box(c).WidthPercent(ratios[min(k, len(ratios)-1)]*100).
+						Padding(6, 10).AlignSelf(ui.Stretch).MinWidth(0)
 					if k < len(cells)-1 {
 						box.BorderWidth(0, 1, 0, 0).BorderColor(tk.border)
 					}
@@ -1913,14 +1909,46 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 	})
 }
 
-// tableGridWidth is the width a table's grid draws at: its columns plus
-// their right borders, inside the grid's own two side borders.
-func tableGridWidth(widths []float32) float32 {
-	w := float32(2)
-	for _, cw := range widths {
-		w += cw + 1
+// tableRoom is the reading column's content width: the row keeps
+// rowClearance on the right for the overlay scrollbar, and the centered
+// column caps the whole row before that clearance.
+func (st *State) tableRoom(c *ui.Context) float32 {
+	w, _ := c.Size()
+	if st.ContentWidth > 0 {
+		w = min(w, st.ContentWidth)
 	}
-	return w
+	return max(0, w-rowClearance)
+}
+
+// Rust's table columns get weights of clamp(text length, 6, 150) + 3 and
+// divide the grid in those proportions; its max width is the weight sum
+// times nine pixels. MyGo's measurements are pixels, so undo the cell's
+// 21 pixels of padding and rule before using them as character widths.
+func tableColumnRatios(widths []float32) ([]float32, float32) {
+	const (
+		minWeight  = float32(6)
+		maxWeight  = float32(150)
+		padWeight  = float32(3)
+		charPx     = float32(9)
+		cellChrome = float32(21)
+	)
+	ratios := make([]float32, len(widths))
+	total := float32(0)
+	for k, w := range widths {
+		weights := min(max((w-cellChrome)/charPx, minWeight), maxWeight) + padWeight
+		ratios[k] = weights
+		total += weights
+	}
+	if total <= 0 {
+		for k := range ratios {
+			ratios[k] = 1 / float32(len(ratios))
+		}
+		return ratios, 0
+	}
+	for k := range ratios {
+		ratios[k] /= total
+	}
+	return ratios, total * charPx
 }
 
 // tableColumnWidths measures a table's cells to size each column to its
@@ -1967,24 +1995,6 @@ func tableColumnWidths(st *State, m *doc.Model, table int) []float32 {
 	}
 	st.tableWidths[table] = widths
 	return widths
-}
-
-// shrinkWidths scales the columns down to fit the budget, keeping their
-// ratios; a budget below the columns' count leaves them alone.
-func shrinkWidths(widths []float32, budget float32) []float32 {
-	total := float32(0)
-	for _, w := range widths {
-		total += w
-	}
-	if total <= budget || total <= 0 {
-		return widths
-	}
-	scale := budget / total
-	out := make([]float32, len(widths))
-	for i, w := range widths {
-		out[i] = w * scale
-	}
-	return out
 }
 
 // columnAlign maps a table column's delimiter row, :---: / ---: / :---,

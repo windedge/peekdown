@@ -357,10 +357,10 @@ func TestTableRules(t *testing.T) {
 	}
 }
 
-// TestTableKeepsItsContentWidth checks the table draws at the width its
-// columns measure, not stretched across the page: the Rust version leaves
-// the page's right side empty rather than pulling short cells apart.
-func TestTableKeepsItsContentWidth(t *testing.T) {
+// TestTableFillsReadingColumn checks a short table reaches the page's
+// right edge: the Rust version's w_full grid pulls short cells apart
+// instead of leaving the page's right side empty.
+func TestTableFillsReadingColumn(t *testing.T) {
 	theme := ui.LightTheme()
 	_, tt, _ := frame(t, "| a | b |\n|---|---|\n| 1 | 2 |\n\n", 640, 400)
 	// The header's surface fill ends where the table ends.
@@ -368,8 +368,8 @@ func TestTableKeepsItsContentWidth(t *testing.T) {
 	if right < 0 {
 		t.Fatal("the header's surface did not draw")
 	}
-	if right > 320 {
-		t.Fatalf("the table's header fill reaches x %d in a 640 wide window: the table is stretched", right)
+	if absF(float32(right)-(640-rowClearance-2)) > 2 {
+		t.Fatalf("the table's header fill reaches x %d in a 640 wide window: the table does not fill the column", right)
 	}
 	// The second column still sits right of the first, with a rule between.
 	first := rectOf(t, tt, "a")
