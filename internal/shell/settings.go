@@ -1,29 +1,63 @@
 package shell
 
 import (
+	"fmt"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/locales"
 )
 
-// The settings dialog's fixed geometry, in mojian's settings' measures:
-// the panel is 560 DIPs wide, every section is one rounded card, and the
-// two-line rows keep to the same paddings and type sizes.
+// The settings dialog follows mojian's two-column measures: a rail of
+// pages on the left, one section's card on the right, and the same
+// two-line rows inside that card.
 const (
-	settingsWidth    = 560
-	settingsPadding  = 20
-	settingsCardGap  = 12
-	settingsCardPadX = 16
-	settingsRowGap   = 16
-	settingsDebounce = 300 * time.Millisecond
-	settingsMarkersW = 200
+	settingsWidth          = 900
+	settingsMaxHeight      = 640
+	settingsWindowMargin   = 48
+	settingsPadding        = 20
+	settingsGap            = 14
+	settingsRailWidth      = 216
+	settingsPaneGap        = 12
+	settingsScrollPadStart = 24
+	settingsScrollPadEnd   = 12
+	settingsCardGap        = 12
+	settingsCardRim        = 1
+	settingsCardPadX       = 16
+	settingsRowGap         = 16
+	settingsDebounce       = 300 * time.Millisecond
+	settingsMarkersW       = 200
 )
+
+// settingsThemeGridWidth is the space the Appearance grid has inside the
+// page's card: the panel's content, less the rail, the column gaps, the
+// scroller's insets, the card's rim and its horizontal padding.
+func settingsThemeGridWidth(winW float32) float32 {
+	return min(settingsWidth, winW-settingsWindowMargin) - 2*settingsPadding -
+		settingsGap - settingsRailWidth - settingsPaneGap - settingsScrollPadStart -
+		settingsScrollPadEnd - 2*settingsCardRim - 2*settingsCardPadX
+}
+
+// settingsNavItem is one page of the rail: its name, its page subtitle
+// and the glyph beside the name.
+type settingsNavItem struct {
+	title  func() string
+	detail func() string
+	icon   *ui.SVG
+}
+
+var settingsNavItems = []settingsNavItem{
+	{locales.SettingsSectionAppearance, locales.SettingsSectionAppearanceDetail, paletteIcon},
+	{locales.SettingsSectionReading, locales.SettingsSectionReadingDetail, docIcon},
+	{locales.SettingsSectionAbout, locales.SettingsSectionAboutDetail, gearIcon},
+}
 
 // settingsDialog renders the settings modal: every control applies at
 // once through persist (no Save button), the Done button just closes.
@@ -36,53 +70,121 @@ func (s *Shell) settingsDialog(c *ui.Context) {
 		t := c.Theme()
 		k := s.accentColors(c)
 		backdrop.Background(k.Backdrop).Label("Settings backdrop")
-		panel.Width(min(settingsWidth, winW-48)).MaxHeight(winH-48).
-			Padding(settingsPadding).Gap(14).Radius(10).
+		panel.Width(min(settingsWidth, winW-settingsWindowMargin)).
+			Height(min(settingsMaxHeight, winH-settingsWindowMargin)).
+			Padding(settingsPadding).Gap(settingsGap).Radius(10).
 			Background(k.CardFocused).Border(1, cardRim(t, true)).
 			Shadow(0, 1, 3, 0, cardShadow(t, true)).
 			Shadow(0, 6, 22, -2, cardShadow(t, true)).
 			Clip().Label("Settings panel")
-		fields := max(winH-settingsRoom, settingsMinFields)
-		ui.Text(c, locales.SettingsTitle()).FontSize(15).FontWeight(650).TextColor(t.Text)
+		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+			ui.Text(c, locales.SettingsTitle()).FontSize(15).FontWeight(650).
+				TextColor(t.Text).Grow(1).MinWidth(0)
+			iconButton(c, "settings-close-icon", closeIcon, locales.SettingsCloseIcon(),
+				24, 10, s.CloseSettings)
+		})
 
-		ui.Scroll(c).Label("Settings fields").MaxHeight(fields).Children(func() {
-			ui.Column(c).Gap(settingsCardGap).PaddingEnd(12).Children(func() {
-				s.groups(c)
-			})
-			if s.saveErr != "" {
-				ui.Text(c, s.saveErr).FontSize(12).TextColor(t.Danger)
+		ui.Row(c).Grow(1).MinHeight(0).Gap(settingsPaneGap).AlignItems(ui.Stretch).Children(func() {
+			s.settingsRail(c, t, k)
+			s.settingsContent(c, t)
+		})
+		ui.Row(c).FillWidth().Justify(ui.End).AlignItems(ui.Center).Gap(10).Children(func() {
+			if ui.Button(c, locales.SettingsClose()).Label("Settings Close").Clicked() {
+				s.CloseSettings()
+			}
+			if ui.PrimaryButton(c, locales.SettingsDone()).Label("Settings Done").Clicked() {
+				s.CloseSettings()
 			}
 		})
-		if ui.PrimaryButton(c, locales.SettingsDone()).Label("Settings Done").Clicked() {
-			s.fontPickOpen, s.fontPickMonoOpen = false, false
-			s.SettingsOpen = false
-			s.saveErr = ""
-		}
 	})
 	if m.Dismissed() {
 		// A popover's outside press lands here too; it closes both, and
 		// the edits stand: they were applied the moment they were made.
-		s.fontPickOpen, s.fontPickMonoOpen = false, false
-		s.saveErr = ""
+		s.CloseSettings()
 	}
 }
 
-// settingsRoom is the height the dialog spends outside its scrolling
-// fields: the modal's margin and panel padding, plus this column's
-// padding, title, button and gaps.
-const settingsRoom = 150
+// settingsRail is the page list: a card of named items on the left, with
+// the chosen page filled by PanelSel and accent-colored, and a hovered
+// page tinted like mygo's sidebar rows.
+func (s *Shell) settingsRail(c *ui.Context, t *ui.Theme, k AccentColors) {
+	ui.Column(c).Width(settingsRailWidth).Shrink(0).FillHeight().
+		Background(k.Card).Border(1, cardRim(t, false)).Radius(10).
+		Shadow(0, 8, 24, 0, cardShadow(t, false)).Clip().
+		Label("Settings rail").Children(func() {
+		ui.Column(c).FillWidth().Padding(6).Gap(2).Children(func() {
+			for i, item := range settingsNavItems {
+				c.Key("settings-nav-" + strconv.Itoa(i))
+				chosen := i == s.settingsSection
+				nav := ui.Row(c).FillWidth().MinHeight(36).Padding(6, 8).Gap(8).
+					Radius(10).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+					Focusable().Role(ui.RoleTab).AccessSelected(chosen).
+					Label("Settings nav " + item.title())
+				col := t.TextMuted
+				if chosen {
+					col = k.Accent
+					nav.Background(k.PanelSel)
+				} else if nav.Hovered() {
+					nav.Background(k.SurfaceHover)
+				}
+				nav.Children(func() {
+					ui.Icon(c, item.icon).Size(16, 16).TextColor(col)
+					ui.Text(c, item.title()).FontSize(14).FontWeight(550).TextColor(col).Grow(1).MinWidth(0)
+				})
+				if nav.Clicked() && s.settingsSection != i {
+					s.settingsSection = i
+					s.settingsScroll.Y = 0
+				}
+			}
+		})
+	})
+}
 
-// settingsMinFields keeps the scrolling fields usable in a window too
-// short for the dialog's own chrome.
-const settingsMinFields = 80
+// settingsContent scrolls only the chosen page. Its ScrollState lets the
+// rail put the page back at the top when the choice changes.
+func (s *Shell) settingsContent(c *ui.Context, t *ui.Theme) {
+	ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+		ui.Scroll(c).Label("Settings fields").Grow(1).MinHeight(0).
+			TrackScroll(&s.settingsScroll).Children(func() {
+			ui.Column(c).FillWidth().Padding(2, 0, 2, settingsScrollPadStart).
+				Gap(settingsGap).PaddingEnd(settingsScrollPadEnd).
+				Children(func() {
+					item := settingsNavItems[s.settingsSection]
+					ui.Column(c).Gap(3).Children(func() {
+						ui.Text(c, item.title()).Label("Settings header").
+							Role(ui.RoleHeading).FontSize(20).FontWeight(650).TextColor(t.Text)
+						if detail := item.detail(); detail != "" {
+							ui.Text(c, detail).FontSize(12.5).TextColor(t.TextMuted).LineHeight(1.35)
+						}
+					})
+					if s.saveErr != "" {
+						ui.Text(c, s.saveErr).FontSize(12).TextColor(t.Danger)
+					}
+					s.currentGroup(c)
+				})
+		})
+	})
+}
 
-// groups renders the settings sections inside the dialog's scroll area:
-// one card per section, rows separated by hairlines.
-func (s *Shell) groups(c *ui.Context) {
+// currentGroup draws the card for the chosen page alone; switching pages
+// rebuilds the scroll's children, so no other page's rows stay behind.
+func (s *Shell) currentGroup(c *ui.Context) {
+	switch s.settingsSection {
+	case 1:
+		s.readingGroup(c)
+	case 2:
+		s.aboutGroup(c)
+	default:
+		s.appearanceGroup(c)
+	}
+}
+
+func (s *Shell) appearanceGroup(c *ui.Context) {
 	s.group(c, locales.SettingsSectionAppearance(), func() {
 		s.settingRow(c, locales.SettingsTheme(), locales.SettingsThemeDetail(), func() {
 			s.themeSegmented(c)
 		})
+		s.themeColorBlock(c)
 		s.settingRow(c, locales.SettingsLayout(), "", func() {
 			s.segmentedRow(c, "layout", &s.draftLayout, locales.SettingsLayout(),
 				locales.LayoutCentered(), locales.LayoutFullWidth())
@@ -90,9 +192,27 @@ func (s *Shell) groups(c *ui.Context) {
 		s.settingRow(c, locales.SettingsLanguage(), "", func() {
 			s.languageSelect(c)
 		})
+		s.settingRow(c, locales.SettingsShowFPS(), "", func() {
+			s.switchRow(c, locales.SettingsShowFPS(), &s.Saved.ShowFPS)
+		})
 	})
+}
 
-	s.group(c, locales.SettingsSectionEditor(), func() {
+// themeColorBlock embeds the card grid in the Appearance page. It draws
+// its own rules, so the grid is not counted as a setting row.
+func (s *Shell) themeColorBlock(c *ui.Context) {
+	ui.Divider(c).Margin(0, settingsCardPadX)
+	winW, _ := c.Size()
+	ui.Column(c).FillWidth().Padding(0, settingsCardPadX, settingsCardPadX).
+		Label("Theme Color section").Children(func() {
+		paletteHeading(c, locales.SettingsThemeColor(), 11)
+		s.themeGrid(c, settingsThemeGridWidth(winW))
+	})
+	s.rows = 1
+}
+
+func (s *Shell) readingGroup(c *ui.Context) {
+	s.group(c, locales.SettingsSectionReading(), func() {
 		s.settingRow(c, locales.SettingsContentFont(), "", func() {
 			s.fontTrigger(c, locales.SettingsContentFont(), s.Saved.FontFamily, &s.fontPickOpen, fontContent)
 			s.fontSize(c, locales.ContentFontSize(), &s.Saved.FontSize, 12, 24)
@@ -107,9 +227,9 @@ func (s *Shell) groups(c *ui.Context) {
 		s.settingRow(c, locales.SettingsInertiaScroll(), "", func() {
 			s.switchRow(c, locales.SettingsInertiaScroll(), &s.Saved.InertiaScroll)
 		})
-	})
-
-	s.group(c, locales.SettingsSectionFiles(), func() {
+		s.settingRow(c, locales.SettingsAutoRefresh(), "", func() {
+			s.switchRow(c, locales.SettingsAutoRefresh(), &s.Saved.AutoRefresh)
+		})
 		s.settingRow(c, locales.SettingsExplorerRoot(), "", func() {
 			s.segmentedRow(c, "explorer", &s.draftExplorer, locales.SettingsExplorerRoot(),
 				locales.ExplorerCurrentDirectory(), locales.ExplorerProjectDirectory())
@@ -124,15 +244,64 @@ func (s *Shell) groups(c *ui.Context) {
 			})
 		}
 	})
+}
 
-	s.group(c, locales.SettingsSectionSystem(), func() {
-		s.settingRow(c, locales.SettingsAutoRefresh(), "", func() {
-			s.switchRow(c, locales.SettingsAutoRefresh(), &s.Saved.AutoRefresh)
+const (
+	aboutIssuesURL    = repoURL + "/issues"
+	aboutChangelogURL = repoURL + "/blob/main/CHANGELOG.md"
+)
+
+func (s *Shell) aboutGroup(c *ui.Context) {
+	// Keep the long URLs from squeezing the labels in a narrow window.
+	winW, _ := c.Size()
+	panelW := min(settingsWidth, winW-settingsWindowMargin)
+	rowW := panelW - 2*settingsPadding - settingsGap - settingsRailWidth -
+		settingsPaneGap - 2*settingsCardRim - settingsScrollPadStart -
+		settingsScrollPadEnd - 2*settingsCardPadX - settingsRowGap
+	linkW := max(180, min(380, rowW-110))
+	s.group(c, locales.SettingsSectionAbout(), func() {
+		s.settingRow(c, locales.AppTitle(), locales.SettingsAboutIntro(), func() {
+			version := s.appVersion()
+			if version != "" {
+				version = "v" + version
+			}
+			ui.Text(c, version).FontSize(14).FontWeight(600).TextColor(c.Theme().Text)
 		})
-		s.settingRow(c, locales.SettingsShowFPS(), "", func() {
-			s.switchRow(c, locales.SettingsShowFPS(), &s.Saved.ShowFPS)
+		s.aboutLinkRow(c, locales.SettingsAboutRepository(), repoURL, linkW)
+		s.aboutLinkRow(c, locales.SettingsAboutIssues(), aboutIssuesURL, linkW)
+		s.aboutLinkRow(c, locales.SettingsAboutChangelog(), aboutChangelogURL, linkW)
+		s.settingRow(c, locales.SettingsAboutLicense(), "", func() {
+			ui.Text(c, "MIT").FontSize(13).TextColor(c.Theme().Text)
+		})
+		s.settingRow(c, locales.SettingsAboutRuntime(), "", func() {
+			ui.Text(c, fmt.Sprintf("Go %s / mygo %s", runtime.Version(), mygo.Version)).
+				FontSize(12).TextColor(c.Theme().TextMuted)
 		})
 	})
+}
+
+func (s *Shell) aboutLinkRow(c *ui.Context, label, url string, width float32) {
+	s.settingRow(c, label, "", func() {
+		link := ui.Row(c).Width(width).Shrink(0).
+			Label("About link " + label).Role(ui.RoleLink).Focusable().
+			Cursor(ui.CursorPointer).AlignItems(ui.Center)
+		link.Children(func() {
+			ui.Text(c, url).FontSize(12).TextColor(c.Theme().Accent).
+				SingleLine().Ellipsis("...").Grow(1).MinWidth(0)
+		})
+		if link.Clicked() {
+			s.OpenLink(url)
+		}
+	})
+}
+
+// appVersion reads the version mygo injected at build time; the hook lets
+// headless tests use the manifest's version when no build info exists.
+func (s *Shell) appVersion() string {
+	if s.AppVersion != nil {
+		return s.AppVersion()
+	}
+	return mygo.App.Version()
 }
 
 // persist writes the settings and applies them at once: theme, tree,
@@ -183,7 +352,8 @@ func (s *Shell) settingRow(c *ui.Context, title, detail string, control func()) 
 	ui.Row(c).MinHeight(52).Padding(0, settingsCardPadX).Gap(settingsRowGap).
 		AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(t.Text)
+			ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(t.Text).
+				SingleLine().Ellipsis("...")
 			if detail != "" {
 				ui.Text(c, detail).FontSize(11.5).TextColor(t.TextMuted).LineHeight(1.35)
 			}
@@ -192,28 +362,29 @@ func (s *Shell) settingRow(c *ui.Context, title, detail string, control func()) 
 	})
 }
 
-// group draws one section: a muted caption with mojian's letter spacing
-// over one rounded card of rows.
+// group draws one section as a rounded card of rows. The page header
+// above the card names the section, so the card needs no second caption.
 func (s *Shell) group(c *ui.Context, title string, fields func()) {
 	t := c.Theme()
 	k := s.accentColors(c)
 	s.rows = 0
-	ui.Column(c).Gap(8).FillWidth().Children(func() {
-		ui.Row(c).MinHeight(24).Padding(2, 0).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).FontSize(11).FontWeight(650).TextColor(t.TextMuted).LetterSpacing(0.5)
-		})
-		ui.Column(c).FillWidth().Background(k.Card).Border(1, cardRim(t, false)).
-			Radius(10).Shadow(0, 1, 3, 0, cardShadow(t, false)).Clip().
-			Label(title + " card").Children(fields)
-	})
+	ui.Column(c).FillWidth().Background(k.Card).Border(1, cardRim(t, false)).
+		Radius(10).Shadow(0, 1, 3, 0, cardShadow(t, false)).Clip().
+		Label(title + " card").Children(fields)
 }
 
 // themeLabels name the three appearances in the spellings the setting
 // stores, as the Rust build's dialog read them.
 var themeLabels = []string{settings.ThemeAuto, settings.ThemeLight, settings.ThemeDark}
 
-// themeSegmented is the theme's three-way segmented control (Auto, Light,
-// Dark); a click applies the theme through persist at once.
+// themeChoiceLabels are the three appearances as the reader sees them.
+// The spellings themeLabels keeps are stored, never shown.
+func themeChoiceLabels() []string {
+	return []string{locales.AppearanceSystem(), locales.AppearanceLight(), locales.AppearanceDark()}
+}
+
+// themeSegmented is the theme's three-way segmented control; a click
+// applies the theme through persist at once.
 func (s *Shell) themeSegmented(c *ui.Context) {
 	choice := 0
 	switch s.Saved.Theme {
@@ -222,12 +393,13 @@ func (s *Shell) themeSegmented(c *ui.Context) {
 	case settings.ThemeDark:
 		choice = 2
 	}
+	labels := themeChoiceLabels()
 	seg := ui.SegmentedBase(c, &choice, len(themeLabels))
 	s.styleSegmented(c, seg.Track, locales.SettingsTheme())
 	seg.Track.Children(func() {
 		for n, label := range themeLabels {
 			c.Key("theme-" + label)
-			s.segment(c, seg.Segment(n), n, choice, label)
+			s.segment(c, seg.Segment(n), n, choice, labels[n])
 		}
 	})
 	// OnChange commits the local the bound segments chose once the input

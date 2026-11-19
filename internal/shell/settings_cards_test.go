@@ -45,6 +45,9 @@ func TestSettingsDialogCardSurfaces(t *testing.T) {
 	if panel.W != settingsWidth {
 		t.Fatalf("panel width %v, want %v", panel.W, settingsWidth)
 	}
+	if panel.H != settingsMaxHeight {
+		t.Fatalf("panel height %v, want the fixed %v", panel.H, settingsMaxHeight)
+	}
 
 	probe := func(name string, x, y float32, want ui.Color) {
 		t.Helper()
@@ -56,9 +59,17 @@ func TestSettingsDialogCardSurfaces(t *testing.T) {
 	dimmed := over(k.Backdrop, pixelAt(bare.Image(), bx, by))
 	probe("backdrop", bx, by, dimmed)
 
-	px, py := panel.X+10, panel.Y+panel.H/2
+	px, py := panel.X+10, panel.Y+10
 	panelFace := over(k.CardFocused, over(k.Backdrop, pixelAt(bare.Image(), px, py)))
 	probe("panel", px, py, panelFace)
+
+	rail, ok := tt.Find("Settings rail")
+	if !ok {
+		t.Fatalf("no settings rail in %q", tt.Texts())
+	}
+	rx, ry := rail.X+rail.W/2, rail.Y+rail.H-8
+	railFace := over(k.Card, over(k.CardFocused, over(k.Backdrop, pixelAt(bare.Image(), rx, ry))))
+	probe("rail", rx, ry, railFace)
 
 	card, ok := tt.Find("Appearance card")
 	if !ok {
@@ -83,11 +94,10 @@ func TestSettingsBackdropClickCloses(t *testing.T) {
 	tt := s.renderSize(t, 1400, 880)
 	s.OpenSettings()
 	tt.Frame()
-	panel, ok := tt.Find("Settings panel")
-	if !ok {
+	if _, ok := tt.Find("Settings panel"); !ok {
 		t.Fatalf("no settings panel in %q", tt.Texts())
 	}
-	tt.ClickAt(panel.X/2, panel.Y+panel.H/2)
+	tt.ClickAt(10, 10)
 	tt.Frame()
 	if s.SettingsOpen {
 		t.Fatal("the backdrop click left the settings dialog open")

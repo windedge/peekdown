@@ -14,6 +14,10 @@ func openFontPickerFor(t *testing.T, s *Shell, tt *ui.Tester, name string) (ui.R
 	t.Helper()
 	s.OpenSettings()
 	tt.Frame()
+	if err := tt.Click("Settings nav Reading"); err != nil {
+		t.Fatalf("Reading rail item: %v", err)
+	}
+	tt.Frame()
 	if err := tt.Click("Choose " + name); err != nil {
 		t.Fatalf("%s trigger: %v", name, err)
 	}
@@ -109,10 +113,9 @@ func TestFontPickerSearchFilters(t *testing.T) {
 	if !tt.HasText("No matching fonts") {
 		t.Fatalf("no empty state for a query nothing matches: %v", tt.Texts())
 	}
-	// "System Default" now comes from three places: the two font triggers
-	// under the panel and the Language select's system choice; a fourth
-	// would be the row the filter should have dropped.
-	if texts := tt.Texts(); strings.Count(strings.Join(texts, "|"), "System Default") != 3 {
+	// "System Default" now comes from the two font triggers under the
+	// panel; a third would be the row the filter should have dropped.
+	if texts := tt.Texts(); strings.Count(strings.Join(texts, "|"), "System Default") != 2 {
 		t.Fatalf("the default row survived a filter that keeps nothing: %v", texts)
 	}
 

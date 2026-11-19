@@ -20,6 +20,10 @@ func TestFontPickerScreenshot(t *testing.T) {
 	tt := s.renderSize(t, 1400, 880)
 	s.OpenSettings()
 	tt.Frame()
+	if err := tt.Click("Settings nav Reading"); err != nil {
+		t.Fatalf("Reading rail item: %v", err)
+	}
+	tt.Frame()
 	if err := tt.Click("Choose Content Font"); err != nil {
 		t.Fatalf("content font trigger: %v", err)
 	}

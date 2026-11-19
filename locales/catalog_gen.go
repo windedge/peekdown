@@ -624,6 +624,66 @@ func (msgs Messages) SidebarOutline() string {
 	return Catalog.Format(msgs.locale, "sidebarOutline", nil)
 }
 
+// SidebarSortBy says "Sort By"
+// in the language the app shows.
+func SidebarSortBy() string { return In(i18n.Locale()).SidebarSortBy() }
+
+// SidebarSortBy says "Sort By"
+// in the language of msgs.
+func (msgs Messages) SidebarSortBy() string {
+	return Catalog.Format(msgs.locale, "sidebarSortBy", nil)
+}
+
+// SidebarSortTooltip says "Sort: {mode}"
+// in the language the app shows.
+func SidebarSortTooltip(mode string) string { return In(i18n.Locale()).SidebarSortTooltip(mode) }
+
+// SidebarSortTooltip says "Sort: {mode}"
+// in the language of msgs.
+func (msgs Messages) SidebarSortTooltip(mode string) string {
+	return Catalog.Format(msgs.locale, "sidebarSortTooltip", map[string]any{"mode": mode})
+}
+
+// SidebarSortNameAsc says "Name (A-Z)"
+// in the language the app shows.
+func SidebarSortNameAsc() string { return In(i18n.Locale()).SidebarSortNameAsc() }
+
+// SidebarSortNameAsc says "Name (A-Z)"
+// in the language of msgs.
+func (msgs Messages) SidebarSortNameAsc() string {
+	return Catalog.Format(msgs.locale, "sidebarSortNameAsc", nil)
+}
+
+// SidebarSortNameDesc says "Name (Z-A)"
+// in the language the app shows.
+func SidebarSortNameDesc() string { return In(i18n.Locale()).SidebarSortNameDesc() }
+
+// SidebarSortNameDesc says "Name (Z-A)"
+// in the language of msgs.
+func (msgs Messages) SidebarSortNameDesc() string {
+	return Catalog.Format(msgs.locale, "sidebarSortNameDesc", nil)
+}
+
+// SidebarSortTimeNewest says "Time (Newest First)"
+// in the language the app shows.
+func SidebarSortTimeNewest() string { return In(i18n.Locale()).SidebarSortTimeNewest() }
+
+// SidebarSortTimeNewest says "Time (Newest First)"
+// in the language of msgs.
+func (msgs Messages) SidebarSortTimeNewest() string {
+	return Catalog.Format(msgs.locale, "sidebarSortTimeNewest", nil)
+}
+
+// SidebarSortTimeOldest says "Time (Oldest First)"
+// in the language the app shows.
+func SidebarSortTimeOldest() string { return In(i18n.Locale()).SidebarSortTimeOldest() }
+
+// SidebarSortTimeOldest says "Time (Oldest First)"
+// in the language of msgs.
+func (msgs Messages) SidebarSortTimeOldest() string {
+	return Catalog.Format(msgs.locale, "sidebarSortTimeOldest", nil)
+}
+
 // NoHeadings says "No headings"
 // in the language the app shows.
 func NoHeadings() string { return In(i18n.Locale()).NoHeadings() }
@@ -756,6 +816,26 @@ func (msgs Messages) SettingsTitle() string {
 	return Catalog.Format(msgs.locale, "settingsTitle", nil)
 }
 
+// SettingsClose says "Close"
+// in the language the app shows.
+func SettingsClose() string { return In(i18n.Locale()).SettingsClose() }
+
+// SettingsClose says "Close"
+// in the language of msgs.
+func (msgs Messages) SettingsClose() string {
+	return Catalog.Format(msgs.locale, "settingsClose", nil)
+}
+
+// SettingsCloseIcon says "Close settings"
+// in the language the app shows.
+func SettingsCloseIcon() string { return In(i18n.Locale()).SettingsCloseIcon() }
+
+// SettingsCloseIcon says "Close settings"
+// in the language of msgs.
+func (msgs Messages) SettingsCloseIcon() string {
+	return Catalog.Format(msgs.locale, "settingsCloseIcon", nil)
+}
+
 // SettingsDone says "Done"
 // in the language the app shows.
 func SettingsDone() string { return In(i18n.Locale()).SettingsDone() }
@@ -776,34 +856,116 @@ func (msgs Messages) SettingsSectionAppearance() string {
 	return Catalog.Format(msgs.locale, "settingsSectionAppearance", nil)
 }
 
-// SettingsSectionEditor says "Editor"
+// SettingsSectionAppearanceDetail says "Theme, colors, layout, language and FPS."
 // in the language the app shows.
-func SettingsSectionEditor() string { return In(i18n.Locale()).SettingsSectionEditor() }
-
-// SettingsSectionEditor says "Editor"
-// in the language of msgs.
-func (msgs Messages) SettingsSectionEditor() string {
-	return Catalog.Format(msgs.locale, "settingsSectionEditor", nil)
+func SettingsSectionAppearanceDetail() string {
+	return In(i18n.Locale()).SettingsSectionAppearanceDetail()
 }
 
-// SettingsSectionFiles says "Files"
-// in the language the app shows.
-func SettingsSectionFiles() string { return In(i18n.Locale()).SettingsSectionFiles() }
-
-// SettingsSectionFiles says "Files"
+// SettingsSectionAppearanceDetail says "Theme, colors, layout, language and FPS."
 // in the language of msgs.
-func (msgs Messages) SettingsSectionFiles() string {
-	return Catalog.Format(msgs.locale, "settingsSectionFiles", nil)
+func (msgs Messages) SettingsSectionAppearanceDetail() string {
+	return Catalog.Format(msgs.locale, "settingsSectionAppearanceDetail", nil)
 }
 
-// SettingsSectionSystem says "System"
+// SettingsSectionReading says "Reading"
 // in the language the app shows.
-func SettingsSectionSystem() string { return In(i18n.Locale()).SettingsSectionSystem() }
+func SettingsSectionReading() string { return In(i18n.Locale()).SettingsSectionReading() }
 
-// SettingsSectionSystem says "System"
+// SettingsSectionReading says "Reading"
 // in the language of msgs.
-func (msgs Messages) SettingsSectionSystem() string {
-	return Catalog.Format(msgs.locale, "settingsSectionSystem", nil)
+func (msgs Messages) SettingsSectionReading() string {
+	return Catalog.Format(msgs.locale, "settingsSectionReading", nil)
+}
+
+// SettingsSectionReadingDetail says "Fonts, scrolling and refresh."
+// in the language the app shows.
+func SettingsSectionReadingDetail() string { return In(i18n.Locale()).SettingsSectionReadingDetail() }
+
+// SettingsSectionReadingDetail says "Fonts, scrolling and refresh."
+// in the language of msgs.
+func (msgs Messages) SettingsSectionReadingDetail() string {
+	return Catalog.Format(msgs.locale, "settingsSectionReadingDetail", nil)
+}
+
+// SettingsSectionAbout says "About"
+// in the language the app shows.
+func SettingsSectionAbout() string { return In(i18n.Locale()).SettingsSectionAbout() }
+
+// SettingsSectionAbout says "About"
+// in the language of msgs.
+func (msgs Messages) SettingsSectionAbout() string {
+	return Catalog.Format(msgs.locale, "settingsSectionAbout", nil)
+}
+
+// SettingsSectionAboutDetail says "Version, links and license."
+// in the language the app shows.
+func SettingsSectionAboutDetail() string { return In(i18n.Locale()).SettingsSectionAboutDetail() }
+
+// SettingsSectionAboutDetail says "Version, links and license."
+// in the language of msgs.
+func (msgs Messages) SettingsSectionAboutDetail() string {
+	return Catalog.Format(msgs.locale, "settingsSectionAboutDetail", nil)
+}
+
+// SettingsAboutIntro says "A lightweight Markdown viewer built with Go and mygo."
+// in the language the app shows.
+func SettingsAboutIntro() string { return In(i18n.Locale()).SettingsAboutIntro() }
+
+// SettingsAboutIntro says "A lightweight Markdown viewer built with Go and mygo."
+// in the language of msgs.
+func (msgs Messages) SettingsAboutIntro() string {
+	return Catalog.Format(msgs.locale, "settingsAboutIntro", nil)
+}
+
+// SettingsAboutRepository says "Repository"
+// in the language the app shows.
+func SettingsAboutRepository() string { return In(i18n.Locale()).SettingsAboutRepository() }
+
+// SettingsAboutRepository says "Repository"
+// in the language of msgs.
+func (msgs Messages) SettingsAboutRepository() string {
+	return Catalog.Format(msgs.locale, "settingsAboutRepository", nil)
+}
+
+// SettingsAboutIssues says "Issue Tracker"
+// in the language the app shows.
+func SettingsAboutIssues() string { return In(i18n.Locale()).SettingsAboutIssues() }
+
+// SettingsAboutIssues says "Issue Tracker"
+// in the language of msgs.
+func (msgs Messages) SettingsAboutIssues() string {
+	return Catalog.Format(msgs.locale, "settingsAboutIssues", nil)
+}
+
+// SettingsAboutChangelog says "Changelog"
+// in the language the app shows.
+func SettingsAboutChangelog() string { return In(i18n.Locale()).SettingsAboutChangelog() }
+
+// SettingsAboutChangelog says "Changelog"
+// in the language of msgs.
+func (msgs Messages) SettingsAboutChangelog() string {
+	return Catalog.Format(msgs.locale, "settingsAboutChangelog", nil)
+}
+
+// SettingsAboutLicense says "License"
+// in the language the app shows.
+func SettingsAboutLicense() string { return In(i18n.Locale()).SettingsAboutLicense() }
+
+// SettingsAboutLicense says "License"
+// in the language of msgs.
+func (msgs Messages) SettingsAboutLicense() string {
+	return Catalog.Format(msgs.locale, "settingsAboutLicense", nil)
+}
+
+// SettingsAboutRuntime says "Built With"
+// in the language the app shows.
+func SettingsAboutRuntime() string { return In(i18n.Locale()).SettingsAboutRuntime() }
+
+// SettingsAboutRuntime says "Built With"
+// in the language of msgs.
+func (msgs Messages) SettingsAboutRuntime() string {
+	return Catalog.Format(msgs.locale, "settingsAboutRuntime", nil)
 }
 
 // SettingsTheme says "Theme"
@@ -824,6 +986,16 @@ func SettingsThemeDetail() string { return In(i18n.Locale()).SettingsThemeDetail
 // in the language of msgs.
 func (msgs Messages) SettingsThemeDetail() string {
 	return Catalog.Format(msgs.locale, "settingsThemeDetail", nil)
+}
+
+// SettingsThemeColor says "Theme Color"
+// in the language the app shows.
+func SettingsThemeColor() string { return In(i18n.Locale()).SettingsThemeColor() }
+
+// SettingsThemeColor says "Theme Color"
+// in the language of msgs.
+func (msgs Messages) SettingsThemeColor() string {
+	return Catalog.Format(msgs.locale, "settingsThemeColor", nil)
 }
 
 // SettingsLayout says "Layout"

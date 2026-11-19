@@ -53,18 +53,16 @@ const (
 	paletteNameRow float32 = 15
 )
 
-// themeCardWidth is one card's width; themeCardSize its height: the 64
-// DIP preview, its gap and the name line under it. The width is floored:
-// five cards and their four gaps must clear the panel's content box,
-// which the border and padding have already thinned.
-var (
-	themeCardWidth = float32(math.Floor(float64(paletteWidth-2*paletteBorder-2*palettePad-4*paletteGap) / 5))
-	themeCardSize  = float32(palettePreview + paletteNameGap + paletteNameRow)
-)
+// themeCardWidth is one card's width in the bar's popover; a card's
+// height is its preview scaled with the width, plus the gap and name.
+// The width is floored: five cards and their four gaps must clear the
+// panel's content box, which the border and padding have thinned.
+var themeCardWidth = float32(math.Floor(float64(paletteWidth-2*paletteBorder-2*palettePad-4*paletteGap) / 5))
 
-// paletteOpen shows the theme picker's popover under the bar's palette
-// button; appearancePick is the popover's appearance segmented's local
-// index (0 system, 1 light, 2 dark) across frames.
+// themeGridMinWidth is the smallest card that still reads like a
+// miniature window. Below it the grid drops from five columns to four
+// instead of shrinking the previews into unreadable strips.
+const themeGridMinWidth = 80
 
 // openPalette toggles the theme popover: a second press on the trigger
 // closes it, and an open one closes before the trigger's popover builds
@@ -110,12 +108,43 @@ func (s *Shell) palettePopover(c *ui.Context, trigger ui.Element) {
 // padding already insets it, and a second one would leave the row too
 // narrow for five cards.
 func (s *Shell) paletteThemeSection(c *ui.Context) {
-	paletteHeading(c, locales.PaletteTitle())
-	ui.Row(c).FillWidth().Wrap().Gap(paletteGap).Children(func() {
+	paletteHeading(c, locales.PaletteTitle(), 10)
+	s.themeGrid(c, paletteWidth-2*paletteBorder-2*palettePad)
+}
+
+// themeGrid draws the ten cards in a wrapping row. The bar's popover and
+// the settings page both build it from the same preview, scaled to the
+// width each has; the choice reads the same in either place.
+func (s *Shell) themeGrid(c *ui.Context, avail float32) {
+	_, cardW := themeGridMetrics(avail)
+	ui.Row(c).FillWidth().Wrap().Gap(paletteGap).Label("Theme grid").Children(func() {
 		for _, th := range accentThemes {
-			s.themeCard(c, th)
+			themeCard(c, th, s.Saved.AccentTheme == th.ID, cardW, func() { s.setAccentTheme(th.ID) })
 		}
 	})
+}
+
+// themeGridMetrics keeps five columns whenever their cards stay legible,
+// shrinks them proportionally otherwise, and falls back to four in the
+// narrow settings column. Cards never grow past the popover's measure.
+func themeGridMetrics(avail float32) (int, float32) {
+	cols := 5
+	cardW := (avail - float32(cols-1)*paletteGap) / float32(cols)
+	if cardW < themeGridMinWidth {
+		cols = 4
+		cardW = (avail - float32(cols-1)*paletteGap) / float32(cols)
+	}
+	if cardW > themeCardWidth {
+		cardW = themeCardWidth
+	}
+	return cols, max(cardW, 40)
+}
+
+// setAccentTheme applies a card's pick at once, as the settings' other
+// fields do; both pickers go through it.
+func (s *Shell) setAccentTheme(id string) {
+	s.Saved.AccentTheme = id
+	s.persist()
 }
 
 // themeCard draws one accent theme as a window miniature: the theme's
@@ -123,65 +152,22 @@ func (s *Shell) paletteThemeSection(c *ui.Context) {
 // syntax dots, and the theme's name under it. The chosen card's preview
 // takes a 2 DIP outline in the window's own accent, and its name the
 // accent with it, as mojian marks the pick.
-func (s *Shell) themeCard(c *ui.Context, th AccentTheme) {
+func themeCard(c *ui.Context, th AccentTheme, chosen bool, cardW float32, onPick func()) {
 	t := c.Theme()
-	chosen := s.Saved.AccentTheme == th.ID
 	k := th.of(t.Dark)
-	text := previewText(t.Dark)
+	prevH := palettePreview * cardW / themeCardWidth
 	card := ui.ButtonBase(c.Key("thm-"+th.ID)).Label("Theme "+th.ID).
-		Width(themeCardWidth).Height(themeCardSize).Padding(6, 6, 5).
+		Width(cardW).Height(prevH+paletteNameGap+paletteNameRow).Padding(6, 6, 5).
 		Radius(8).AlignItems(ui.Center).Justify(ui.Center).Cursor(ui.CursorPointer)
 	if card.Hovered() {
 		card.Background(t.SurfaceHover)
 	}
 	card.Children(func() {
-		ui.Column(c).Width(themeCardWidth - 12).Gap(paletteNameGap).AlignItems(ui.Center).Children(func() {
-			prev := ui.Box(c).Label("preview "+th.ID).Size(themeCardWidth-12, palettePreview).
+		ui.Column(c).Width(cardW - 12).Gap(paletteNameGap).AlignItems(ui.Center).Children(func() {
+			prev := ui.Box(c).Label("preview "+th.ID).Size(cardW-12, prevH).
 				Radius(palettePrevRadius).Clip()
 			prev.Draw(func(p *ui.Painter, r ui.Rect) {
-				// mygo paints a box's border under its Draw and only clips
-				// children, so the hairline and the chosen card's accent
-				// stroke go here, over the paints, clipped to the corner.
-				p.Clip(r, palettePrevRadius, func() {
-					// The frame is the theme's own window background: the four
-					// gradient stops and the tint the window is drawn in.
-					paintAccentBackground(p, r, k)
-					// The inner card reads CardFocused, the solid face the
-					// theme's own window lifts its document onto.
-					win := ui.Rect{
-						X: r.X + palettePrevPad, Y: r.Y + palettePrevPad,
-						W: r.W - 2*palettePrevPad, H: r.H - 2*palettePrevPad,
-					}
-					// .thm-win lifts off the gradient with a hairline shadow.
-					p.Shadow(win, paletteWinRadius, 0, 1, 2, 0, rgba(0, 0, 0, 0.10))
-					p.Fill(win, k.CardFocused, paletteWinRadius)
-					x, content := win.X+paletteWinPad, win.W-2*paletteWinPad
-					p.RichText(x, win.Y+paletteAARow, 0,
-						ui.Span{Text: "Aa", Size: paletteAa, Weight: 600, Color: text})
-					// The line stands for a document's text: "~/" marks its path,
-					// the bar its runs, and the theme's accent caret sits where
-					// typing would, at the bar's end.
-					lineY := win.Y + paletteLineRow
-					mark := ui.Span{Text: "~/", Size: paletteMark, Color: text.Alpha(0.5)}
-					markW, _ := p.MeasureText(0, mark)
-					p.RichText(x, lineY-4, 0, mark)
-					barX := x + markW + 2
-					barW := content * paletteLineSpan
-					p.Fill(ui.Rect{X: barX, Y: lineY, W: barW, H: paletteLine}, text.Alpha(0.22), 2)
-					p.Fill(ui.Rect{X: barX + barW, Y: lineY - 2, W: 2, H: paletteCaret}, k.Accent, 1)
-					// The dots are sized from the span the inner window's content
-					// leaves, so all eight land inside the card instead of spilling.
-					dotW := (content - (paletteDots-1)*paletteDotGap) / paletteDots
-					for i := 0; i < paletteDots; i++ {
-						d := ui.Rect{X: x + float32(i)*(dotW+paletteDotGap), Y: win.Y + paletteDotsRow, W: dotW, H: paletteDot}
-						p.Fill(d, previewDotColor(k, text, i), 2.5)
-					}
-				})
-				if chosen {
-					p.Stroke(r, t.Accent, palettePrevRadius, 2)
-				} else {
-					p.Stroke(r, t.Border, palettePrevRadius, 1)
-				}
+				paintThemePreview(p, r, k, t.Dark, t.Accent, t.Border, chosen)
 			})
 			weight, color := 400, t.TextMuted
 			if chosen {
@@ -192,20 +178,58 @@ func (s *Shell) themeCard(c *ui.Context, th AccentTheme) {
 		})
 	})
 	if card.Clicked() {
-		s.Saved.AccentTheme = th.ID
-		s.persist()
+		onPick()
+	}
+}
+
+// paintThemePreview paints one card's window miniature: the theme's own
+// background, the lifted document face with its "Aa", path line and
+// caret, the eight syntax dots, and the chosen card's accent stroke.
+// mygo paints a box's border under its Draw and only clips children, so
+// the strokes go here, over the fills.
+func paintThemePreview(p *ui.Painter, r ui.Rect, k AccentColors, dark bool, accent, border ui.Color, chosen bool) {
+	text := previewText(dark)
+	p.Clip(r, palettePrevRadius, func() {
+		paintAccentBackground(p, r, k)
+		win := ui.Rect{
+			X: r.X + palettePrevPad, Y: r.Y + palettePrevPad,
+			W: r.W - 2*palettePrevPad, H: r.H - 2*palettePrevPad,
+		}
+		p.Shadow(win, paletteWinRadius, 0, 1, 2, 0, rgba(0, 0, 0, 0.10))
+		p.Fill(win, k.CardFocused, paletteWinRadius)
+		x, content := win.X+paletteWinPad, win.W-2*paletteWinPad
+		p.RichText(x, win.Y+paletteAARow, 0,
+			ui.Span{Text: "Aa", Size: paletteAa, Weight: 600, Color: text})
+		lineY := win.Y + paletteLineRow
+		mark := ui.Span{Text: "~/", Size: paletteMark, Color: text.Alpha(0.5)}
+		markW, _ := p.MeasureText(0, mark)
+		p.RichText(x, lineY-4, 0, mark)
+		barX := x + markW + 2
+		barW := content * paletteLineSpan
+		p.Fill(ui.Rect{X: barX, Y: lineY, W: barW, H: paletteLine}, text.Alpha(0.22), 2)
+		p.Fill(ui.Rect{X: barX + barW, Y: lineY - 2, W: 2, H: paletteCaret}, k.Accent, 1)
+		dotW := (content - (paletteDots-1)*paletteDotGap) / paletteDots
+		for i := 0; i < paletteDots; i++ {
+			d := ui.Rect{X: x + float32(i)*(dotW+paletteDotGap), Y: win.Y + paletteDotsRow, W: dotW, H: paletteDot}
+			p.Fill(d, previewDotColor(k, text, i), 2.5)
+		}
+	})
+	if chosen {
+		p.Stroke(r, accent, palettePrevRadius, 2)
+	} else {
+		p.Stroke(r, border, palettePrevRadius, 1)
 	}
 }
 
 // paletteAppearanceSection draws the appearance heading, the three-way
 // segmented bound to the saved Theme, and the faint note under it.
 func (s *Shell) paletteAppearanceSection(c *ui.Context) {
-	paletteHeading(c, locales.PaletteAppearance())
+	paletteHeading(c, locales.PaletteAppearance(), 10)
 	s.appearancePick = themeSegmentIndex(s.Saved.Theme)
 	seg := ui.SegmentedBase(c.Key("palette-appearance"), &s.appearancePick, len(themeLabels))
 	s.styleSegmented(c, seg.Track, locales.PaletteAppearance())
 	seg.Track.Children(func() {
-		labels := []string{locales.AppearanceSystem(), locales.AppearanceLight(), locales.AppearanceDark()}
+		labels := themeChoiceLabels()
 		for n, label := range labels {
 			c.Key("palette-appearance-" + themeLabels[n])
 			s.segment(c, seg.Segment(n), n, s.appearancePick, label)
@@ -224,10 +248,11 @@ func (s *Shell) paletteAppearanceSection(c *ui.Context) {
 		Margin(6, 0, 0)
 }
 
-// paletteHeading draws a section's label: mojian's 10 DIP uppercase
-// heading, tracked out over the cards or the segmented.
-func paletteHeading(c *ui.Context, label string) {
-	ui.Text(c, strings.ToUpper(label)).FontSize(10).FontWeight(650).
+// paletteHeading draws a section's label: mojian's uppercase caption,
+// tracked out over the cards or the segmented. The settings' inline grid
+// uses a slightly larger caption than the popover's.
+func paletteHeading(c *ui.Context, label string, size float32) {
+	ui.Text(c, strings.ToUpper(label)).FontSize(size).FontWeight(650).
 		LetterSpacing(0.5).TextColor(faintText(c)).Padding(10, 0, 4)
 }
 

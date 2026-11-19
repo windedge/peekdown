@@ -67,6 +67,10 @@ type Shell struct {
 	tree         treeState
 	SettingsOpen bool
 	Saved        settings.Settings
+	// settingsSection is the page the two-column dialog shows, and
+	// settingsScroll keeps that page's own place in its scroll.
+	settingsSection int
+	settingsScroll  ui.ScrollState
 	// rows counts the rows the settings dialog's card draws, for the
 	// hairline between them; persistTimer holds the debounced persist a
 	// text-like control armed.
@@ -80,8 +84,8 @@ type Shell struct {
 	fontSearch       string
 	fontList         ui.ListState
 	// paletteOpen shows the theme picker's popover under the bar's
-	// palette button; appearancePick is the popover's appearance
-	// segmented's local index (0 system, 1 light, 2 dark) across frames.
+	// palette button; appearancePick is its segmented's local index
+	// (0 system, 1 light, 2 dark) across frames.
 	paletteOpen    bool
 	appearancePick int
 	// Zoom is the document text's runtime zoom in percent, 100 drawing at
@@ -140,6 +144,8 @@ type Shell struct {
 	ShowItemInFolder func(string)
 	// OpenURL opens the Help menu's pages in the browser; nil skips it.
 	OpenURL func(string)
+	// AppVersion supplies the About page's version; nil uses mygo's build version.
+	AppVersion func() string
 	// CloseWindow quits the app: the host closes its window, which ends
 	// the run loop. Nil skips it.
 	CloseWindow func()
@@ -640,7 +646,17 @@ func (s *Shell) OpenSettings() {
 	s.draftLayout = layoutIndex(s.Saved.Layout)
 	s.draftExplorer = explorerIndex(s.Saved.ExplorerRootMode)
 	s.markersText = strings.Join(s.Saved.ProjectRootMarkers, ", ")
+	s.settingsScroll.Y = 0
+	s.paletteOpen = false
 	s.SettingsOpen = true
+}
+
+// CloseSettings dismisses the dialog and drops its transient picker state.
+// Every setting was already applied when its control changed.
+func (s *Shell) CloseSettings() {
+	s.fontPickOpen, s.fontPickMonoOpen = false, false
+	s.SettingsOpen = false
+	s.saveErr = ""
 }
 
 // RegisterShortcuts binds the chords the menu bar cannot carry to the

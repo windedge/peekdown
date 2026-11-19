@@ -10,42 +10,77 @@ import (
 	"github.com/windedge/peekdown/internal/settings"
 )
 
-// TestSettingsDialogCards checks the modal's shape: 560 wide (clamped in
-// a narrow window), a title line over section cards, and no Cancel or
-// Save - the footer is Done alone, the changes apply as they are made.
+// openSettingsSection opens the dialog and chooses one of the rail's
+// pages by its name as the reader sees it.
+func openSettingsSection(t *testing.T, tt *ui.Tester, s *Shell, name string) {
+	t.Helper()
+	s.OpenSettings()
+	tt.Frame()
+	if err := tt.Click("Settings nav " + name); err != nil {
+		t.Fatalf("no %q in the settings rail: %v", name, err)
+	}
+	tt.Frame()
+}
+
+// TestSettingsDialogCards checks the two-column modal: its width follows
+// the window up to 900, the rail and the page column sit side by side,
+// and the Done footer is alone and still closes.
 func TestSettingsDialogCards(t *testing.T) {
-	for _, size := range []struct{ w, h int }{{1400, 880}, {700, 620}} {
+	for _, size := range []struct{ w, h int }{{1400, 880}, {760, 620}} {
 		s, _ := newShell(t)
 		tt := s.renderSize(t, size.w, size.h)
 		s.OpenSettings()
 		tt.Frame()
 
+		panel, ok := tt.Find("Settings panel")
+		if !ok {
+			t.Fatalf("%dx%d: no settings panel in %q", size.w, size.h, tt.Texts())
+		}
+		wantW := float32(min(settingsWidth, size.w-48))
+		if panel.W != wantW {
+			t.Fatalf("%dx%d: panel is %v wide, want %v", size.w, size.h, panel.W, wantW)
+		}
+		if panel.X < 24 || panel.X+panel.W > float32(size.w-24) {
+			t.Fatalf("%dx%d: panel %v does not keep the modal margin", size.w, size.h, panel)
+		}
+		if panel.H != float32(min(settingsMaxHeight, size.h-48)) {
+			t.Fatalf("%dx%d: panel %v is not the fixed modal height", size.w, size.h, panel)
+		}
+
 		title, ok := tt.Find("Settings")
 		if !ok {
 			t.Fatalf("%dx%d: no dialog title in %q", size.w, size.h, tt.Texts())
 		}
-		wantW := float32(min(560, size.w-48))
-		if got := title.X - 20; got < 0 {
-			t.Fatalf("%dx%d: the dialog's column starts at %v, off the window", size.w, size.h, got)
+		rail, ok := tt.Find("Settings rail")
+		if !ok {
+			t.Fatalf("%dx%d: no settings rail in %q", size.w, size.h, tt.Texts())
 		}
-		// The panel's width shows in the section captions' common left
-		// edge and the window's margins: the title sits 20 DIPs in from
-		// the panel's left edge, and the panel is wantW wide, centered.
-		panelLeft := title.X - 20
-		panelRight := panelLeft + wantW
-		if panelRight > float32(size.w) {
-			t.Fatalf("%dx%d: the panel ends at %v, past the window", size.w, size.h, panelRight)
+		if rail.W != settingsRailWidth {
+			t.Fatalf("%dx%d: rail is %v wide, want %v", size.w, size.h, rail.W, settingsRailWidth)
+		}
+		if rail.X < title.X || rail.X+rail.W > panel.X+panel.W {
+			t.Fatalf("%dx%d: rail %v does not sit inside the panel", size.w, size.h, rail)
+		}
+		header, ok := tt.Find("Settings header")
+		if !ok {
+			t.Fatalf("%dx%d: no section header in %q", size.w, size.h, tt.Texts())
+		}
+		if header.X <= rail.X+rail.W || header.X >= panel.X+panel.W {
+			t.Fatalf("%dx%d: header %v does not sit right of the rail", size.w, size.h, header)
 		}
 
-		// One caption per section, all on the panel's left edge.
-		for _, cap := range []string{"Appearance", "Editor", "Files", "System"} {
-			r, ok := tt.Find(cap)
-			if !ok {
-				t.Fatalf("%dx%d: no %q caption in %q", size.w, size.h, cap, tt.Texts())
+		// The pane labels reach the rail, but only the chosen section's
+		// card is in the detail column.
+		for _, cap := range []string{"Appearance", "Reading", "About"} {
+			if _, ok := tt.Find("Settings nav " + cap); !ok {
+				t.Fatalf("%dx%d: no %q nav item in %q", size.w, size.h, cap, tt.Texts())
 			}
-			if d := r.X - title.X; d < -1 || d > 1 {
-				t.Errorf("%dx%d: %q caption at %v is not on the title's left edge %v", size.w, size.h, cap, r.X, title.X)
+			if _, ok := tt.Find(cap + " card"); ok && cap != "Appearance" {
+				t.Fatalf("%dx%d: the %s card is drawn while Appearance is chosen", size.w, size.h, cap)
 			}
+		}
+		if _, ok := tt.Find("Appearance card"); !ok {
+			t.Fatalf("%dx%d: no Appearance card in %q", size.w, size.h, tt.Texts())
 		}
 
 		// No draft-era chrome.
@@ -59,11 +94,10 @@ func TestSettingsDialogCards(t *testing.T) {
 		if !ok {
 			t.Fatalf("%dx%d: no Done button in %q", size.w, size.h, tt.Texts())
 		}
-		if done.Y < title.Y {
-			t.Errorf("%dx%d: Done at %v above the title at %v", size.w, size.h, done, title)
+		if done.Y < title.Y || done.Y+done.H > panel.Y+panel.H+1 {
+			t.Fatalf("%dx%d: Done at %v is not the panel's footer", size.w, size.h, done)
 		}
 
-		// Done closes.
 		if err := tt.Click("Done"); err != nil {
 			t.Fatal(err)
 		}
@@ -74,21 +108,25 @@ func TestSettingsDialogCards(t *testing.T) {
 	}
 }
 
-// TestSettingsRowsTwoLineLayout checks the rows' shape: the label's
-// column grows (so the control is pushed to the card's right edge), the
-// control clears the scroll bar's strip, and a Theme row's detail line
-// sits under its label.
+// rowLimit is where a card's controls must stop: the card's inner edge
+// after its 16 DIP padding, clear of the right scroll bar's strip.
+func rowLimit(t *testing.T, tt *ui.Tester, card string) float32 {
+	t.Helper()
+	r, ok := tt.Find(card)
+	if !ok {
+		t.Fatalf("no %q in %q", card, tt.Texts())
+	}
+	return r.X + r.W - settingsCardPadX
+}
+
+// TestSettingsRowsTwoLineLayout checks the rows' shape in the page
+// column: the label's column grows so the control is pushed to the
+// card's right edge, and a Theme row's detail line sits under its label.
 func TestSettingsRowsTwoLineLayout(t *testing.T) {
 	s, _ := newShell(t)
 	tt := s.renderSize(t, 1400, 880)
 	s.OpenSettings()
 	tt.Frame()
-
-	title, _ := tt.Find("Settings")
-	// The fields' scroll bar paints over the content column's last 9
-	// DIPs; every control must end 12 DIPs before the column's edge.
-	content := float32(min(560, 1400-48)) - 2*20 - 12
-	limit := title.X - 20 + 20 + content
 
 	label, ok := tt.Find("Theme")
 	if !ok {
@@ -102,8 +140,7 @@ func TestSettingsRowsTwoLineLayout(t *testing.T) {
 		t.Errorf("the detail line at %v is not under the label at %v", detail, label)
 	}
 
-	// The control column: the theme segmented sits right of the label,
-	// before the scroll bar's strip.
+	limit := rowLimit(t, tt, "Appearance card")
 	seg, ok := tt.AccessByRole(ui.RoleRadioGroup, "Theme")
 	if !ok {
 		t.Fatalf("no theme segmented in %q", tt.Texts())
@@ -115,18 +152,13 @@ func TestSettingsRowsTwoLineLayout(t *testing.T) {
 		t.Errorf("the theme segmented ends at %v, past the row limit %v", end, limit)
 	}
 
-	// Every switch's box clears the strip too.
-	for _, name := range []string{"Inertia Scroll", "Auto Refresh", "Show FPS"} {
-		sw, ok := tt.AccessByRole(ui.RoleSwitch, name)
-		if !ok {
-			t.Fatalf("no %q switch in %q", name, tt.Texts())
-		}
-		if end := sw.Bounds.X + sw.Bounds.W; end > limit {
-			t.Errorf("the %s switch ends at %v, past %v", name, end, limit)
-		}
+	// The Reading page keeps the font spinners and the inertia switch inside
+	// its own card, which has the same right edge.
+	if err := tt.Click("Settings nav Reading"); err != nil {
+		t.Fatal(err)
 	}
-
-	// The font rows' spinners keep their place at the row's end.
+	tt.Frame()
+	limit = rowLimit(t, tt, "Reading card")
 	for _, name := range []string{"Content Font size", "Code Font size"} {
 		box, ok := tt.Find(name)
 		if !ok {
@@ -135,6 +167,35 @@ func TestSettingsRowsTwoLineLayout(t *testing.T) {
 		if box.X+box.W > limit {
 			t.Errorf("%s ends at %v, past %v", name, box.X+box.W, limit)
 		}
+	}
+	sw, ok := tt.AccessByRole(ui.RoleSwitch, "Inertia Scroll")
+	if !ok {
+		t.Fatalf("no Inertia Scroll switch in %q", tt.Texts())
+	}
+	if end := sw.Bounds.X + sw.Bounds.W; end > limit {
+		t.Errorf("the inertia switch ends at %v, past %v", end, limit)
+	}
+
+	// Auto Refresh moved into this same Reading card: check its switch.
+	auto, ok := tt.AccessByRole(ui.RoleSwitch, "Auto Refresh")
+	if !ok {
+		t.Fatalf("no Auto Refresh switch in %q", tt.Texts())
+	}
+	if end := auto.Bounds.X + auto.Bounds.W; end > limit {
+		t.Errorf("the Auto Refresh switch ends at %v, past %v", end, limit)
+	}
+
+	if err := tt.Click("Settings nav Appearance"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	limit = rowLimit(t, tt, "Appearance card")
+	fps, ok := tt.AccessByRole(ui.RoleSwitch, "Show FPS")
+	if !ok {
+		t.Fatalf("no Show FPS switch in %q", tt.Texts())
+	}
+	if end := fps.Bounds.X + fps.Bounds.W; end > limit {
+		t.Errorf("the Show FPS switch ends at %v, past %v", end, limit)
 	}
 }
 
@@ -166,14 +227,14 @@ func TestSettingsThemeAppliesImmediately(t *testing.T) {
 
 // TestSettingsFontSizeDebounce checks the spinner's write is debounced:
 // the value lands in Saved at once (the view reads it next frame), but
-// the disk write waits out the 300 ms quiet.
+// the disk write waits out the 300 ms quiet. The size field lives on
+// the Reading page, so the test walks there first.
 func TestSettingsFontSizeDebounce(t *testing.T) {
 	s, _ := newShell(t)
 	saves := 0
 	s.Save = func(v settings.Settings) error { saves++; return nil }
 	tt := s.renderSize(t, 1400, 880)
-	s.OpenSettings()
-	tt.Frame()
+	openSettingsSection(t, tt, s, "Reading")
 
 	before := s.Saved.FontSize
 	if err := tt.Click("Increase"); err != nil {
@@ -215,14 +276,12 @@ func TestSettingsFontSizeDebounce(t *testing.T) {
 
 // TestSettingsMarkersRowFollowsExplorerRoot checks the Project Root
 // Markers row shows only while the explorer's root is the project
-// directory. Toggling the segmented shows and hides the row, and the
-// input keeps the typed markers throughout, so a round trip does not
-// lose what was in it.
+// directory. Both rows live at the end of the Reading page, so the test
+// walks there first; toggling the segmented keeps the typed markers.
 func TestSettingsMarkersRowFollowsExplorerRoot(t *testing.T) {
 	s, _ := newShell(t)
 	tt := s.renderSize(t, 1400, 880)
-	s.OpenSettings()
-	tt.Frame()
+	openSettingsSection(t, tt, s, "Reading")
 
 	// The default root is the project directory: the markers row shows,
 	// seeded with the saved markers.

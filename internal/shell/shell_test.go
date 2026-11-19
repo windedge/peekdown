@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -63,6 +64,21 @@ func newShell(t *testing.T) (*Shell, string) {
 	s.OpenDialog = func() ([]string, error) { return []string{a, b}, nil }
 	s.Saved = s.Load()
 	s.Sidebar.Visible = false
+	// mygo injects the packaged version at build time; headless frames
+	// have no build info, so read the same manifest the build uses.
+	s.AppVersion = func() string {
+		data, err := os.ReadFile("../../mygo.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var manifest struct {
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		return manifest.Version
+	}
 	return s, dir
 }
 

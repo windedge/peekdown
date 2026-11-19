@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestSettingsMarkersRowShot captures the Files section with the Project
+// TestSettingsMarkersRowShot captures the Reading section with the Project
 // Root Markers row shown (project root, the default) and hidden (current
 // directory root), for a human to compare. Skipped unless PEEKDOWN_SHOT
 // is set, so the regular runs stay headless-clean.
@@ -15,8 +15,7 @@ func TestSettingsMarkersRowShot(t *testing.T) {
 	}
 	s, _ := newShell(t)
 	tt := s.renderSize(t, 1400, 880)
-	s.OpenSettings()
-	tt.Frame()
+	openSettingsSection(t, tt, s, "Reading")
 	writePng(t, tt.Image(), "C:/tmp/markers-shown.png")
 
 	if err := tt.Click("Current Directory"); err != nil {

@@ -176,15 +176,14 @@ func welcomeRecent(t *testing.T, w, h int) {
 	}
 }
 
-// TestSettingsDialogReachesSave pins the dialog's height budget in a
-// window too short for the whole form: Done stays in the
-// window, and the fields scroll above it.
+// TestSettingsDialogReachesDone pins the dialog's height budget in a
+// window too short for a page: Done stays in the window, and that
+// page's fields scroll above it.
 func TestSettingsDialogReachesDone(t *testing.T) {
 	for _, h := range []int{503, 400} {
 		s, _ := newShell(t)
 		tt := s.renderSize(t, 800, h)
-		s.OpenSettings()
-		tt.Frame()
+		openSettingsSection(t, tt, s, "Reading")
 
 		r, ok := tt.Find("Done")
 		if !ok {
@@ -196,19 +195,21 @@ func TestSettingsDialogReachesDone(t *testing.T) {
 		if r.Y < 0 || r.Y+r.H > float32(h) {
 			t.Fatalf("height %d: %q at %v sits outside the window", h, "Done", r)
 		}
-		// The fields scroll: the last group is out of view at the top of
-		// the list and comes in on a scroll over it.
-		if r, _ := tt.Find("Auto Refresh"); r.H > 0 {
-			t.Fatalf("height %d: the last group is already drawn at %v: want it below the scroll", h, r)
-		}
-		theme, ok := tt.Find("Theme")
+		first, ok := tt.Find("Content Font")
 		if !ok {
 			t.Fatalf("height %d: texts %v: want the first field", h, tt.Texts())
 		}
-		tt.Scroll(theme.X+20, theme.Y+8, 0, 2000)
-		tt.Frame()
-		if r, _ := tt.Find("Auto Refresh"); r.H < 16 || r.Y+r.H > float32(h) {
-			t.Fatalf("height %d: the last group at %v did not scroll into view", h, r)
+		if h == 400 {
+			// The Reading page is taller than the short window's fields:
+			// its last row comes into view on a scroll over the page.
+			if r, _ := tt.Find("Inertia Scroll"); r.H > 0 {
+				t.Fatalf("height %d: the last row is already drawn at %v: want it below the scroll", h, r)
+			}
+			tt.Scroll(first.X+20, first.Y+8, 0, 2000)
+			tt.Frame()
+			if r, _ := tt.Find("Inertia Scroll"); r.H < 16 || r.Y+r.H > float32(h) {
+				t.Fatalf("height %d: the last row at %v did not scroll into view", h, r)
+			}
 		}
 
 		if err := tt.Click("Done"); err != nil {

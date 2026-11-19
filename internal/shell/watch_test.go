@@ -94,6 +94,10 @@ func TestSettingsSwitchAppliesAutoRefresh(t *testing.T) {
 
 	s.OpenSettings()
 	tt.Frame()
+	if err := tt.Click("Settings nav Reading"); err != nil {
+		t.Fatalf("Reading rail item: %v", err)
+	}
+	tt.Frame()
 	if !tt.HasText("Auto Refresh") {
 		t.Fatalf("dialog missing the auto refresh switch: %v", tt.Texts())
 	}
