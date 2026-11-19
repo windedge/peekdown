@@ -204,11 +204,15 @@ func main() {
 	// must not reach the single-instance lock or the GUI.
 	for _, arg := range os.Args[1:] {
 		if arg == "--register" {
-			if err := registerFileAssociations(); err != nil {
+			note, err := registerFileAssociations()
+			if err != nil {
 				fmt.Fprintln(os.Stderr, "peekdown: register:", err)
 				os.Exit(1)
 			}
 			fmt.Println("Registered Peekdown for .md and .markdown files.")
+			if note != "" {
+				fmt.Println(note)
+			}
 			return
 		}
 	}
