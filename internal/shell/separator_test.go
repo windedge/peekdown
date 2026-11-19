@@ -106,3 +106,43 @@ func TestOutlineDividerCentersOnTheGutter(t *testing.T) {
 		t.Fatalf("hover band columns %v, want only the centered %d", got, edge-4)
 	}
 }
+
+// TestDividerCoverMatchesWindowGradient pins the cover band's values:
+// each covered column (pane boundary x-1..x+1) of both gutters must read
+// the pure window gradient at that column (horizontal tint included),
+// per sampled row. The old cover painted the tint on the middle column
+// only, leaving the flanking columns on the untinted pale gradient - a
+// bright vertical line pair wherever the tint has color (the right
+// gutter), the user's white-line report.
+func TestDividerCoverMatchesWindowGradient(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		k := accentThemeByID("petal").of(dark)
+		ref := ui.NewTester(func(c *ui.Context) {
+			ui.Column(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) {
+				paintAccentBackground(p, r, k)
+			})
+		}, 1200, 600)
+		refImg := ref.Image()
+
+		s, tt := openOutline(t, 1200)
+		s.Saved.AccentTheme = "petal"
+		tt.SetDark(dark)
+		tt.Frame()
+		img := tt.Image()
+
+		w := int(s.Sidebar.Width)
+		edge := 1200 - int(s.Outline.Width)
+		for _, bx := range []int{w, edge} {
+			for x := bx - 1; x <= bx+1; x++ {
+				for _, y := range []int{80, 220, 360, 500, 560} {
+					r, g, b, _ := img.At(x, y).RGBA()
+					cr, cg, cb, _ := refImg.At(x, y).RGBA()
+					if abs8(r, cr) > 2 || abs8(g, cg) > 2 || abs8(b, cb) > 2 {
+						t.Fatalf("dark=%v column %d y=%d: cover (%d %d %d) != window gradient (%d %d %d)",
+							dark, x, y, r>>8, g>>8, b>>8, cr>>8, cg>>8, cb>>8)
+					}
+				}
+			}
+		}
+	}
+}

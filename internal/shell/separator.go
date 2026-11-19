@@ -26,23 +26,28 @@ func coverNativeDivider(p *ui.Painter, x float32, root ui.Rect, k AccentColors) 
 	coverTintColumn(p, x, root, k)
 }
 
-// coverTintColumn 涂横向 tint 在这一列上的取值: tint 是从窗口 35% 宽到
+// coverTintColumn 涂横向 tint 在遮盖列上的取值: tint 是从窗口 35% 宽到
 // 右缘的横向渐变, 色相固定, 只有 alpha 沿 x 走, 所以一列内是一个常数
 // alpha 的纯色, 与 paintAccentBackground 里 tint 的 Start/End 对应。
+// 遮盖带 coverNativeDivider 画的是 x-1..x+1 三列, tint 要逐列还原:
+// 只涂中间列会把两侧列留在无 tint 的浅渐变上, 在 tint 有色区 (右缝隙)
+// 露出两条过亮的竖线。
 func coverTintColumn(p *ui.Painter, x float32, root ui.Rect, k AccentColors) {
 	if k.BgTint.A == 0 {
 		return
 	}
-	t := float32(0)
-	if root.W > 0 {
-		t = (x + 0.5 - root.X) / root.W
+	for cx := x - 1; cx <= x+1; cx++ {
+		t := float32(0)
+		if root.W > 0 {
+			t = (cx + 0.5 - root.X) / root.W
+		}
+		tint := k.BgTint
+		tint.A = uint8(float32(k.BgTint.A) * min(max((t-0.35)/0.65, 0), 1))
+		if tint.A <= 0 {
+			continue
+		}
+		p.Fill(ui.Rect{X: cx, Y: root.Y, W: 1, H: root.H}, tint, 0)
 	}
-	tint := k.BgTint
-	tint.A = uint8(float32(k.BgTint.A) * min(max((t-0.35)/0.65, 0), 1))
-	if tint.A <= 0 {
-		return
-	}
-	p.Fill(ui.Rect{X: x, Y: root.Y, W: 1, H: root.H}, tint, 0)
 }
 
 // paneGrip 挂在 Split 自己的 DrawOver 上: 子 pane (连同原生分隔线) 画完
