@@ -186,6 +186,141 @@ func TestActiveTabLabelIsBolder(t *testing.T) {
 	}
 }
 
+// openCappedTabs opens two documents whose names are far wider than the
+// label cap, ready for the geometry and truncation checks.
+func openCappedTabs(t *testing.T) (*Shell, string, string) {
+	t.Helper()
+	s, dir := newShell(t)
+	prefix := strings.Repeat("a-very-long-document-name-", 3)
+	first := filepath.Join(dir, prefix+"first.md")
+	second := filepath.Join(dir, prefix+"second.md")
+	for p, src := range map[string]string{first: "# first\n", second: "# second\n"} {
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.OpenPaths([]string{first, second})
+	return s, first, second
+}
+
+// TestLongTabNameWidthIsCapped keeps two overlong names inside a fixed
+// label box: neither tab may eat half the title bar, and switching the
+// active state must not resize either chip.
+func TestLongTabNameWidthIsCapped(t *testing.T) {
+	s, first, second := openCappedTabs(t)
+	tt := s.renderSize(t, 900, 600)
+	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	tt.Frame()
+	tt.Move(880, 580)
+	tt.Frame()
+
+	names := []string{filepath.Base(first), filepath.Base(second)}
+	for _, name := range names {
+		if len(name) <= 50 {
+			t.Fatalf("%q is not a long file name", name)
+		}
+	}
+	labels := map[string]ui.Rect{}
+	for _, name := range names {
+		labels[name] = tabRect(t, tt, name)
+		if math.Abs(float64(labels[name].W-tabTextMaxWidth)) > 0.5 {
+			t.Errorf("%q's label is %v wide, want the %v DIP cap", name, labels[name].W, tabTextMaxWidth)
+		}
+	}
+	base := tabAccessRects(t, tt, names...)
+	// 18 badge + 8 badge gap + 8 close gap + 20 close + 20 padding.
+	const fixedWidth = float32(18 + 8 + 8 + 20 + 20)
+	for _, name := range names {
+		r := base[name]
+		if math.Abs(float64(r.W-(tabTextMaxWidth+fixedWidth))) > 0.5 {
+			t.Errorf("%q's tab is %v wide, want the %v DIP cap plus %v of chrome", name, r.W, tabTextMaxWidth, fixedWidth)
+		}
+	}
+
+	if err := tt.Click(names[0]); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Move(880, 580)
+	tt.Frame()
+	assertTabRects(t, "activate a long tab", tabAccessRects(t, tt, names...), base)
+	for _, name := range names {
+		r := tabRect(t, tt, name)
+		if math.Abs(float64(r.W-labels[name].W)) > 0.5 {
+			t.Errorf("%q's label changed from %v to %v with the active state", name, labels[name], r)
+		}
+	}
+}
+
+// TestLongTabNameTruncates draws two idle tabs with identical prefixes but
+// different tails beyond the cap. Their labels must rasterize to the same
+// pixels: the differing tails cannot show. tt.Texts still carries the full
+// accessibility names, so this reads the rendered glyphs, not the model.
+func TestLongTabNameTruncates(t *testing.T) {
+	s, first, second := openCappedTabs(t)
+	s.Home = true // both chips idle: same text color and weight
+	tt := s.renderSize(t, 900, 600)
+	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	tt.Frame()
+	tt.Move(880, 580)
+	tt.Frame()
+
+	fullW := float32(0)
+	ui.NewTester(func(c *ui.Context) {
+		fullW, _ = c.MeasureText(0, ui.Span{Text: filepath.Base(first), Size: 13, Weight: 400})
+	}, 10, 10).Frame()
+	if fullW <= tabTextMaxWidth+0.5 {
+		t.Fatalf("the long name measures %v DIPs, not past the %v DIP cap", fullW, tabTextMaxWidth)
+	}
+
+	a, b := tabRect(t, tt, filepath.Base(first)), tabRect(t, tt, filepath.Base(second))
+	img := tt.Image()
+	diff, ink := 0, 0
+	for dy := 0; dy < int(a.H); dy++ {
+		for dx := 0; dx < int(a.W); dx++ {
+			ca := pixelAt(img, a.X+float32(dx), a.Y+float32(dy))
+			cb := pixelAt(img, b.X+float32(dx), b.Y+float32(dy))
+			if int(ca.R)+int(ca.G)+int(ca.B) < 3*190 {
+				ink++
+			}
+			if ca != cb {
+				diff++
+			}
+		}
+	}
+	if ink == 0 {
+		t.Fatal("the capped labels have no ink to compare")
+	}
+	if diff != 0 {
+		t.Errorf("%d pixels differ between labels whose names share only their prefix: the tail is not truncated", diff)
+	}
+}
+
+// TestTabCapShot writes the two capped tabs for a visual check that their
+// names end in an ellipsis and neither chip takes over the bar. Skipped
+// unless PEEKDOWN_SHOT is set.
+func TestTabCapShot(t *testing.T) {
+	if os.Getenv("PEEKDOWN_SHOT") == "" {
+		t.Skip("set PEEKDOWN_SHOT=1 to write the tab cap screenshot")
+	}
+	s, first, second := openCappedTabs(t)
+	tt := s.renderSize(t, 1440, 880)
+	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	tt.Frame()
+	tt.Move(1420, 860)
+	tt.Frame()
+	testshot.WritePng(t, tt.Image(), "C:/tmp/tab-cap.png")
+
+	bar, ok := tt.Find("Title bar")
+	if !ok {
+		t.Fatalf("texts %v: want the title bar", tt.Texts())
+	}
+	secondTab := tabAccessRects(t, tt, filepath.Base(first), filepath.Base(second))[filepath.Base(second)]
+	cropW := int(secondTab.X+secondTab.W) + 12
+	crop := testshot.Crop(tt.Image(), 0, 0, cropW, int(bar.H))
+	testshot.WritePng(t, testshot.Scale3x(crop), "C:/tmp/tab-cap-bar.png")
+}
+
 // TestTabWidthShot draws the bar with each tab active for a visual check
 // that their edges line up. Skipped unless PEEKDOWN_SHOT is set.
 func TestTabWidthShot(t *testing.T) {

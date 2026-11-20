@@ -18,6 +18,9 @@ const (
 	tabBadgeGap    float32 = 8
 	tabBadgeRadius float32 = 4
 	tabBadgeFont   float32 = 9
+	// Rust caps a tab's label at 150 DIPs; ours also carries an 18 DIP
+	// badge, so 132 keeps the whole chip about as wide as Rust's.
+	tabTextMaxWidth float32 = 132
 )
 
 // tabBadgePalette is the fixed set of muted, dark badge fills.
@@ -63,6 +66,25 @@ var (
 // bottom edge.
 const tabStripHeight float32 = 25
 
+// The strip's bar is a hairline: a 4 DIP thumb in an 8 DIP hit area.
+// The wider hit area keeps the thin thumb draggable.
+const (
+	tabScrollbarThumbWidth float32 = 4
+	tabScrollbarTrackWidth float32 = 8
+)
+
+// tabScrollbarStyle keeps the strip's bar thin and muted. Only this
+// container gets the style, so the document, outline and tree keep theirs.
+func tabScrollbarStyle(t *ui.Theme) ui.ScrollbarStyle {
+	return ui.ScrollbarStyle{
+		TrackWidth: tabScrollbarTrackWidth,
+		ThumbWidth: tabScrollbarThumbWidth,
+		Thumb:      t.Scrollbar.Alpha(0.45),
+		Hover:      t.Scrollbar.Alpha(1.4),
+		Active:     t.Scrollbar.Alpha(1.8),
+	}
+}
+
 // tabStrip renders the scrollable tab strip into the title bar and keeps
 // the active tab visible. h is the height of the strip's box, which the
 // caller takes from the bar: the tabs keep to tabStripHeight and the
@@ -82,7 +104,8 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 	// idle ones melt into the tray. The strip clips sideways; the tabs
 	// stack from its top, so the bottom clearance the bar leaves is
 	// free for the scroll bar.
-	strip := ui.ScrollHorizontal(c).Label("Tab bar").Height(h).TrackScroll(&s.tabScroll)
+	strip := ui.ScrollHorizontal(c).Label("Tab bar").Height(h).TrackScroll(&s.tabScroll).
+		ScrollbarStyle(tabScrollbarStyle(t))
 	// A straight wheel's notch scrolls dy, and mygo only takes a notch
 	// for the axes a container scrolls (wheelMoves), so on a sideways
 	// strip it dies unheard. The handler turns a notch toward the strip's
@@ -153,9 +176,10 @@ func (s *Shell) tabStrip(c *ui.Context, h float32) ui.Element {
 						})
 						// Reserving the bolder label's advance keeps the chip's
 						// width fixed when the active state changes the weight.
+						// The same cap applies in both states, long or short.
 						boldW, _ := c.MeasureText(0, ui.Span{Text: name, Size: 13, Weight: 500})
-						label := ui.Text(c, name).FontSize(13).MaxLines(1).
-							Width(boldW + 1).Shrink(0)
+						label := ui.Text(c, name).FontSize(13).SingleLine().Ellipsis("...").
+							Width(min(boldW+1, tabTextMaxWidth)).Shrink(0)
 						if i == s.Active && !s.Home {
 							label.FontWeight(500)
 						}

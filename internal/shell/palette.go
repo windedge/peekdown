@@ -7,12 +7,11 @@ import (
 	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
-	"github.com/windedge/peekdown/internal/settings"
 	"github.com/windedge/peekdown/locales"
 )
 
-// The theme picker popover's fixed measures, mojian's theme-popover's:
-// a 540 DIP panel over a 2x5 card grid, the cards' own preview sizes.
+// The accent cards' measures, from mojian's theme popover: a 540 DIP
+// panel's 2x5 grid and the previews inside each card.
 const (
 	paletteWidth   float32 = 540
 	palettePad     float32 = 12
@@ -53,10 +52,10 @@ const (
 	paletteNameRow float32 = 15
 )
 
-// themeCardWidth is one card's width in the bar's popover; a card's
+// themeCardWidth is the largest card in the Accent theme grid; a card's
 // height is its preview scaled with the width, plus the gap and name.
 // The width is floored: five cards and their four gaps must clear the
-// panel's content box, which the border and padding have thinned.
+// grid's box, which the border and padding have thinned.
 var themeCardWidth = float32(math.Floor(float64(paletteWidth-2*paletteBorder-2*palettePad-4*paletteGap) / 5))
 
 // themeGridMinWidth is the smallest card that still reads like a
@@ -64,57 +63,8 @@ var themeCardWidth = float32(math.Floor(float64(paletteWidth-2*paletteBorder-2*p
 // instead of shrinking the previews into unreadable strips.
 const themeGridMinWidth = 80
 
-// openPalette toggles the theme popover: a second press on the trigger
-// closes it, and an open one closes before the trigger's popover builds
-// again, so the same click never keeps it alive.
-func (s *Shell) openPalette() {
-	s.paletteOpen = !s.paletteOpen
-}
-
-// palettePopover draws the theme picker as a popover anchored below the
-// bar's palette trigger: the appearance segmented over the ten accent
-// themes as window-miniature cards, so the light-or-dark choice comes
-// before the accent. A click applies the choice at once
-// through persist, as the settings dialog's fields do, and keeps the
-// popover open; Esc or a press outside closes it.
-func (s *Shell) palettePopover(c *ui.Context, trigger ui.Element) {
-	if !s.paletteOpen || !trigger.Valid() {
-		return
-	}
-	t := c.Theme()
-
-	// The picker builds in its own Overlay, after the title bar and before
-	// the settings dialog, so mygo's build-order stacking leaves it over
-	// the bar and under the dialog, as the font pickers' layer is. Its Esc
-	// and outside presses close it, as PopoverBase's do.
-	ui.Overlay(c, func() {
-		panel := ui.Box(c).Role(ui.RolePopup).Label("Theme picker").
-			AttachTo(trigger, ui.AnchorBottomEnd, ui.AnchorTopEnd).
-			Width(paletteWidth).Padding(2, palettePad, palettePad).
-			Background(t.Surface).BorderWidth(1).BorderColor(t.Border).
-			Radius(10).Shadow(0, 24, 60, -8, dialogShadow(t)).Clip()
-		panel.Children(func() {
-			s.paletteAppearanceSection(c)
-			s.paletteThemeSection(c)
-		})
-		if panel.OverlayShortcut(0, ui.KeyEscape) || panel.PressedOutside() {
-			s.paletteOpen = false
-		}
-	})
-}
-
-// paletteThemeSection draws the THEME heading and the 2x5 card grid.
-// The section takes no horizontal padding of its own: the panel's
-// padding already insets it, and a second one would leave the row too
-// narrow for five cards.
-func (s *Shell) paletteThemeSection(c *ui.Context) {
-	paletteHeading(c, locales.PaletteTitle(), 10)
-	s.themeGrid(c, paletteWidth-2*paletteBorder-2*palettePad)
-}
-
-// themeGrid draws the ten cards in a wrapping row. The bar's popover and
-// the settings page both build it from the same preview, scaled to the
-// width each has; the choice reads the same in either place.
+// themeGrid draws the ten accent cards in a wrapping row on the
+// settings' Appearance page.
 func (s *Shell) themeGrid(c *ui.Context, avail float32) {
 	_, cardW := themeGridMetrics(avail)
 	ui.Row(c).FillWidth().Wrap().Gap(paletteGap).Label("Theme grid").Children(func() {
@@ -221,68 +171,17 @@ func paintThemePreview(p *ui.Painter, r ui.Rect, k AccentColors, dark bool, acce
 	}
 }
 
-// paletteAppearanceSection draws the appearance heading, the three-way
-// segmented bound to the saved Theme, and the faint note under it.
-func (s *Shell) paletteAppearanceSection(c *ui.Context) {
-	paletteHeading(c, locales.PaletteAppearance(), 10)
-	s.appearancePick = themeSegmentIndex(s.Saved.Theme)
-	seg := ui.SegmentedBase(c.Key("palette-appearance"), &s.appearancePick, len(themeLabels))
-	s.styleSegmented(c, seg.Track, locales.PaletteAppearance())
-	seg.Track.Children(func() {
-		labels := themeChoiceLabels()
-		for n, label := range labels {
-			c.Key("palette-appearance-" + themeLabels[n])
-			s.segment(c, seg.Segment(n), n, s.appearancePick, label)
-		}
-	})
-	// FillEqually shares the track's width among the segments it already
-	// holds, so it has to follow their construction.
-	seg.Track.FillEqually().Margin(12, 0, 0)
-	// The dialog's theme row's own commit: write the label the segments
-	// chose once the input has updated the index, and persist.
-	seg.Track.OnChange(func() {
-		s.Saved.Theme = themeLabels[s.appearancePick]
-		s.persist()
-	})
-	ui.Text(c, locales.AppearanceNote()).FontSize(11).TextColor(faintText(c)).
-		Margin(6, 0, 0)
-}
-
-// paletteHeading draws a section's label: mojian's uppercase caption,
-// tracked out over the cards or the segmented. The settings' inline grid
-// uses a slightly larger caption than the popover's.
+// paletteHeading draws the settings page's uppercase caption, tracked
+// out over the accent cards.
 func paletteHeading(c *ui.Context, label string, size float32) {
 	ui.Text(c, strings.ToUpper(label)).FontSize(size).FontWeight(650).
 		LetterSpacing(0.5).TextColor(faintText(c)).Padding(10, 0, 4)
-}
-
-// dialogShadow is the shadow the popover floats on: mojian's
-// --shadow-dialog at its 0 24 60 -8 geometry, a warm near-black in a
-// light window and plain black in a dark one, which the theme's Border
-// alone is too faint for at this blur.
-func dialogShadow(t *ui.Theme) ui.Color {
-	if t.Dark {
-		return rgba(0, 0, 0, 0.55)
-	}
-	return rgba(30, 20, 30, 0.22)
 }
 
 // themeName is one card's label: the theme carries its catalog key, so
 // the name follows the locale rather than showing the key itself.
 func themeName(th AccentTheme) string {
 	return locales.Catalog.Format(i18n.Locale(), th.NameKey, nil)
-}
-
-// themeSegmentIndex maps the saved Theme onto the popover's segmented's
-// index, as themeSegmented's choice does.
-func themeSegmentIndex(theme string) int {
-	switch theme {
-	case settings.ThemeLight:
-		return 1
-	case settings.ThemeDark:
-		return 2
-	}
-	return 0
 }
 
 // faintText is the faint tier the section headings and note draw in: the

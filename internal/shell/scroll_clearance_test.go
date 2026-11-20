@@ -83,9 +83,9 @@ func TestWelcomeRecentClearsScrollbar(t *testing.T) {
 }
 
 // TestTabBarClearsScrollbar keeps the strip's text above the horizontal
-// bar: the tabs scroll sideways in the title bar, whose bottom 9 DIPs the
-// bar overlays, so the labels must end above them (barClearance, the rule
-// the rows keep to).
+// bar: the tabs scroll sideways in the title bar, whose bottom 8 DIPs the
+// local bar overlays, so the labels must end above them (barClearance,
+// the rule the rows keep to).
 func TestTabBarClearsScrollbar(t *testing.T) {
 	s, dir := newShell(t)
 	var paths []string

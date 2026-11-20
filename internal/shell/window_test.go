@@ -176,24 +176,24 @@ func welcomeRecent(t *testing.T, w, h int) {
 	}
 }
 
-// TestSettingsDialogReachesDone pins the dialog's height budget in a
-// window too short for a page: Done stays in the window, and that
+// TestSettingsDialogReachesClose pins the dialog's height budget in a
+// window too short for a page: Close stays in the window, and that
 // page's fields scroll above it.
-func TestSettingsDialogReachesDone(t *testing.T) {
+func TestSettingsDialogReachesClose(t *testing.T) {
 	for _, h := range []int{503, 400} {
 		s, _ := newShell(t)
 		tt := s.renderSize(t, 800, h)
 		openSettingsSection(t, tt, s, "Reading")
 
-		r, ok := tt.Find("Done")
+		r, ok := tt.Find("Settings Close")
 		if !ok {
-			t.Fatalf("height %d: texts %v: want the %q button", h, tt.Texts(), "Done")
+			t.Fatalf("height %d: texts %v: want the %q button", h, tt.Texts(), "Settings Close")
 		}
 		if r.H < 16 {
-			t.Fatalf("height %d: %q is %v: want a drawn button", h, "Done", r)
+			t.Fatalf("height %d: %q is %v: want a drawn button", h, "Settings Close", r)
 		}
 		if r.Y < 0 || r.Y+r.H > float32(h) {
-			t.Fatalf("height %d: %q at %v sits outside the window", h, "Done", r)
+			t.Fatalf("height %d: %q at %v sits outside the window", h, "Settings Close", r)
 		}
 		first, ok := tt.Find("Content Font")
 		if !ok {
@@ -212,12 +212,12 @@ func TestSettingsDialogReachesDone(t *testing.T) {
 			}
 		}
 
-		if err := tt.Click("Done"); err != nil {
+		if err := tt.Click("Settings Close"); err != nil {
 			t.Fatalf("height %d: %v", h, err)
 		}
 		tt.Frame()
 		if s.SettingsOpen {
-			t.Fatalf("height %d: the dialog stayed open after Done", h)
+			t.Fatalf("height %d: the dialog stayed open after Close", h)
 		}
 	}
 }

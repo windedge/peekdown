@@ -26,9 +26,9 @@ func titleBarToggleShell(t *testing.T, w, h int, files, outline bool) (*Shell, *
 	return s, tt
 }
 
-// TestTitleBarPanelTogglesAtTheEnds pins the prototype's placement: the
-// files switch leads the brand, the outline switch trails the tools,
-// and both stops clear the system caption area on the right.
+// TestTitleBarPanelTogglesAtTheEnds pins the bar's ends: the menu leads,
+// the files switch sits ahead of the brand, and the outline switch trails
+// the tools clear of the system caption area on the right.
 func TestTitleBarPanelTogglesAtTheEnds(t *testing.T) {
 	_, tt := titleBarToggleShell(t, 1200, 600, true, true)
 	bar, ok := tt.Find("Title bar")
@@ -39,7 +39,7 @@ func TestTitleBarPanelTogglesAtTheEnds(t *testing.T) {
 	if !ok {
 		t.Fatalf("no brand mark: %v", tt.Texts())
 	}
-	menu, ok := tt.Find("Main menu")
+	menu, ok := tt.AccessByRole(ui.RoleMenuButton, locales.BarMainMenu())
 	if !ok {
 		t.Fatalf("no menu button: %v", tt.Texts())
 	}
@@ -65,11 +65,14 @@ func TestTitleBarPanelTogglesAtTheEnds(t *testing.T) {
 	if files.Description != locales.BarFilesTooltip() || outline.Description != locales.BarOutlineTooltip() {
 		t.Fatalf("tooltips %q / %q, want the panel shortcuts", files.Description, outline.Description)
 	}
+	if menu.Bounds.X < bar.X || menu.Bounds.X+menu.Bounds.W > files.Bounds.X {
+		t.Fatalf("menu %v is not ahead of the files switch %v", menu.Bounds, files.Bounds)
+	}
 	if files.Bounds.X < bar.X || files.Bounds.X+files.Bounds.W > logo.X {
 		t.Fatalf("files switch %v is not ahead of the brand at %v", files.Bounds, logo)
 	}
-	if outline.Bounds.X < menu.X+menu.W {
-		t.Fatalf("outline switch %v does not trail the menu at %v", outline.Bounds, menu)
+	if outline.Bounds.X <= menu.Bounds.X {
+		t.Fatalf("outline switch %v does not trail the menu at %v", outline.Bounds, menu.Bounds)
 	}
 	if limit := bar.X + bar.W - 138; outline.Bounds.X+outline.Bounds.W > limit+0.5 {
 		t.Fatalf("outline switch ends at %v, under the window controls at %v", outline.Bounds.X+outline.Bounds.W, limit)
@@ -192,12 +195,104 @@ func TestTitleBarPanelTogglesOnTheWelcomePage(t *testing.T) {
 	}
 }
 
+// TestTitleBarRightToolGroupHasThreeCommands pins the bar's tool group
+// after the menu moved to the left: open, find, settings and outline, in
+// that order, with no leftover button between them.
+func TestTitleBarRightToolGroupHasThreeCommands(t *testing.T) {
+	_, tt := titleBarToggleShell(t, 1200, 600, true, true)
+	bar, ok := tt.Find("Title bar")
+	if !ok {
+		t.Fatalf("no title bar: %v", tt.Texts())
+	}
+	names := []string{
+		locales.BarOpenFile(), locales.BarFind(),
+		locales.BarSettingsPanel(), locales.BarOutlinePanel(),
+	}
+	tools := make([]ui.AccessInfo, len(names))
+	for i, name := range names {
+		a, ok := tt.AccessByRole(ui.RoleButton, name)
+		if !ok {
+			t.Fatalf("no %q button: %v", name, tt.Texts())
+		}
+		if a.Bounds.X < bar.X || a.Bounds.X+a.Bounds.W > bar.X+bar.W ||
+			a.Bounds.Y < bar.Y || a.Bounds.Y+a.Bounds.H > bar.Y+bar.H {
+			t.Fatalf("%q at %v sits outside the bar %v", name, a.Bounds, bar)
+		}
+		tools[i] = a
+	}
+	menu, ok := tt.AccessByRole(ui.RoleMenuButton, locales.BarMainMenu())
+	if !ok {
+		t.Fatalf("no menu button: %v", tt.Texts())
+	}
+	if menu.Bounds.X >= tools[0].Bounds.X {
+		t.Fatalf("menu at %v does not lead the right tool group at %v", menu.Bounds, tools[0].Bounds)
+	}
+	for i := 1; i < len(tools); i++ {
+		prev, next := tools[i-1].Bounds, tools[i].Bounds
+		if next.X <= prev.X+prev.W || next.X-prev.X-prev.W > 3 {
+			t.Fatalf("%q at %v does not follow %q at %v", names[i], next, names[i-1], prev)
+		}
+	}
+	count := 0
+	for _, a := range tt.AccessAll() {
+		if a.Role != ui.RoleButton && a.Role != ui.RoleMenuButton {
+			continue
+		}
+		if a.Bounds.X < tools[0].Bounds.X ||
+			a.Bounds.X+a.Bounds.W > tools[len(tools)-1].Bounds.X+tools[len(tools)-1].Bounds.W {
+			continue
+		}
+		count++
+	}
+	if count != len(tools) {
+		t.Fatalf("the tool group holds %d buttons, want %d: %v", count, len(tools), tt.Texts())
+	}
+}
+
+// TestTitleBarMenuClearsTheLeftInset keeps the leftmost control off the
+// system buttons when the host reserves room on that side (macOS).
+func TestTitleBarMenuClearsTheLeftInset(t *testing.T) {
+	s, _ := newShell(t)
+	inset := ui.TitleBar{Height: TitleBarHeight, Left: 80, Right: 138}
+	tt := s.renderSize(t, 900, 600)
+	tt.SetTitleBar(inset)
+	tt.Frame()
+	bar, ok := tt.Find("Title bar")
+	if !ok {
+		t.Fatalf("no title bar: %v", tt.Texts())
+	}
+	menu, ok := tt.AccessByRole(ui.RoleMenuButton, locales.BarMainMenu())
+	if !ok {
+		t.Fatalf("no menu button: %v", tt.Texts())
+	}
+	if want := bar.X + inset.Left + titleBarClearance; menu.Bounds.X < want-0.5 {
+		t.Fatalf("menu starts at %v, inside the left inset ending at %v", menu.Bounds.X, want)
+	}
+	files, ok := tt.Access(locales.BarFilesPanel())
+	if !ok {
+		t.Fatalf("no files switch: %v", tt.Texts())
+	}
+	if menu.Bounds.X+menu.Bounds.W > files.Bounds.X {
+		t.Fatalf("menu at %v does not lead the files switch at %v", menu.Bounds, files.Bounds)
+	}
+}
+
 func TestTitleBarTogglesShot(t *testing.T) {
 	if os.Getenv("PEEKDOWN_SHOT") == "" {
 		t.Skip("set PEEKDOWN_SHOT=1 to write the title bar toggle screenshots")
 	}
 	_, open := titleBarToggleShell(t, 1440, 900, true, true)
 	writePng(t, open.Image(), "C:/tmp/titlebar-toggles.png")
+	writePng(t, open.Image(), "C:/tmp/titlebar-no-palette.png")
+	writePng(t, open.Image(), "C:/tmp/titlebar-menu-left.png")
+	left := testshot.Crop(open.Image(), 0, 0, 230, int(TitleBarHeight))
+	testshot.WritePng(t, testshot.Scale3x(left), "C:/tmp/titlebar-menu-left-zoom.png")
+	first, ok := open.Access(locales.BarOpenFile())
+	if !ok {
+		t.Fatalf("open button missing: %v", open.Texts())
+	}
+	tools := testshot.Crop(open.Image(), int(first.Bounds.X)-8, int(first.Bounds.Y)-6, 170, 36)
+	testshot.WritePng(t, testshot.Scale3x(tools), "C:/tmp/titlebar-tools-no-palette.png")
 	btn, ok := open.Access(locales.BarOutlinePanel())
 	if !ok {
 		t.Fatalf("outline switch missing: %v", open.Texts())
@@ -207,6 +302,11 @@ func TestTitleBarTogglesShot(t *testing.T) {
 
 	_, closed := titleBarToggleShell(t, 1440, 900, false, false)
 	writePng(t, closed.Image(), "C:/tmp/titlebar-toggles-closed.png")
+
+	welcomeShell, _ := newShell(t)
+	welcome := welcomeShell.renderSize(t, 1440, 900)
+	welcome.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	writePng(t, welcome.Image(), "C:/tmp/titlebar-menu-left-welcome.png")
 }
 
 func TestOutlineCardNoBorderShot(t *testing.T) {

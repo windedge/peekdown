@@ -6,9 +6,9 @@ import (
 	"github.com/windedge/peekdown/locales"
 )
 
-// TitleBarHeight is the window's bar height in DIPs: a 30 DIP tab, the 9
-// DIPs the strip's overlay scroll bar takes below it, and the 1 DIP
-// hairline under the bar. The system draws its own controls in this band
+// TitleBarHeight is the window's bar height in DIPs: the tab row, the
+// room its overlay scroll bar takes below it, and the 1 DIP hairline
+// under the bar. The system draws its own controls in this band
 // (Win11 caption buttons, macOS traffic lights), so the bar is also the
 // room WindowOptions.TitleBarHeight reserves.
 const TitleBarHeight = 44
@@ -28,7 +28,7 @@ const (
 const appLogoSize float32 = 18
 
 // titleBar draws the window's bar in place of the system title bar: the
-// app's mark and name, the tab strip, the toolbar and the menu button.
+// menu, files switch, brand, tab strip and right-hand tools.
 // The window controls stay the system's, drawn over the bar's ends, whose
 // width TitleBar reports so the bar can pad them away.
 //
@@ -47,8 +47,9 @@ func (s *Shell) titleBar(c *ui.Context) {
 		Background(t.Surface).
 		BorderWidth(0, 0, titleBarHairline, 0).BorderColor(t.Border).
 		DragWindow().Children(func() {
-		// The files switch opens the bar, ahead of the brand, like the
-		// prototype's leftmost control.
+		// The menu takes the window's corner, ahead of the files switch;
+		// the row's inset keeps it clear of the system's controls.
+		s.menuButton(c)
 		s.barToggleButton(c, "bar-files", folderTreeIcon, locales.BarFilesPanel(),
 			locales.BarFilesTooltip(), s.Sidebar.Visible, s.ToggleFiles)
 		// The brand is the way back to Home: the whole mark and name is one
@@ -81,10 +82,10 @@ func (s *Shell) titleBar(c *ui.Context) {
 	})
 }
 
-// titleBarButtons renders the bar's toolbar: the commands of the menu
-// bar, then the menu button itself, whose menu is the same tree. The
-// labels differ from the status bar's on purpose: two controls of one
-// frame sharing a name leave the input target and the tests guessing.
+// titleBarButtons renders the bar's right-hand tools; the menu button
+// sits at the bar's left end. The labels differ from the status bar's on
+// purpose: two controls of one frame sharing a name leave the input
+// target and the tests guessing.
 func (s *Shell) titleBarButtons(c *ui.Context) {
 	ui.Row(c).Gap(titleBarButton).Shrink(0).AlignItems(ui.Center).Children(func() {
 		iconButton(c, "bar-open", folderOpenIcon, locales.BarOpenFile(), 24, 14, func() {
@@ -97,16 +98,12 @@ func (s *Shell) titleBarButtons(c *ui.Context) {
 		}).Tooltip(locales.BarOpenTooltip())
 		iconButton(c, "bar-find", searchIcon, locales.BarFind(), 24, 14, s.OpenSearch).
 			Tooltip(locales.BarFindTooltip())
-		pal := iconButton(c, "bar-palette", paletteIcon, locales.BarThemeTooltip(), 24, 14, s.openPalette)
-		pal.Tooltip(locales.BarThemeTooltip())
 		iconButton(c, "bar-settings", gearIcon, locales.BarSettingsPanel(), 24, 14, s.OpenSettings).
 			Tooltip(locales.BarSettingsTooltip())
-		s.menuButton(c)
 		// The outline switch ends the tool group, just before the
 		// system caption buttons the window itself draws.
 		s.barToggleButton(c, "bar-outline", outlineIcon, locales.BarOutlinePanel(),
 			locales.BarOutlineTooltip(), s.Outline.Visible, s.ToggleOutline)
-		s.palettePopover(c, pal)
 	})
 }
 

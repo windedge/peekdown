@@ -85,11 +85,6 @@ type Shell struct {
 	fontPickMonoOpen bool
 	fontSearch       string
 	fontList         ui.ListState
-	// paletteOpen shows the theme picker's popover under the bar's
-	// palette button; appearancePick is its segmented's local index
-	// (0 system, 1 light, 2 dark) across frames.
-	paletteOpen    bool
-	appearancePick int
 	// Zoom is the document text's runtime zoom in percent, 100 drawing at
 	// the settings' font sizes. It is session state only: Rust writes its
 	// zoom into the config's font sizes, this build keeps settings.json
@@ -693,7 +688,6 @@ func (s *Shell) OpenSettings() {
 	s.draftExplorer = explorerIndex(s.Saved.ExplorerRootMode)
 	s.markersText = strings.Join(s.Saved.ProjectRootMarkers, ", ")
 	s.settingsScroll.Y = 0
-	s.paletteOpen = false
 	s.SettingsOpen = true
 }
 

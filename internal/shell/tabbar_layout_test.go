@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/windedge/peekdown/internal/testshot"
+	"github.com/windedge/peekdown/locales"
 )
 
 // TestTitleBarHoldsTheTabs pins the bar's geometry: one 44 DIP row at the
@@ -76,8 +79,8 @@ func TestTitleBarHoldsTheTabs(t *testing.T) {
 		t.Fatalf("the tab label spans y=%v..%v, outside the strip's %v..%v",
 			label.Y, label.Y+label.H, strip.Y, strip.Y+strip.H)
 	}
-	// The strip scrolls sideways, and its overlay bar paints its last 9
-	// DIPs: the label has to end above them.
+	// The strip scrolls sideways, and its local bar paints a 4 DIP thumb
+	// in its last 8 DIPs: the label has to end above them.
 	if got := strip.Y + strip.H - (label.Y + label.H); got < 9 {
 		t.Fatalf("the tab label ends %v DIPs above the strip's bottom, want >= 9", got)
 	}
@@ -92,12 +95,117 @@ func TestTitleBarHoldsTheTabs(t *testing.T) {
 	}
 }
 
-// TestTitleBarButtonsAndTheirClearance walks the bar's toolbar: every
-// control is in the bar, and none runs under the system's window controls
-// whatever room they take (none, as in the tester's default, or the 138
-// DIPs Win11 draws).
+// longTabPaths makes a strip whose content is wider than the window, so
+// its horizontal bar paints when the pointer enters the strip.
+func longTabPaths(t *testing.T, dir string) []string {
+	t.Helper()
+	var paths []string
+	for i := range 14 {
+		p := filepath.Join(dir, fmt.Sprintf("tab-%02d-with-a-longer-name.md", i))
+		if err := os.WriteFile(p, []byte("# x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+// TestTabStripScrollbarIsThin pins the strip's local bar style and the ink
+// it paints: a 4 DIP thumb, not the theme's 6 DIP one, with a lighter rest
+// color that deepens on hover. The document and side panels are untouched.
+func TestTabStripScrollbarIsThin(t *testing.T) {
+	th := windowLight()
+	style := tabScrollbarStyle(th).Resolve(th)
+	if style.ThumbWidth != 4 || style.ThumbWidth > 4 {
+		t.Fatalf("thumb is %v DIPs wide, want 4", style.ThumbWidth)
+	}
+	if style.TrackWidth != 8 {
+		t.Fatalf("bar's hit area is %v DIPs wide, want 8", style.TrackWidth)
+	}
+	if style.Thumb.A >= style.Hover.A {
+		t.Fatalf("rest alpha %d is not lighter than hover %d", style.Thumb.A, style.Hover.A)
+	}
+
+	s, dir := newShell(t)
+	s.OpenPaths(longTabPaths(t, dir))
+	tt := s.renderSize(t, 800, 600)
+	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	tt.Frame()
+	strip, ok := tt.Find("Tab bar")
+	if !ok {
+		t.Fatalf("texts %v: want the tab strip", tt.Texts())
+	}
+	if s.tabScroll.MaxX <= 0 {
+		t.Fatalf("strip does not overflow: MaxX=%.1f", s.tabScroll.MaxX)
+	}
+	bare := tt.Image()
+
+	// Hover inside the bar's hit area, below the tabs. mygo paints a
+	// scroll container's bar only while the strip is hovered.
+	tt.Move(strip.X+strip.W/2, strip.Y+strip.H-tabScrollbarTrackWidth/2)
+	tt.Frame()
+	hovered := tt.Image()
+
+	// Count, per row of the bar's band, how many columns changed. The
+	// thumb spans a small part of the strip, so a row counts only where
+	// its ink actually paints; the rows together give its thickness.
+	var changed []int
+	for y := int(strip.Y+strip.H) - int(tabScrollbarTrackWidth) - 1; y < int(strip.Y+strip.H); y++ {
+		n := 0
+		for x := int(strip.X) + 2; x < int(strip.X+strip.W)-2; x++ {
+			if pixelAt(bare, float32(x), float32(y)) != pixelAt(hovered, float32(x), float32(y)) {
+				n++
+			}
+		}
+		if n >= 8 {
+			changed = append(changed, y)
+		}
+	}
+	if len(changed) == 0 {
+		t.Fatalf("no thumb ink in the strip's bottom %v DIPs", tabScrollbarTrackWidth)
+	}
+	if len(changed) > 4 {
+		t.Fatalf("the thumb paints %v rows %v, want at most 4 DIPs", len(changed), changed)
+	}
+
+	tt.Move(strip.X+strip.W/2, 300)
+	tt.Frame()
+	if got := pixelAt(tt.Image(), strip.X+strip.W/2, strip.Y+strip.H-2); got != pixelAt(bare, strip.X+strip.W/2, strip.Y+strip.H-2) {
+		t.Fatalf("bar stays painted after the pointer leaves: %v", got)
+	}
+}
+
+// TestTabStripScrollbarThinShot writes the tab bar with its horizontal bar
+// hovered, for a visual check that the thin line reads as a hairline.
+func TestTabStripScrollbarThinShot(t *testing.T) {
+	if os.Getenv("PEEKDOWN_SHOT") == "" {
+		t.Skip("set PEEKDOWN_SHOT=1 to write the tab scrollbar screenshot")
+	}
+	s, dir := newShell(t)
+	s.OpenPaths(longTabPaths(t, dir))
+	tt := s.renderSize(t, 1200, 700)
+	tt.SetTitleBar(ui.TitleBar{Height: TitleBarHeight, Right: 138})
+	tt.Frame()
+	strip, ok := tt.Find("Tab bar")
+	if !ok {
+		t.Fatalf("texts %v: want the tab strip", tt.Texts())
+	}
+	tt.Move(strip.X+strip.W/2, strip.Y+strip.H-tabScrollbarTrackWidth/2)
+	tt.Frame()
+	testshot.WritePng(t, tt.Image(), "C:/tmp/tabbar-scrollbar-thin.png")
+	crop := testshot.Crop(tt.Image(), 0, 0, int(strip.X+strip.W)+20, int(strip.Y+strip.H))
+	testshot.WritePng(t, testshot.Scale3x(crop), "C:/tmp/tabbar-scrollbar-thin-crop.png")
+}
+
+// TestTitleBarButtonsAndTheirClearance walks the bar's tool group: every
+// control is in the bar, the menu leads it at the left inset, and none
+// runs under the system's window controls whatever room they take (none,
+// as in the tester's default, or the 138 DIPs Win11 draws).
 func TestTitleBarButtonsAndTheirClearance(t *testing.T) {
-	controls := []string{"Open file", "Find in document", "App settings", "Main menu"}
+	controls := []string{
+		locales.BarOpenFile(), locales.BarFind(),
+		locales.BarSettingsPanel(), locales.BarOutlinePanel(),
+	}
 	for _, tc := range []struct {
 		bar  ui.TitleBar
 		text string
@@ -121,6 +229,20 @@ func TestTitleBarButtonsAndTheirClearance(t *testing.T) {
 			t.Fatalf("%s: the bar is %v high, want >= %d", tc.text, bar.H, TitleBarHeight)
 		}
 		limit := bar.X + bar.W - tc.bar.Right
+		menu, ok := tt.AccessByRole(ui.RoleMenuButton, locales.BarMainMenu())
+		if !ok {
+			t.Fatalf("%s: texts %v: want the menu button", tc.text, tt.Texts())
+		}
+		if menu.Bounds.X < bar.X+titleBarClearance-0.5 || menu.Bounds.X+menu.Bounds.W > limit {
+			t.Fatalf("%s: menu at %v does not clear the bar's ends %v..%v", tc.text, menu.Bounds, bar.X, limit)
+		}
+		files, ok := tt.Access(locales.BarFilesPanel())
+		if !ok {
+			t.Fatalf("%s: texts %v: want the files switch", tc.text, tt.Texts())
+		}
+		if menu.Bounds.X+menu.Bounds.W > files.Bounds.X {
+			t.Fatalf("%s: menu at %v does not lead the files switch at %v", tc.text, menu.Bounds, files.Bounds)
+		}
 		prevX := float32(-1)
 		for _, label := range controls {
 			r, ok := tt.Find(label)
@@ -193,19 +315,23 @@ func TestTitleBarTabsScroll(t *testing.T) {
 	if !ok {
 		t.Fatalf("texts %v: want the title bar", tt.Texts())
 	}
-	menu, ok := tt.Find("Main menu")
+	firstTool, ok := tt.Find(locales.BarOpenFile())
 	if !ok {
-		t.Fatalf("texts %v: want the menu button", tt.Texts())
+		t.Fatalf("texts %v: want the tool group's first button", tt.Texts())
+	}
+	lastTool, ok := tt.Find(locales.BarOutlinePanel())
+	if !ok {
+		t.Fatalf("texts %v: want the tool group's last button", tt.Texts())
 	}
 	strip, ok := tt.Find("Tab bar")
 	if !ok {
 		t.Fatalf("texts %v: want the tab strip", tt.Texts())
 	}
-	if menu.X+menu.W > bar.X+bar.W-138 {
-		t.Fatalf("the toolbar ends at %v, under the window controls", menu.X+menu.W)
+	if lastTool.X+lastTool.W > bar.X+bar.W-138 {
+		t.Fatalf("the toolbar ends at %v, under the window controls", lastTool.X+lastTool.W)
 	}
-	if strip.X+strip.W > menu.X {
-		t.Fatalf("the strip ends at %v, past the toolbar's start %v", strip.X+strip.W, menu.X)
+	if strip.X+strip.W > firstTool.X {
+		t.Fatalf("the strip ends at %v, past the toolbar's start %v", strip.X+strip.W, firstTool.X)
 	}
 	first, ok := tt.Find(filepath.Base(paths[0]))
 	if !ok {
@@ -213,7 +339,7 @@ func TestTitleBarTabsScroll(t *testing.T) {
 	}
 	// The active tab (the last one) is scrolled into view; the first has
 	// left the strip.
-	if first.X+first.W > bar.W+0.5 && first.X > menu.X {
+	if first.X+first.W > bar.W+0.5 && first.X > firstTool.X {
 		t.Fatalf("the first tab at %v overlaps the toolbar: the strip did not clip", first)
 	}
 	tabsSeen := 0

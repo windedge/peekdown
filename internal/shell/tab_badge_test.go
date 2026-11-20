@@ -121,8 +121,8 @@ func TestTabBadgesRender(t *testing.T) {
 }
 
 // TestTitleBarToolIconLabels keeps the bar's tool icons' commands named:
-// changing an SVG path must not lose a button or its label. The two
-// panel switches sit at the bar's ends alongside its three tools.
+// changing an SVG path must not lose a button or its label. The files
+// switch and menu lead the bar, the outline switch ends its tool group.
 func TestTitleBarToolIconLabels(t *testing.T) {
 	s, dir := newShell(t)
 	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
@@ -154,6 +154,17 @@ func TestTitleBarToolIconLabels(t *testing.T) {
 		if _, ok := tt.Access(label); !ok {
 			t.Errorf("no accessible %q button", label)
 		}
+	}
+	menu, ok := tt.AccessByRole(ui.RoleMenuButton, locales.BarMainMenu())
+	if !ok {
+		t.Fatalf("no menu button: %v", tt.Texts())
+	}
+	files, ok := tt.Access(locales.BarFilesPanel())
+	if !ok {
+		t.Fatalf("no files switch: %v", tt.Texts())
+	}
+	if menu.Bounds.X+menu.Bounds.W > files.Bounds.X {
+		t.Fatalf("menu at %v does not lead the files switch at %v", menu.Bounds, files.Bounds)
 	}
 }
 
