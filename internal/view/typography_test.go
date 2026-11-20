@@ -318,8 +318,10 @@ func TestCodeBlockPanel(t *testing.T) {
 	if got := code.Y - (intro.Y + intro.H); !near(got, blockGap+codeBlockPadding) {
 		t.Fatalf("code text %v under the paragraph, want the block gap %v plus the panel's %v", got, blockGap, codeBlockPadding)
 	}
-	if code.H > 16 {
-		t.Fatalf("code line %v tall, want the mono size, not the body's", code.H)
+	// The mono line box is smaller than the body's; its pixel height
+	// moves with the platform's font metrics.
+	if code.H >= intro.H {
+		t.Fatalf("code line %v tall, body line %v: want the mono size, not the body's", code.H, intro.H)
 	}
 }
 

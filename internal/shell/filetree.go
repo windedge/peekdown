@@ -235,14 +235,13 @@ func truncatePathMiddle(path string, maxChars int) string {
 	if len(r) <= maxChars {
 		return path
 	}
-	sep := filepath.Separator
 	tail := 10
 	if tail > maxChars-4 {
 		tail = maxChars - 4
 	}
 	cut := len(r) - tail
 	for i := cut; i > 0; i-- {
-		if r[i] != sep && r[i] != '/' {
+		if r[i] != '/' && r[i] != '\\' {
 			continue
 		}
 		keep := maxChars - tail - 4
@@ -252,7 +251,7 @@ func truncatePathMiddle(path string, maxChars int) string {
 		if keep < 2 {
 			break
 		}
-		return string(r[:keep]) + "..." + string(sep) + string(r[cut:])
+		return string(r[:keep]) + "..." + string(r[i]) + string(r[cut:])
 	}
 	return string(r[:maxChars-3]) + "..."
 }

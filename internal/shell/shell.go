@@ -445,14 +445,18 @@ func (s *Shell) tabIndex(path string) int {
 }
 
 // sameFile reports whether an existing tab already shows path's file.
-// Windows names one file under any letter case, and the tree, the
-// dialog and a forwarded command line need not agree with the case the
-// first open recorded, so the match folds there. macOS's default APFS
-// and every Linux filesystem are case sensitive, where a.md and A.md
-// are two files; folding there would merge them. Clean strips the ./
-// and trailing separators a drag may carry.
+// The tree, the dialog, a relative command line and macOS's /var alias
+// can each spell one file differently, so ask the disk first. Windows
+// also folds case for paths not on disk; elsewhere a case-only alias
+// names another file and stays distinct. Clean strips the ./ and
+// trailing separators a drag may carry.
 func sameFile(tabPath, path string) bool {
 	tabPath, path = filepath.Clean(tabPath), filepath.Clean(path)
+	if ti, err := os.Stat(tabPath); err == nil {
+		if pi, err := os.Stat(path); err == nil && os.SameFile(ti, pi) {
+			return true
+		}
+	}
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(tabPath, path)
 	}

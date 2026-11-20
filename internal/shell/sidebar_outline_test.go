@@ -112,10 +112,12 @@ func TestOutlineRowHeightAndPad(t *testing.T) {
 	if !ok {
 		t.Fatal("outline row missing")
 	}
-	// FontSize 14 lays out near 20 DIPs tall with the padding; a clamp
-	// or fixed-height regression would crush it below 17.
-	if r.H < 17 || r.H > 26 {
-		t.Fatalf("row height = %.1f, want ~20", r.H)
+	// The row's text box follows the platform's 13px line height: ~20
+	// DIPs with Segoe, ~15 with the macOS system font. Measure that line
+	// instead of pinning one font's number; a clamp would shrink it.
+	_, lineH := ui.ShapeText("H1 one", ui.Font{Size: 13}, 10000).Size()
+	if r.H < lineH-1 || r.H > lineH+1 {
+		t.Fatalf("row text height = %.1f, want the 13px line box %.1f", r.H, lineH)
 	}
 }
 

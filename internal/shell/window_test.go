@@ -207,7 +207,8 @@ func TestSettingsDialogReachesClose(t *testing.T) {
 			}
 			tt.Scroll(first.X+20, first.Y+8, 0, 2000)
 			tt.Frame()
-			if r, _ := tt.Find("Inertia Scroll"); r.H < 16 || r.Y+r.H > float32(h) {
+			_, labelH := ui.ShapeText("Inertia Scroll", ui.Font{Size: 13, Weight: 500}, 10000).Size()
+			if r, _ := tt.Find("Inertia Scroll"); r.H < labelH-1 || r.Y+r.H > float32(h) {
 				t.Fatalf("height %d: the last row at %v did not scroll into view", h, r)
 			}
 		}

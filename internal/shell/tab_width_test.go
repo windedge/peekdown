@@ -169,6 +169,17 @@ func TestActiveTabLabelIsBolder(t *testing.T) {
 
 	name := filepath.Base(first)
 	const threshold = 190
+	// The chip reserves the 500-weight advance; compare the font's own
+	// weights instead of pinning a Segoe ink count. A font without a
+	// distinct 500 advance cannot show more ink, so only demand it there.
+	var regularW, boldW float32
+	ui.NewTester(func(c *ui.Context) {
+		regularW, _ = c.MeasureText(0, ui.Span{Text: name, Size: 13, Weight: 400})
+		boldW, _ = c.MeasureText(0, ui.Span{Text: name, Size: 13, Weight: 500})
+	}, 10, 10).Frame()
+	if boldW+0.5 < regularW {
+		t.Fatalf("500 weight measures %v, narrower than 400's %v", boldW, regularW)
+	}
 	idle := tabInk(t, tt, name, threshold)
 	if err := tt.Click(name); err != nil {
 		t.Fatal(err)
@@ -181,8 +192,8 @@ func TestActiveTabLabelIsBolder(t *testing.T) {
 	if idle == 0 {
 		t.Fatal("the idle label has no ink to compare")
 	}
-	if active*100 < idle*105 {
-		t.Errorf("active label is not bolder: idle=%d active=%d", idle, active)
+	if active < idle || (boldW > regularW+0.5 && active == idle) {
+		t.Errorf("active label is not bolder: idle=%d active=%d (400 %v, 500 %v)", idle, active, regularW, boldW)
 	}
 }
 

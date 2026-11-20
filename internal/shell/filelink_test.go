@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -195,7 +194,7 @@ func TestShellLocalLinkCaseInsensitiveSuffix(t *testing.T) {
 	tt.Frame()
 
 	clickLink(t, tt, "upper", float32(settings.Default().FontSize))
-	if runtime.GOOS != "windows" {
+	if _, err := os.Stat(filepath.Join(dir, "B.MD")); err != nil {
 		// A case-only alias is another file on a case-sensitive disk and
 		// does not exist here: the link silently does nothing.
 		if len(s.Tabs) != 1 {
@@ -203,9 +202,9 @@ func TestShellLocalLinkCaseInsensitiveSuffix(t *testing.T) {
 		}
 		return
 	}
-	// Windows names the file under any case, so the link opens the disk
-	// file the tab dedupe folds by case: a second open of b.md, the same
-	// file as tab 0, must land on that tab, never add another.
+	// A case-insensitive disk names the file under any case, so the link
+	// opens the disk file: a second open of b.md, the same file as tab 1,
+	// must land on that tab, never add another.
 	if err := s.OpenFile(filepath.Join(dir, "b.md")); err != nil {
 		t.Fatal(err)
 	}

@@ -68,6 +68,8 @@ func zoomShell(t *testing.T) (*Shell, *ui.Tester, *zoomFrame, string) {
 	return s, tt, frame, body
 }
 
+func nearDIP(a, b float32) bool { return a-b < 0.5 && b-a < 0.5 }
+
 // TestZoomScalesTextNotWindow walks Ctrl+= and Ctrl++: the body draws
 // bigger, the window's own zoom and the chrome's boxes stay put, and the
 // status bar reads the zoom.
@@ -132,7 +134,10 @@ func TestZoomScalesTextNotWindow(t *testing.T) {
 		t.Fatalf("frame size = %vx%v, want the window's %dx%d", frame.w, frame.h, w, h)
 	}
 	chromeAfter, ok := tt.Find("125%")
-	if !ok || chromeAfter != chromeBefore {
+	// The readout is end-aligned: "125%" and "100%" have different glyph
+	// advances, so only their anchor and line box must stay put.
+	if !ok || !nearDIP(chromeAfter.Y, chromeBefore.Y) || !nearDIP(chromeAfter.H, chromeBefore.H) ||
+		!nearDIP(chromeAfter.X+chromeAfter.W, chromeBefore.X+chromeBefore.W) {
 		t.Fatalf("chrome box %v after the zoom, %v before: the window scaled", chromeAfter, chromeBefore)
 	}
 

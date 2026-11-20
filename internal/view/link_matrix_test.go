@@ -208,7 +208,17 @@ func TestLinkCursorFollowsTheWords(t *testing.T) {
 // A link longer than the column wraps: each line of it is a rect of its
 // own, on its own line, and every column of every line opens it.
 func TestWrappedLinkHasOneRectPerLine(t *testing.T) {
-	src := "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore. Read [the guide to everything that follows here](https://example.com/wrapped) and more text follows to wrap.\n"
+	// Grow the label until it is wider than the column twice: character
+	// counts that wrap one font leave a short link on one line in another.
+	label := "the guide to everything that follows here"
+	for {
+		w, _ := ui.ShapeText(label, ui.Font{Size: defaultBodySize}, 10000).Size()
+		if w > 480 {
+			break
+		}
+		label += " and more"
+	}
+	src := "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore. Read [" + label + "](https://example.com/wrapped) and more text follows to wrap.\n"
 	_, tt, st, _, _ := localLinkDoc(t, src, 420, 400)
 	rects := linkRectsOf(st, "https://example.com/wrapped")
 	if len(rects) < 2 {
