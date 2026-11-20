@@ -60,7 +60,8 @@ var settingsNavItems = []settingsNavItem{
 }
 
 // settingsDialog renders the settings modal: every control applies at
-// once through persist (no Save button), the Done button just closes.
+// once through persist (no Save button), and both the footer button and
+// the corner X only close the dialog.
 func (s *Shell) settingsDialog(c *ui.Context) {
 	winW, winH := c.Size()
 	m := ui.DialogBase(c, &s.SettingsOpen, func(backdrop, panel ui.Element) {
@@ -88,11 +89,8 @@ func (s *Shell) settingsDialog(c *ui.Context) {
 			s.settingsRail(c, t, k)
 			s.settingsContent(c, t)
 		})
-		ui.Row(c).FillWidth().Justify(ui.End).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, locales.SettingsClose()).Label("Settings Close").Clicked() {
-				s.CloseSettings()
-			}
-			if ui.PrimaryButton(c, locales.SettingsDone()).Label("Settings Done").Clicked() {
+		ui.Row(c).FillWidth().Justify(ui.End).AlignItems(ui.Center).Children(func() {
+			if ui.PrimaryButton(c, locales.SettingsClose()).Label("Settings Close").Clicked() {
 				s.CloseSettings()
 			}
 		})
@@ -129,7 +127,7 @@ func (s *Shell) settingsRail(c *ui.Context, t *ui.Theme, k AccentColors) {
 				}
 				nav.Children(func() {
 					ui.Icon(c, item.icon).Size(16, 16).TextColor(col)
-					ui.Text(c, item.title()).FontSize(14).FontWeight(550).TextColor(col).Grow(1).MinWidth(0)
+					ui.Text(c, item.title()).FontSize(14).TextColor(col).Grow(1).MinWidth(0)
 				})
 				if nav.Clicked() && s.settingsSection != i {
 					s.settingsSection = i

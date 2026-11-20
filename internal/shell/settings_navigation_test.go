@@ -2,7 +2,9 @@ package shell
 
 import (
 	"errors"
+	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -91,6 +93,32 @@ func TestSettingsNavigationGeometry(t *testing.T) {
 	tt.Move(firstRect.X+firstRect.W-4, fy)
 	tt.Frame()
 	probeSel(first, over(k.PanelSel, face(fx, fy)))
+}
+
+// TestSettingsNavTextIsRegular pins the rail's page names to the inherited
+// regular weight; mygo's Tester does not expose text styles, so this reads
+// the rail's rendering source.
+func TestSettingsNavTextIsRegular(t *testing.T) {
+	src, err := os.ReadFile("settings.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(src), "func (s *Shell) settingsRail(")
+	if start < 0 {
+		t.Fatal("no settingsRail in settings.go")
+	}
+	rest := string(src[start:])
+	end := strings.Index(rest, "\nfunc ")
+	if end < 0 {
+		t.Fatal("settingsRail has no end")
+	}
+	rail := rest[:end]
+	if !strings.Contains(rail, "ui.Text(c, item.title()).FontSize(14)") {
+		t.Fatal("the rail's page titles no longer use the regular text style")
+	}
+	if strings.Contains(rail, "FontWeight(") {
+		t.Fatal("a rail page title still sets a non-regular font weight")
+	}
 }
 
 // TestSettingsNavigationSwitchesPage is the behavioral check: a rail

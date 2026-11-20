@@ -374,12 +374,12 @@ func TestSettingsApplyImmediately(t *testing.T) {
 		t.Fatalf("draftLayout after reopen = %d, want 1", s.draftLayout)
 	}
 	tt.Frame()
-	if err := tt.Click("Done"); err != nil {
+	if err := tt.Click("Settings Close"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if s.SettingsOpen {
-		t.Fatal("dialog still open after Done")
+		t.Fatal("dialog still open after Close")
 	}
 }
 
@@ -403,13 +403,13 @@ func TestSettingsSaveErrorKeepsDialogOpen(t *testing.T) {
 		t.Fatalf("texts %q: want the save error", tt.Texts())
 	}
 
-	// Done still closes it.
-	if err := tt.Click("Done"); err != nil {
+	// Close still closes it.
+	if err := tt.Click("Settings Close"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if s.SettingsOpen {
-		t.Fatal("dialog still open after Done")
+		t.Fatal("dialog still open after Close")
 	}
 }
 

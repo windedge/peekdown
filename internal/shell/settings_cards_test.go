@@ -78,12 +78,12 @@ func TestSettingsDialogCardSurfaces(t *testing.T) {
 	cx, cy := card.X+4, card.Y+card.H/2
 	probe("section card", cx, cy, over(k.Card, over(k.CardFocused, over(k.Backdrop, pixelAt(bare.Image(), cx, cy)))))
 
-	done, ok := tt.Find("Settings Done")
+	closeButton, ok := tt.Find("Settings Close")
 	if !ok {
-		t.Fatalf("no Done button box in %q", tt.Texts())
+		t.Fatalf("no Close button box in %q", tt.Texts())
 	}
-	if got := pixelAt(tt.Image(), done.X+6, done.Y+done.H/2); !channelClose(got, windowLight().Accent, 1) {
-		t.Fatalf("Done button face %v, want accent %v", got, windowLight().Accent)
+	if got := pixelAt(tt.Image(), closeButton.X+6, closeButton.Y+closeButton.H/2); !channelClose(got, windowLight().Accent, 1) {
+		t.Fatalf("Close button face %v, want accent %v", got, windowLight().Accent)
 	}
 }
 

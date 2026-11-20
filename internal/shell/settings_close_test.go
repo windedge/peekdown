@@ -7,9 +7,8 @@ import (
 	"github.com/windedge/peekdown/locales"
 )
 
-// TestSettingsCloseEntryPoints checks the two new close controls: a
-// secondary Close beside Done at the panel's foot, and the icon at its
-// top-right corner. Both close the dialog, as Done still does.
+// TestSettingsCloseEntryPoints checks the panel's single primary Close
+// button and the icon at its top-right corner. Both only close the dialog.
 func TestSettingsCloseEntryPoints(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{1400, 880}, {760, 620}} {
 		s, _ := newShell(t)
@@ -33,21 +32,20 @@ func TestSettingsCloseEntryPoints(t *testing.T) {
 		if !ok {
 			t.Fatalf("%dx%d: no Close button in %q", size.w, size.h, tt.Texts())
 		}
-		done, ok := tt.Find("Settings Done")
-		if !ok {
-			t.Fatalf("%dx%d: no Done button in %q", size.w, size.h, tt.Texts())
+		if _, ok := tt.Find("Settings Done"); ok {
+			t.Fatalf("%dx%d: the removed Done button is still drawn in %q", size.w, size.h, tt.Texts())
 		}
-		if closeButton.X+closeButton.W > done.X {
-			t.Fatalf("%dx%d: Close %v is not left of Done %v", size.w, size.h, closeButton, done)
+		if _, ok := tt.Find("Done"); ok {
+			t.Fatalf("%dx%d: Done text is still drawn in %q", size.w, size.h, tt.Texts())
 		}
-		if gap := done.X - closeButton.X - closeButton.W; gap < 0 || gap > 11 {
-			t.Fatalf("%dx%d: Close and Done gap is %v, want the 10 DIP group", size.w, size.h, gap)
+		if got := pixelAt(tt.Image(), closeButton.X+6, closeButton.Y+closeButton.H/2); !channelClose(got, windowLight().Accent, 1) {
+			t.Fatalf("%dx%d: Close button face %v, want accent %v", size.w, size.h, got, windowLight().Accent)
 		}
-		if dy := closeButton.Y + closeButton.H/2 - (done.Y + done.H/2); dy > 1 || dy < -1 {
-			t.Fatalf("%dx%d: Close %v and Done %v are not on one row", size.w, size.h, closeButton, done)
+		if closeButton.Y < title.Y || closeButton.Y+closeButton.H > panel.Y+panel.H+1 {
+			t.Fatalf("%dx%d: Close %v is not the panel's footer %v", size.w, size.h, closeButton, panel)
 		}
-		if done.X+done.W > panel.X+panel.W-settingsPadding+2 {
-			t.Fatalf("%dx%d: the button group %v runs past the panel %v", size.w, size.h, done, panel)
+		if closeButton.X+closeButton.W > panel.X+panel.W-settingsPadding+2 {
+			t.Fatalf("%dx%d: the Close button %v runs past the panel %v", size.w, size.h, closeButton, panel)
 		}
 
 		x, ok := tt.Find(locales.SettingsCloseIcon())
@@ -70,7 +68,6 @@ func TestSettingsCloseEntryPoints(t *testing.T) {
 		}{
 			{"Close", "Settings Close"},
 			{"close icon", locales.SettingsCloseIcon()},
-			{"Done", "Settings Done"},
 		} {
 			s.saveErr = "pending probe"
 			if err := tt.Click(entry.target); err != nil {
@@ -89,7 +86,7 @@ func TestSettingsCloseEntryPoints(t *testing.T) {
 	}
 }
 
-// TestSettingsCloseButtonsShot captures the footer group and the corner
+// TestSettingsCloseButtonsShot captures the footer button and the corner
 // icon together for a visual check. Skipped outside PEEKDOWN_SHOT runs.
 func TestSettingsCloseButtonsShot(t *testing.T) {
 	if os.Getenv("PEEKDOWN_SHOT") == "" {
@@ -100,4 +97,30 @@ func TestSettingsCloseButtonsShot(t *testing.T) {
 	s.OpenSettings()
 	tt.Frame()
 	writePng(t, tt.Image(), "C:/tmp/settings-close-buttons.png")
+}
+
+// TestSettingsOneCloseShot captures the Appearance page with its single
+// primary Close button at the panel's foot.
+func TestSettingsOneCloseShot(t *testing.T) {
+	if os.Getenv("PEEKDOWN_SHOT") == "" {
+		t.Skip("set PEEKDOWN_SHOT=1 to write the settings one-close screenshot")
+	}
+	s, _ := newShell(t)
+	tt := s.renderSize(t, 1400, 880)
+	s.OpenSettings()
+	tt.Frame()
+	writePng(t, tt.Image(), "C:/tmp/settings-one-close.png")
+}
+
+// TestSettingsNavRegularShot captures the rail after its page names lost
+// their bold weight, for a visual check of the selected row.
+func TestSettingsNavRegularShot(t *testing.T) {
+	if os.Getenv("PEEKDOWN_SHOT") == "" {
+		t.Skip("set PEEKDOWN_SHOT=1 to write the settings nav screenshot")
+	}
+	s, _ := newShell(t)
+	tt := s.renderSize(t, 1400, 880)
+	s.OpenSettings()
+	tt.Frame()
+	writePng(t, tt.Image(), "C:/tmp/settings-nav-regular.png")
 }

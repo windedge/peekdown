@@ -58,7 +58,7 @@ func TestSettingsCardsShot(t *testing.T) {
 
 // TestSettingsTwoColumnShot captures the rail with Appearance chosen and
 // the detail column after a rail click to Reading. Both pages should show
-// one header and one card, with Done still at the panel's foot.
+// one header and one card, with Close still at the panel's foot.
 func TestSettingsTwoColumnShot(t *testing.T) {
 	if os.Getenv("PEEKDOWN_SHOT") == "" {
 		t.Skip("set PEEKDOWN_SHOT=1 to write the two-column screenshots")
@@ -117,7 +117,7 @@ func TestSettingsThreeNavShot(t *testing.T) {
 
 // TestSettingsTwoColumnNarrowShot captures the dialog in a 760 DIP
 // window, where the panel is clamped, to check that neither column runs
-// past the panel and Done stays visible.
+// past the panel and Close stays visible.
 func TestSettingsTwoColumnNarrowShot(t *testing.T) {
 	if os.Getenv("PEEKDOWN_SHOT") == "" {
 		t.Skip("set PEEKDOWN_SHOT=1 to write the narrow screenshot")

@@ -91,7 +91,6 @@
   "settingsTitle": "Settings",
   "settingsClose": "Close",
   "settingsCloseIcon": "Close settings",
-  "settingsDone": "Done",
   "settingsSectionAppearance": "Appearance",
   "settingsSectionAppearanceDetail": "Theme, colors, layout, language and FPS.",
   "settingsSectionReading": "Reading",
@@ -136,13 +135,9 @@
   "fontPickerSearch": "Search installed fonts...",
   "fontPickerNoMatch": "No matching fonts",
 
-  "barThemeTooltip": "Accent theme",
-  "paletteTitle": "Theme",
-  "paletteAppearance": "Appearance",
   "appearanceSystem": "System",
   "appearanceLight": "Light",
   "appearanceDark": "Dark",
-  "appearanceNote": "System follows the Windows light or dark mode",
 
   "accentThemePetal": "Petal",
   "accentThemeMist": "Mist",

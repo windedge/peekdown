@@ -24,7 +24,7 @@ func openSettingsSection(t *testing.T, tt *ui.Tester, s *Shell, name string) {
 
 // TestSettingsDialogCards checks the two-column modal: its width follows
 // the window up to 900, the rail and the page column sit side by side,
-// and the Done footer is alone and still closes.
+// and the single Close footer button still closes.
 func TestSettingsDialogCards(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{1400, 880}, {760, 620}} {
 		s, _ := newShell(t)
@@ -90,20 +90,20 @@ func TestSettingsDialogCards(t *testing.T) {
 		if _, ok := tt.Find("Save"); ok {
 			t.Errorf("%dx%d: Save still drawn", size.w, size.h)
 		}
-		done, ok := tt.Find("Done")
+		closeButton, ok := tt.Find("Settings Close")
 		if !ok {
-			t.Fatalf("%dx%d: no Done button in %q", size.w, size.h, tt.Texts())
+			t.Fatalf("%dx%d: no Close button in %q", size.w, size.h, tt.Texts())
 		}
-		if done.Y < title.Y || done.Y+done.H > panel.Y+panel.H+1 {
-			t.Fatalf("%dx%d: Done at %v is not the panel's footer", size.w, size.h, done)
+		if closeButton.Y < title.Y || closeButton.Y+closeButton.H > panel.Y+panel.H+1 {
+			t.Fatalf("%dx%d: Close at %v is not the panel's footer", size.w, size.h, closeButton)
 		}
 
-		if err := tt.Click("Done"); err != nil {
+		if err := tt.Click("Settings Close"); err != nil {
 			t.Fatal(err)
 		}
 		tt.Frame()
 		if s.SettingsOpen {
-			t.Fatalf("%dx%d: the dialog stayed open after Done", size.w, size.h)
+			t.Fatalf("%dx%d: the dialog stayed open after Close", size.w, size.h)
 		}
 	}
 }

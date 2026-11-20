@@ -836,16 +836,6 @@ func (msgs Messages) SettingsCloseIcon() string {
 	return Catalog.Format(msgs.locale, "settingsCloseIcon", nil)
 }
 
-// SettingsDone says "Done"
-// in the language the app shows.
-func SettingsDone() string { return In(i18n.Locale()).SettingsDone() }
-
-// SettingsDone says "Done"
-// in the language of msgs.
-func (msgs Messages) SettingsDone() string {
-	return Catalog.Format(msgs.locale, "settingsDone", nil)
-}
-
 // SettingsSectionAppearance says "Appearance"
 // in the language the app shows.
 func SettingsSectionAppearance() string { return In(i18n.Locale()).SettingsSectionAppearance() }
@@ -1268,36 +1258,6 @@ func (msgs Messages) FontPickerNoMatch() string {
 	return Catalog.Format(msgs.locale, "fontPickerNoMatch", nil)
 }
 
-// BarThemeTooltip says "Accent theme"
-// in the language the app shows.
-func BarThemeTooltip() string { return In(i18n.Locale()).BarThemeTooltip() }
-
-// BarThemeTooltip says "Accent theme"
-// in the language of msgs.
-func (msgs Messages) BarThemeTooltip() string {
-	return Catalog.Format(msgs.locale, "barThemeTooltip", nil)
-}
-
-// PaletteTitle says "Theme"
-// in the language the app shows.
-func PaletteTitle() string { return In(i18n.Locale()).PaletteTitle() }
-
-// PaletteTitle says "Theme"
-// in the language of msgs.
-func (msgs Messages) PaletteTitle() string {
-	return Catalog.Format(msgs.locale, "paletteTitle", nil)
-}
-
-// PaletteAppearance says "Appearance"
-// in the language the app shows.
-func PaletteAppearance() string { return In(i18n.Locale()).PaletteAppearance() }
-
-// PaletteAppearance says "Appearance"
-// in the language of msgs.
-func (msgs Messages) PaletteAppearance() string {
-	return Catalog.Format(msgs.locale, "paletteAppearance", nil)
-}
-
 // AppearanceSystem says "System"
 // in the language the app shows.
 func AppearanceSystem() string { return In(i18n.Locale()).AppearanceSystem() }
@@ -1326,16 +1286,6 @@ func AppearanceDark() string { return In(i18n.Locale()).AppearanceDark() }
 // in the language of msgs.
 func (msgs Messages) AppearanceDark() string {
 	return Catalog.Format(msgs.locale, "appearanceDark", nil)
-}
-
-// AppearanceNote says "System follows the Windows light or dark mode"
-// in the language the app shows.
-func AppearanceNote() string { return In(i18n.Locale()).AppearanceNote() }
-
-// AppearanceNote says "System follows the Windows light or dark mode"
-// in the language of msgs.
-func (msgs Messages) AppearanceNote() string {
-	return Catalog.Format(msgs.locale, "appearanceNote", nil)
 }
 
 // AccentThemePetal says "Petal"
