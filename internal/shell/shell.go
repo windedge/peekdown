@@ -59,10 +59,12 @@ type Shell struct {
 	Sidebar     struct {
 		Width   float32
 		Visible bool
+		slide   paneSlide
 	}
 	Outline struct {
 		Width   float32
 		Visible bool
+		slide   paneSlide
 	}
 	tree         treeState
 	SettingsOpen bool
@@ -462,12 +464,57 @@ func sameFile(tabPath, path string) bool {
 	return tabPath == path
 }
 
+// setPaneVisible applies the desired state at once and saves it. The
+// slide state follows in the next frame, so every entry point animates.
+func (s *Shell) setPaneVisible(v bool, files bool) {
+	if files {
+		s.Sidebar.Visible = v
+		s.Saved.SidebarVisible = v
+	} else {
+		s.Outline.Visible = v
+		s.Saved.OutlineVisible = v
+	}
+	if s.Save != nil {
+		_ = s.Save(s.Saved)
+	}
+}
+
+// syncPaneSlide advances one panel's render width. The first frame adopts
+// the model as it stands, so restoring settings and direct test writes do
+// not start an animation from zero.
+func (s *Shell) syncPaneSlide(c *ui.Context, a *paneSlide, visible bool, width float32) {
+	now := c.Now()
+	target := float32(0)
+	if visible {
+		target = width
+	}
+	if !a.seen {
+		a.init(target, now)
+	} else {
+		if a.wants != visible {
+			a.wants = visible
+			a.retarget(target)
+		} else if visible && a.target != target {
+			a.retarget(target)
+		}
+		if c.Instant() || c.Preferences().ReduceMotion {
+			a.snap(target)
+		} else {
+			a.advance(now.Sub(a.last))
+			if a.moving() {
+				c.AnimationFrame()
+			}
+		}
+	}
+	a.last = now
+}
+
 // SetFilesVisible makes sure the file pane is on screen, for the bar
 // button and the reveal commands.
-func (s *Shell) SetFilesVisible(v bool) { s.Sidebar.Visible = v }
+func (s *Shell) SetFilesVisible(v bool) { s.setPaneVisible(v, true) }
 
 // SetOutlineVisible shows or hides the right-hand outline panel.
-func (s *Shell) SetOutlineVisible(v bool) { s.Outline.Visible = v }
+func (s *Shell) SetOutlineVisible(v bool) { s.setPaneVisible(v, false) }
 
 // SetSidebarWidth clamps the sidebar width to a usable range.
 func (s *Shell) SetSidebarWidth(w float32) {
@@ -692,6 +739,8 @@ func (s *Shell) View(c *ui.Context) {
 	s.trackFrames(c)
 	s.settlePersist(c)
 	s.RegisterShortcuts(c)
+	s.syncPaneSlide(c, &s.Sidebar.slide, s.Sidebar.Visible, s.Sidebar.Width)
+	s.syncPaneSlide(c, &s.Outline.slide, s.Outline.Visible, s.Outline.Width)
 	// The theme with the accent tokens pressed on it goes to the frame
 	// first: the bars and the welcome page below read it back through
 	// c.Theme(). The window's own background is painted, not filled, so
@@ -740,9 +789,14 @@ func (s *Shell) View(c *ui.Context) {
 			// The left split is outermost: its divider runs the full body
 			// height, while the right one only shares the reading column.
 			winW, _ := c.Size()
+			files, outline := &s.Sidebar.slide, &s.Outline.slide
+			filesMoving, outlineMoving := files.moving(), outline.moving()
+			filesW, outlineW := files.value, outline.value
+			showFiles := files.wants || filesMoving
+			showOutline := outline.wants || outlineMoving
 			var widthChanged bool
 			withOutline := func() {
-				if !s.Outline.Visible || winW < outlineMinWindowWidth {
+				if !showOutline || winW < outlineMinWindowWidth {
 					ui.Box(c).Grow(1).Clip().Children(func() { body() })
 					return
 				}
@@ -762,13 +816,17 @@ func (s *Shell) View(c *ui.Context) {
 				// back so the handle's overshoot resumes from where the
 				// divider really stands; keyboard moves on a focused divider
 				// ride the same path.
-				w := s.Outline.Width
+				w := outlineW
 				split := ui.Split(c, &w,
 					func() { s.outlinePanel(c) }, body).Direction(ui.RightToLeft).Grow(1)
-				if split.Changed() {
+				if outlineMoving {
+					split.Disabled(true).DimDisabled(false)
+				}
+				if split.Changed() && !outlineMoving {
 					before := s.Outline.Width
 					moved := 2*before - w
 					s.SetOutlineWidth(moved)
+					outline.snap(s.Outline.Width)
 					w = 2*s.Outline.Width - moved
 					widthChanged = s.Outline.Width != before
 				}
@@ -780,20 +838,28 @@ func (s *Shell) View(c *ui.Context) {
 			// fill measures against.
 			area := func() {
 				ui.Box(c).Grow(1).Clip().Label("Content area").Bind(&s.progressBody).Children(func() {
-					widthChanged = s.paneGripHotspots(c, winW) || widthChanged
-					if s.Sidebar.Visible {
+					widthChanged = s.paneGripHotspots(c, winW, filesW, outlineW, filesMoving, outlineMoving) || widthChanged
+					if showFiles {
 						s.SetSidebarWidth(s.Sidebar.Width)
 						// One DrawOver per element: a second call would replace
 						// the first, so this pass draws both gutters, the left
 						// boundary and (while the outline shows) the right one.
-						split := ui.Split(c, &s.Sidebar.Width, func() { s.sidebar(c) }, withOutline).Grow(1).
+						split := ui.Split(c, &filesW, func() { s.sidebar(c) }, withOutline).Grow(1).
 							DrawOver(func(p *ui.Painter, r ui.Rect) {
-								s.paneGrip(c, p, r, 0)
-								if s.Outline.Visible && winW >= outlineMinWindowWidth {
-									s.paneGrip(c, p, r, 1)
+								s.paneGrip(c, p, r, 0, filesW, outlineW)
+								if showOutline && winW >= outlineMinWindowWidth {
+									s.paneGrip(c, p, r, 1, filesW, outlineW)
 								}
 							})
-						widthChanged = split.Changed() || widthChanged
+						if filesMoving {
+							split.Disabled(true).DimDisabled(false)
+						}
+						if split.Changed() && !filesMoving {
+							before := s.Sidebar.Width
+							s.SetSidebarWidth(filesW)
+							files.snap(s.Sidebar.Width)
+							widthChanged = s.Sidebar.Width != before
+						}
 					} else {
 						ui.Box(c).Grow(1).Clip().Children(func() { withOutline() })
 					}

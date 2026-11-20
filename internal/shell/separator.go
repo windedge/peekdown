@@ -54,20 +54,20 @@ func coverTintColumn(p *ui.Painter, x float32, root ui.Rect, k AccentColors) {
 // 后, 先用一列渐变盖掉贴边的常显线, 悬停时再在缝隙正中画 1px 强调线。
 // side 0 是左栏 (文件 pane 右边界), side 1 是右大纲 (RTL split, 第一 pane
 // 左边界在 split 右缘往左一个 pane 宽处)。
-func (s *Shell) paneGrip(c *ui.Context, p *ui.Painter, r ui.Rect, side int) {
+func (s *Shell) paneGrip(c *ui.Context, p *ui.Painter, r ui.Rect, side int, filesW, outlineW float32) {
 	k := s.accentColors(c)
 	var x float32
 	if side == 0 {
-		x = r.X + s.Sidebar.Width
+		x = r.X + filesW
 	} else {
-		x = r.X + r.W - s.Outline.Width
+		x = r.X + r.W - outlineW
 	}
 	coverNativeDivider(p, x, s.bgRect, k)
-	if side == 0 && s.Outline.Visible {
+	if side == 0 && outlineW > 0 {
 		// The outer split paints its Border line after the inner split's
 		// DrawOver already ran, so the outline boundary needs a second
 		// cover from this outer pass.
-		coverNativeDivider(p, r.X+r.W-s.Outline.Width, s.bgRect, k)
+		coverNativeDivider(p, r.X+r.W-outlineW, s.bgRect, k)
 	}
 	if s.gripHover[side] {
 		// Centered in the gutter: the gutter runs paneGutter wide from the
@@ -85,28 +85,30 @@ func (s *Shell) paneGrip(c *ui.Context, p *ui.Painter, r ui.Rect, side int) {
 // 线。热区盖住了 mygo 的拖拽把手 (hitChain 不穿透), 所以拖拽也由热区自
 // 持: 左线拖动宽窄同向, 右线在大纲上反向 (RTL split), 宽度都走现有
 // Set*Width 与防抖保存路径。返回这一帧是否有拖动。
-func (s *Shell) paneGripHotspots(c *ui.Context, areaW float32) bool {
+func (s *Shell) paneGripHotspots(c *ui.Context, areaW, filesW, outlineW float32, filesMoving, outlineMoving bool) bool {
 	s.gripHover[0], s.gripHover[1] = false, false
 	moved := false
-	if s.Sidebar.Visible {
-		e := ui.Box(c).Absolute().Left(s.Sidebar.Width - gripHotspotHalf).
+	if filesW > 0 && !filesMoving {
+		e := ui.Box(c).Absolute().Left(filesW - gripHotspotHalf).
 			Width(2*gripHotspotHalf + 1).Top(0).Bottom(0).Cursor(ui.CursorResizeEW)
 		s.gripHover[0] = e.Hovered()
 		if dx, _, ok := e.Dragged(); ok && dx != 0 {
 			s.SetSidebarWidth(s.Sidebar.Width + dx)
+			s.Sidebar.slide.snap(s.Sidebar.Width)
 			s.gripHover[0] = true
 			moved = true
 		}
 	}
 	winW, _ := c.Size()
-	if s.Outline.Visible && winW >= outlineMinWindowWidth {
-		x := areaW - s.Outline.Width - 1
+	if outlineW > 0 && !outlineMoving && winW >= outlineMinWindowWidth {
+		x := areaW - outlineW - 1
 		e := ui.Box(c).Absolute().Left(x - gripHotspotHalf).
 			Width(2*gripHotspotHalf + 1).Top(0).Bottom(0).Cursor(ui.CursorResizeEW)
 		s.gripHover[1] = e.Hovered()
 		if dx, _, ok := e.Dragged(); ok && dx != 0 {
 			// RTL split: 手柄左移 (dx<0) 加宽大纲。
 			s.SetOutlineWidth(s.Outline.Width - dx)
+			s.Outline.slide.snap(s.Outline.Width)
 			s.gripHover[1] = true
 			moved = true
 		}

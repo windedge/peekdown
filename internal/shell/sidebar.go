@@ -97,7 +97,7 @@ func (s *Shell) sidebar(c *ui.Context) {
 			Shadow(0, 1, 2, 0, cardShadow(t, false)).
 			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
 			panelHeader(c, "close-sidebar", locales.SidebarFiles(), locales.SidebarClose(),
-				func() { s.Sidebar.Visible = false }, s.filesSortControl)
+				func() { s.SetFilesVisible(false) }, s.filesSortControl)
 			s.filesPane(c)
 		})
 	})
@@ -275,7 +275,7 @@ func (s *Shell) outlinePanel(c *ui.Context) {
 			Shadow(0, 6, 22, -2, cardShadow(t, false)).Children(func() {
 			panelHeader(c, "close-outline", locales.SidebarOutline(),
 				locales.SidebarClose()+" "+locales.SidebarOutline(),
-				func() { s.Outline.Visible = false })
+				func() { s.SetOutlineVisible(false) })
 			if tab == nil || tab.Model == nil {
 				ui.Text(c, locales.NoHeadings()).FontSize(13).TextColor(t.TextMuted).
 					Padding(4, 12)

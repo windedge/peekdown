@@ -37,10 +37,10 @@ func (s *Shell) RefreshActiveTab() {
 
 // ToggleOutline flips the right-hand panel, independently of the files
 // pane on the left.
-func (s *Shell) ToggleOutline() { s.Outline.Visible = !s.Outline.Visible }
+func (s *Shell) ToggleOutline() { s.SetOutlineVisible(!s.Outline.Visible) }
 
 // ToggleFiles flips the left-hand file pane and leaves the outline be.
-func (s *Shell) ToggleFiles() { s.Sidebar.Visible = !s.Sidebar.Visible }
+func (s *Shell) ToggleFiles() { s.SetFilesVisible(!s.Sidebar.Visible) }
 
 // OpenInFileManager reveals path in the OS file manager, selecting the file
 // where the platform can. mygo's shell covers the three platforms
