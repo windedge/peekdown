@@ -4,3 +4,6 @@ dist/
 *.syso
 .mygo/
 /peekdown
+click.log
+tmp_shot/
+docs/design/link-hit.md
