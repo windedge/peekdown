@@ -259,6 +259,11 @@ const (
 	// A first step has no previous frame to measure from: one frame, the
 	// Rust version's 1/60s, rather than a zero-time gap.
 	inertiaFirstStep = time.Second / 60
+	// A re-anchor moves the offset and the content's end by the same
+	// amount, so the two diffs come out mathematically equal and float
+	// rounding may still put one a hair over the other; the slack
+	// forgives that, nothing wider.
+	inertiaDriftSlack float32 = 1
 )
 
 // active reports whether the velocity still moves the view.
@@ -751,7 +756,7 @@ func (st *State) glide(c *ui.Context) {
 		// the MaxY that moved with it is that reconciliation, not a move
 		// the glide must yield to, so the glide re-syncs to it.
 		dy, dm := st.Scroll.Y-st.Inertia.wroteY, st.Scroll.MaxY-st.Inertia.wroteMaxY
-		if st.Inertia.wroteMaxY > 0 && (dy > 0) == (dm > 0) && absF(dy) <= absF(dm) {
+		if st.Inertia.wroteMaxY > 0 && (dy > 0) == (dm > 0) && absF(dy) <= absF(dm)+inertiaDriftSlack {
 			st.Inertia.wroteY, st.Inertia.wroteMaxY = st.Scroll.Y, st.Scroll.MaxY
 		} else {
 			st.Inertia.stop()
