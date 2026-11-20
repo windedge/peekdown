@@ -180,6 +180,19 @@ type State struct {
 	// reads out of band to leave their presses to the buttons.
 	copyHandles map[int]*ui.Handle
 
+	// linkParas are the text elements the last built frame drew links in,
+	// one per visible block that holds one, and linkRects the boxes those
+	// links' words took, read from the committed frame between builds.
+	// The render records the spans it laid out, so the hit shapes the same
+	// text at the same font and width the element did: no second shaping
+	// from the run text, which drifted a rune from the drawn glyphs.
+	linkParas []linkPara
+	linkRects []linkRect
+	// pressedLink is the destination the press landed on, which the
+	// release dispatches: the click acts on what it pressed, though a
+	// hover rebuilt the frame between the two.
+	pressedLink string
+
 	// FontSize is the body's size, from the font_size setting; 0 draws
 	// at defaultBodySize. The shell injects it every frame, so a save
 	// re-renders without further wiring.
@@ -437,10 +450,17 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			st.Scroll.Y = max(0, min(st.Scroll.Y+ev.DY*speed, st.Scroll.MaxY))
 			return true
 		case ui.InputPointerDown:
+			if debugClickEnabled() {
+				r := debugListRect(st)
+				debugClick("kind=down x=%g y=%g button=%d clicks=%d rows=%d list=%g,%g,%g,%g",
+					ev.X, ev.Y, ev.Button, ev.Clicks, len(st.rowHandles), r.X, r.Y, r.W, r.H)
+			}
 			if ev.Button != 0 {
 				return false
 			}
-			if st.copyButtonAt(ev) {
+			onCopyButton := st.copyButtonAt(ev)
+			debugClick("copybtn=%t", onCopyButton)
+			if onCopyButton {
 				// The press belongs to the copy button, not to a selection
 				// drag: leaving it undelivered lets the button take it.
 				return false
@@ -454,7 +474,20 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			}
 			st.press = p
 			st.pressXY = st.listXY(ev)
-			st.clickedALink = st.linkAt(m, ev) != ""
+			// The frame's own boxes answer first: they cannot drift from
+			// the glyphs the user sees, which a second shaping of the run
+			// text did. The rune offset's answer stays as the fallback, for
+			// a press the boxes leave uncovered.
+			dest, how := st.linkHitAt(st.pressXY)
+			if dest != "" {
+				debugClick("recthit=true how=%s dest=%q", how, dest)
+			} else if dest = st.linkAt(m, ev); dest != "" {
+				debugClick("recthit=false how=offset dest=%q", dest)
+			} else {
+				debugClick("recthit=false how=none dest=\"\"")
+			}
+			st.pressedLink = dest
+			st.clickedALink = dest != ""
 			st.dragging = true
 			switch {
 			case ev.Clicks == 2:
@@ -480,17 +513,25 @@ func (st *State) Handler(m *doc.Model) func(ui.InputEvent) bool {
 			d := st.listXY(ev)
 			if dx, dy := d.X-st.pressXY.X, d.Y-st.pressXY.Y; dx*dx+dy*dy > clickThreshold*clickThreshold {
 				st.clickedALink = false
+				st.pressedLink = ""
 			}
 			st.SetSelection(st.press, p)
 			return true
 		case ui.InputPointerUp:
+			debugClick("kind=up x=%g y=%g button=%d clicks=%d dragging=%t clickedALink=%t canceled=%t",
+				ev.X, ev.Y, ev.Button, ev.Clicks, st.dragging, st.clickedALink, ev.Canceled)
 			if !st.dragging || ev.Button != 0 {
 				return false
 			}
 			st.dragging = false
 			if st.clickedALink {
-				st.openLinkAt(m, ev)
+				dest := st.pressedLink
+				if dest == "" {
+					dest = st.linkAt(m, ev)
+				}
+				st.dispatchLink(dest)
 			}
+			st.pressedLink = ""
 			return true
 		}
 		return false
@@ -509,6 +550,7 @@ func (st *State) invalidateStale(m *doc.Model) {
 		st.Matches = nil
 		st.Current = -1
 		st.copyHandles = nil
+		st.linkParas = st.linkParas[:0]
 		st.docVersion = v
 	}
 }
@@ -553,18 +595,148 @@ func (st *State) listXY(ev ui.InputEvent) ui.Point {
 func (st *State) linkAt(m *doc.Model, ev ui.InputEvent) string {
 	p, ok := st.pointAt(m, ev, false)
 	if !ok {
-		return ""
+		return debugLink("")
 	}
 	if dest := m.LinkTargetOf(p.Block); dest != "" {
-		return dest
+		return debugLink(dest)
 	}
-	return linkDestOf(m, p.Block, p.Offset)
+	return debugLink(linkDestAt(m, p.Block, p.Offset))
 }
 
-// openLinkAt acts on the link the release landed on: it hits the
-// document's links through the pointer, then dispatches the destination.
-func (st *State) openLinkAt(m *doc.Model, ev ui.InputEvent) {
-	st.dispatchLink(st.linkAt(m, ev))
+// linkRect is the box one line of a link's words took in the committed
+// frame, in window DIPs.
+type linkRect struct {
+	block  int
+	dest   string
+	x0, x1 float32
+	y0, y1 float32
+}
+
+// linkPara is one text element the frame built over a block that holds
+// links: the spans the element laid out, the font and the element's own
+// handle, whose box the shaped boxes sit at, and each link's rune range in
+// that text with the inline element the engine laid its words in.
+type linkPara struct {
+	block int
+	spans []ui.Span
+	text  string
+	font  ui.Font
+	h     *ui.Handle
+	segs  []linkSeg
+}
+
+// linkSeg is one link of a text element: the rune range of its words in
+// the element's text, and the inline element the engine laid them out in.
+type linkSeg struct {
+	dest     string
+	from, to int
+	h        *ui.Handle
+}
+
+// LinkRect is one line of a link's words as the committed frame drew it,
+// in window DIPs, with the destination a click on it dispatches. It is the
+// hook the tests click through: a point taken from here is the point the
+// user sees.
+type LinkRect struct {
+	Dest  string
+	Block int
+	Rect  ui.Rect
+}
+
+// LinkRects returns the boxes the committed frame drew links in, one per
+// line of their words, in window DIPs. Valid between builds, like the
+// Bounds of any handle.
+func (st *State) LinkRects() []LinkRect {
+	rects := st.linkRectsOf()
+	out := make([]LinkRect, 0, len(rects))
+	for _, r := range rects {
+		out = append(out, LinkRect{Dest: r.dest, Block: r.block, Rect: ui.Rect{X: r.x0, Y: r.y0, W: r.x1 - r.x0, H: r.y1 - r.y0}})
+	}
+	return out
+}
+
+// linkRectsOf rebuilds the links' boxes from the last built frame: the
+// spans the element laid out, shaped at the width and the font it laid
+// them at, so a box is the one the drawn glyphs took, one per line the
+// link wraps onto. The hit calls it on a press, which is why it may shape
+// then; a frame draws its boxes' text from the same spans.
+func (st *State) linkRectsOf() []linkRect {
+	if st.ctx == nil {
+		return nil
+	}
+	out := st.linkRects[:0]
+	for _, p := range st.linkParas {
+		if len(p.segs) == 0 {
+			continue
+		}
+		box := p.h.Bounds(st.ctx)
+		if box.W <= 0 || box.H <= 0 {
+			continue
+		}
+		text := p.text
+		layout := ui.ShapeRichText(p.spans, p.font, box.W)
+		if layout == nil {
+			continue
+		}
+		for _, seg := range p.segs {
+			rangeRunes := ui.TextInputRange{Start: utf16Units(text, seg.from), End: utf16Units(text, seg.to)}
+			for _, r := range layout.SelectionRects(rangeRunes) {
+				if r.W <= 0 || r.H <= 0 {
+					continue
+				}
+				out = append(out, linkRect{block: p.block, dest: seg.dest,
+					x0: box.X + r.X, x1: box.X + r.X + r.W, y0: box.Y + r.Y, y1: box.Y + r.Y + r.H})
+			}
+		}
+	}
+	st.linkRects = out
+	return out
+}
+
+// linkHitAt returns the destination of the link at window point p, and how
+// the frame's geometry answered: "rect" for a line a link's words took,
+// "box" for the whole element, which covers the ragged side of a wrapped
+// link too, so a press beside one still opens it. A miss lets the rune
+// offset's answer stand as the fallback.
+func (st *State) linkHitAt(p ui.Point) (string, string) {
+	for _, r := range st.linkRectsOf() {
+		if p.X >= r.x0 && p.X <= r.x1 && p.Y >= r.y0 && p.Y <= r.y1 {
+			return r.dest, "rect"
+		}
+	}
+	if st.ctx == nil {
+		return "", ""
+	}
+	for _, para := range st.linkParas {
+		for _, seg := range para.segs {
+			b := seg.h.Bounds(st.ctx)
+			if b.W <= 0 || b.H <= 0 {
+				continue
+			}
+			if p.X >= b.X && p.X <= b.X+b.W && p.Y >= b.Y && p.Y <= b.Y+b.H {
+				return seg.dest, "box"
+			}
+		}
+	}
+	return "", ""
+}
+
+// utf16Units returns how many UTF-16 code units the first n runes of text
+// take, the offsets a TextLayout's ranges count in.
+func utf16Units(text string, n int) int {
+	units, i := 0, 0
+	for _, r := range text {
+		if i == n {
+			break
+		}
+		if r >= 0x10000 {
+			units += 2
+		} else {
+			units++
+		}
+		i++
+	}
+	return units
 }
 
 // dispatchLink acts on dest: an anchor scrolls its heading into view, a
@@ -574,23 +746,32 @@ func (st *State) openLinkAt(m *doc.Model, ev ui.InputEvent) {
 // nothing.
 func (st *State) dispatchLink(dest string) {
 	if dest == "" {
+		debugClick("dispatch dest=%q route=none", dest)
 		return
 	}
 	if anchor, ok := strings.CutPrefix(dest, "#"); ok {
 		if anchor == "" {
+			debugClick("dispatch dest=%q route=none", dest)
 			return
 		}
+		debugClick("dispatch dest=%q route=anchor", dest)
 		if block, ok := st.anchorLookup(anchor); ok {
 			st.JumpToBlock(block)
 		}
 		return
 	}
 	if urlSafe(dest) {
+		debugClick("dispatch dest=%q route=url", dest)
 		if st.OpenURL != nil {
 			st.OpenURL(dest)
 		}
 		return
 	}
+	if looksLikeScheme(dest) {
+		debugClick("dispatch dest=%q route=none", dest)
+		return
+	}
+	debugClick("dispatch dest=%q route=local", dest)
 	// Neither anchor nor scheme: a local path, markdown or not. Whether
 	// the target exists is the shell's call, which knows the document's
 	// directory and what it can open.
@@ -606,6 +787,21 @@ func urlSafe(url string) bool {
 	l := strings.ToLower(url)
 	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") ||
 		strings.HasPrefix(l, "mailto:")
+}
+
+// looksLikeScheme keeps the schemes the view refused to open from being
+// mistaken for local files by the shell. A single letter before the colon
+// is a Windows drive, as in C:/docs/readme.md, not a URI scheme.
+func looksLikeScheme(dest string) bool {
+	i := strings.IndexByte(dest, ':')
+	if i < 0 {
+		return false
+	}
+	if i == 1 {
+		c := dest[0] | 0x20
+		return c < 'a' || c > 'z'
+	}
+	return true
 }
 
 // linkDestOf returns the destination of the link whose text covers rune
@@ -625,6 +821,20 @@ func linkDestOf(m *doc.Model, i, off int) string {
 	return dest
 }
 
+// linkDestAt answers for a hit on a top-level block's run. Containers
+// keep their text in leaf blocks, so a miss on the block's own inlines
+// looks up the leaf holding that rune and reads its inlines instead.
+func linkDestAt(m *doc.Model, block, off int) string {
+	if dest := linkDestOf(m, block, off); dest != "" {
+		return dest
+	}
+	leaf, leafOff := m.LeafAt(block, off)
+	if leaf == block {
+		return ""
+	}
+	return linkDestOf(m, leaf, leafOff)
+}
+
 // pointAt returns the document point under the handler's event and
 // whether the view has rows to hit: the rows' handles give each block's
 // rectangle of the committed frame, in window coordinates, the block's
@@ -635,7 +845,7 @@ func linkDestOf(m *doc.Model, i, off int) string {
 // passes on below zero.
 func (st *State) pointAt(m *doc.Model, ev ui.InputEvent, press bool) (selection.Point, bool) {
 	if st.ctx == nil || len(st.rowHandles) == 0 {
-		return selection.Point{}, false
+		return debugPoint(selection.Point{}, false)
 	}
 	listRect := st.List.Handle.Bounds(st.ctx)
 	type hit struct {
@@ -651,23 +861,23 @@ func (st *State) pointAt(m *doc.Model, ev ui.InputEvent, press bool) (selection.
 		rows = append(rows, hit{block, rect})
 	}
 	if len(rows) == 0 {
-		return selection.Point{}, false
+		return debugPoint(selection.Point{}, false)
 	}
 	slices.SortFunc(rows, func(a, b hit) int { return cmp.Compare(a.rect.Y, b.rect.Y) })
 	x, y := listRect.X+ev.X, listRect.Y+ev.Y
 	first, last := rows[0], rows[len(rows)-1]
 	if y < first.rect.Y || press && y < 0 {
-		return selection.Point{Block: first.block}, true
+		return debugPoint(selection.Point{Block: first.block}, true)
 	}
 	if y >= last.rect.Y+last.rect.H {
-		return selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true
+		return debugPoint(selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true)
 	}
 	for _, row := range rows {
 		if y < row.rect.Y+row.rect.H {
-			return selection.Point{Block: row.block, Offset: st.offsetAt(m, row.block, row.rect, listRect, x, y)}, true
+			return debugPoint(selection.Point{Block: row.block, Offset: st.offsetAt(m, row.block, row.rect, listRect, x, y)}, true)
 		}
 	}
-	return selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true
+	return debugPoint(selection.Point{Block: last.block, Offset: runeLen(runText(m, last.block))}, true)
 }
 
 // offsetAt returns the rune offset of the window point in a row's block:
@@ -713,6 +923,14 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.Matches = m.Matches
 	st.Current = m.Current
 	st.anchorModel = m
+	// The first frame records the model's version: the handler's staleness
+	// check has nothing to drop before one was built.
+	if st.docVersion == 0 {
+		st.docVersion = m.Version()
+	}
+	// The links the frame draws are recorded as its visible rows build, so
+	// the last frame's are dropped here.
+	st.linkParas = st.linkParas[:0]
 	// The glide writes the offset before the list is built, so its
 	// TrackScroll takes the new place in this frame: a write after the list
 	// exists reaches the container only after the list laid its rows out,
@@ -720,7 +938,7 @@ func ScrollView(c *ui.Context, m *doc.Model, st *State) {
 	st.glide(c)
 	list := ui.List(c, &st.List, m.Len(), func(r int) {
 		st.Row(c, m, r)
-	}).Grow(1).TrackScroll(&st.Scroll)
+	}).Grow(1).TrackScroll(&st.Scroll).Cursor(ui.CursorText)
 	st.updateScrollPlace(c, list)
 	// The handler takes the pointer for the drag selection and the wheel
 	// for its glide, and returns false for the rest, so the list keeps
@@ -1244,8 +1462,9 @@ func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, head
 		st.images(c, i, images)
 		return
 	}
-	spans := st.spans(c, m, i, s)
-	el := ui.RichText(c, spans...).Font(tk.sans).FontFeatures("tnum").AlignSelf(ui.Stretch).MinWidth(0)
+	pieces := st.pieces(c, m, i, s)
+	el := st.linkText(c, i, pieces, ui.Font{Family: tk.sans, Features: "tnum"}).
+		AlignSelf(ui.Stretch).MinWidth(0)
 	if heading {
 		el.Role(ui.RoleHeading).Level(m.Block(i).Level)
 	}
@@ -1254,24 +1473,53 @@ func (st *State) richParagraph(c *ui.Context, m *doc.Model, i int, s style, head
 // spans walks block i's inlines into styled spans, drawing the selection
 // and the matches over the text.
 func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
-	tk := st.tokens(c)
+	pieces := st.pieces(c, m, i, s)
 	spans := []ui.Span{}
+	for _, p := range pieces {
+		spans = append(spans, p.spans...)
+	}
+	return spans
+}
+
+// piece is a run of a block's text that shares a link destination: one
+// link's words, or the prose between links. The render builds each link as
+// an inline element of its own, so the engine lays its words out and the
+// pointer takes the hand over them, and each piece's spans are recolored
+// where the selection and the matches cut its text.
+type piece struct {
+	dest  string
+	spans []ui.Span
+}
+
+// pieces walks block i's inlines into pieces. The spans of a piece's text
+// joined, piece after piece, are the block's run text in doc's run table,
+// rune for rune: the offsets the selection, the cuts and the search
+// address stay the ones the walk made.
+func (st *State) pieces(c *ui.Context, m *doc.Model, i int, s style) []piece {
+	tk := st.tokens(c)
+	leaf, base := runBase(m, i)
+	type run struct {
+		span ui.Span
+		dest string
+		at   int
+	}
+	var runs []run
+	at := 0
 	walk(m.Inlines(i), s, func(text string, rs runStyle, kind runKind, link bool, dest string) {
 		if text == "" {
 			return
 		}
-		base := rs
-		if base.color == (ui.Color{}) {
-			base.color = tk.text
+		st := rs
+		if st.color == (ui.Color{}) {
+			st.color = tk.text
 		}
 		if link {
-			// A link reads as ui.Link does, the accent color underlined;
-			// full link interaction is later work.
-			base.color = tk.link
-			base.underline = true
+			// A link reads as ui.Link does, the accent color underlined.
+			st.color = tk.link
+			st.underline = true
 		}
-		sp := ui.Span{Text: text, Size: base.size, Weight: base.weight, Color: base.color,
-			Italic: base.italic, Underline: base.underline, Strikethrough: base.strike}
+		sp := ui.Span{Text: text, Size: st.size, Weight: st.weight, Color: st.color,
+			Italic: st.italic, Underline: st.underline, Strikethrough: st.strike}
 		switch kind {
 		case runCode:
 			// Code is the chip: the Rust version highlights it on the
@@ -1283,9 +1531,105 @@ func (st *State) spans(c *ui.Context, m *doc.Model, i int, s style) []ui.Span {
 			sp.Color = tk.muted
 			sp.Size *= inlineCodeScale
 		}
-		spans = append(spans, sp)
+		d := ""
+		if link {
+			d = dest
+		}
+		runs = append(runs, run{span: sp, dest: d, at: at})
+		at += runeLen(text)
 	})
-	return st.overlay(c, m, i, spans)
+	out := make([]piece, 0, len(runs))
+	for k := 0; k < len(runs); {
+		j := k + 1
+		for j < len(runs) && runs[j].dest == runs[k].dest {
+			j++
+		}
+		spans := make([]ui.Span, 0, j-k)
+		for _, r := range runs[k:j] {
+			spans = append(spans, r.span)
+		}
+		spans = st.overlayRun(c, leaf, base+runs[k].at, spans)
+		out = append(out, piece{dest: runs[k].dest, spans: spans})
+		k = j
+	}
+	return out
+}
+
+// linkText builds block i's text as one element: its prose as spans, and
+// each link as an inline element of its own, which the engine lays into
+// the paragraph, hits over the words' own boxes and gives the hand cursor.
+// The element records what it laid out, which the hit shapes again the
+// same way to read the links' boxes out of the committed frame. A text
+// without a link stays the plain spans it always was.
+func (st *State) linkText(c *ui.Context, i int, pieces []piece, font ui.Font) ui.Element {
+	spans := make([]ui.Span, 0, len(pieces))
+	linked := false
+	for _, p := range pieces {
+		spans = append(spans, p.spans...)
+		linked = linked || p.dest != ""
+	}
+	if !linked {
+		return withFont(ui.RichText(c, spans...), font)
+	}
+	rec := linkPara{block: i, spans: spans, text: joinSpans(spans), font: font, h: &ui.Handle{}}
+	title := withFont(ui.RichText(c), font).Bind(rec.h)
+	at := 0
+	title.Children(func() {
+		for _, p := range pieces {
+			n := 0
+			for _, sp := range p.spans {
+				n += runeLen(sp.Text)
+			}
+			if p.dest == "" {
+				ui.RichText(c, p.spans...)
+				at += n
+				continue
+			}
+			h := &ui.Handle{}
+			ui.RichText(c, p.spans...).Cursor(ui.CursorPointer).Tooltip(linkTip(p.dest)).Bind(h)
+			rec.segs = append(rec.segs, linkSeg{dest: p.dest, from: at, to: at + n, h: h})
+			at += n
+		}
+	})
+	st.linkParas = append(st.linkParas, rec)
+	return title
+}
+
+// linkTip shows the destination as the document wrote it: a relative path
+// stays relative, and an anchor stays an anchor. Long ones are cut in the
+// middle so the tip keeps its head and tail within a couple of lines.
+func linkTip(dest string) string {
+	const maxRunes = 120
+	r := []rune(dest)
+	if len(r) <= maxRunes {
+		return dest
+	}
+	const tail = 24
+	return string(r[:maxRunes-tail-3]) + "..." + string(r[len(r)-tail:])
+}
+
+// withFont applies a text element's font: a family, its features and a size
+// where the font names one, the paragraphs leaving the size to their spans.
+func withFont(el ui.Element, f ui.Font) ui.Element {
+	if f.Family != "" {
+		el = el.Font(f.Family)
+	}
+	if f.Features != "" {
+		el = el.FontFeatures(f.Features)
+	}
+	if f.Size > 0 {
+		el = el.FontSize(f.Size)
+	}
+	return el
+}
+
+// joinSpans returns the text of spans joined, as the run text holds it.
+func joinSpans(spans []ui.Span) string {
+	var b strings.Builder
+	for _, sp := range spans {
+		b.WriteString(sp.Text)
+	}
+	return b.String()
 }
 
 // runKind says how a run of inline text reads.
@@ -1890,7 +2234,7 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 					if head {
 						s.weight = 600
 					}
-					spans := st.spans(c, m, cell, s)
+					pieces := st.pieces(c, m, cell, s)
 					// A Row centers its children, which would leave a cell as high
 					// as its own text and break its rule at every shorter cell:
 					// stretched, the cells fill the row's height instead.
@@ -1901,7 +2245,7 @@ func (st *State) table(c *ui.Context, m *doc.Model, i int) {
 					}
 					align := columnAlign(aligns, k)
 					box.Children(func() {
-						ui.RichText(c, spans...).Font(tk.sans).FontSize(tk.tableSize()).
+						st.linkText(c, cell, pieces, ui.Font{Family: tk.sans, Size: tk.tableSize()}).
 							MinWidth(0).AlignSelf(ui.Stretch).TextAlign(align)
 					})
 				}
@@ -2075,7 +2419,7 @@ func (st *State) list(c *ui.Context, m *doc.Model, i int, b doc.Block, depth int
 							// must carry the body's size and family, or the
 							// item draws a size down from a paragraph's.
 							s := style{size: tk.body, weight: 400, color: tk.text}
-							ui.RichText(c, st.spans(c, m, j, s)...).Font(tk.sans)
+							st.linkText(c, j, st.pieces(c, m, j, s), ui.Font{Family: tk.sans})
 						case parser.List:
 							st.list(c, m, j, child, depth+1)
 						default:

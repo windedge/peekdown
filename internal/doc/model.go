@@ -658,6 +658,42 @@ func (m *Model) RunAt(leaf int) (*Run, int) {
 	return &m.runs[at.run], at.offset
 }
 
+// LeafAt maps a rune offset in block i's run to the leaf that owns it
+// and the offset within that leaf's own inlines. A list, quote or table
+// flattens its leaves into one run joined by separators: the view's hit
+// tests address the joined text, while the parser keeps each leaf's
+// inlines separate. A block without mapped leaves answers itself.
+func (m *Model) LeafAt(block, off int) (int, int) {
+	ri := -1
+	for k := range m.runs {
+		if m.runs[k].Leaf == block {
+			ri = k
+			break
+		}
+	}
+	if ri < 0 || m.leafRun == nil {
+		return block, off
+	}
+	leaf, start := -1, -1
+	for b, at := range m.leafRun {
+		if at.run == ri && at.offset <= off && at.offset > start {
+			leaf, start = b, at.offset
+		}
+	}
+	if leaf < 0 {
+		return block, off
+	}
+	end := len([]rune(m.runs[ri].Text))
+	for _, at := range m.leafRun {
+		if at.run == ri && at.offset > start && at.offset < end {
+			end = at.offset - 1
+		}
+	}
+	// An offset on a joining separator clamps to the leaf's end, where
+	// no rune, and so no link, lives.
+	return leaf, min(off-start, end-start)
+}
+
 // appendRuns walks block i's subtree in reading order, appending one run
 // per stretch of text. Code blocks are their lines; HTML blocks the visible
 // text of their semantic content; nested blocks contribute their leaves in

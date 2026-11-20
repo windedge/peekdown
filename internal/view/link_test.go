@@ -114,11 +114,14 @@ func TestClickOnAnchorLinkScrollsToHeading(t *testing.T) {
 }
 
 func TestClickOnUnsafeLinkDoesNothing(t *testing.T) {
-	_, tt, _, opened := linkDoc(t, "A [javascript link](javascript:alert(1)) here.\n", 400, 300)
+	_, tt, _, opened, local := localLinkDoc(t, "A [javascript link](javascript:alert(1)) here.\n", 400, 300)
 	x, y := linkPoint(t, tt, "javascript link")
 	tt.ClickAt(x, y)
 	if len(*opened) != 0 {
 		t.Fatalf("opened %v, want nothing for javascript:", *opened)
+	}
+	if len(*local) != 0 {
+		t.Fatalf("local %v, a rejected scheme must not reach the shell", *local)
 	}
 }
 
