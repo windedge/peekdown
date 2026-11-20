@@ -3,7 +3,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -46,20 +48,32 @@ func notifyAssocChanged() {
 // defining it is gone, so the system asks again.
 const legacyProgID = "Peekdown.Markdown"
 
-// registerFileAssociations writes the HKCU keys for portable installs:
-// the installer's ProgIDs plus the extension default values the Rust
-// build wrote, and the Open With application entry, pointing at the
-// running executable.
-func registerFileAssociations() (note string, err error) {
+// registerFileAssociations writes the same keys per extension the Rust
+// build's --register (registry.rs) writes, under HKCU so it needs no
+// elevation: the ProgID with its DefaultIcon and shell\open\command, the
+// extension's default value, and the Applications entry pointing at the
+// running executable. It also writes the extension's OpenWithProgids the
+// mygo installer writes, so either path lists Peekdown the same way.
+//
+// The extension default and its ProgID are the double-click handler.
+// Windows only overrides them with a UserChoice naming an installed app;
+// the returned hint covers that case.
+func registerFileAssociations() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
+	exeName := filepath.Base(exe)
 	open := `"` + exe + `" "%1"`
 	const docName = "Markdown Document" // mygo.json fileAssociations[0].name
+	var notes []string
 
 	for _, ext := range []string{"md", "markdown"} {
 		progID := appProgID(ext)
+		// The ProgID root, its icon and verb mirror registry.rs. The
+		// FriendlyAppName values and the command naming the exe, not the
+		// running path, are Rust's; the running path is at least as
+		// accurate.
 		class := `Software\Classes\` + progID
 		k, _, err := registry.CreateKey(registry.CURRENT_USER, class, registry.SET_VALUE)
 		if err != nil {
@@ -84,6 +98,15 @@ func registerFileAssociations() (note string, err error) {
 			return "", err
 		}
 		k.Close()
+		k, _, err = registry.CreateKey(registry.CURRENT_USER, class+`\shell\open`, registry.SET_VALUE)
+		if err != nil {
+			return "", err
+		}
+		if err := k.SetStringValue("FriendlyAppName", "Peekdown"); err != nil {
+			k.Close()
+			return "", err
+		}
+		k.Close()
 		k, _, err = registry.CreateKey(registry.CURRENT_USER, class+`\shell\open\command`, registry.SET_VALUE)
 		if err != nil {
 			return "", err
@@ -104,6 +127,8 @@ func registerFileAssociations() (note string, err error) {
 			return "", err
 		}
 		k.Close()
+		// The installer's OpenWith list entry; the default value above is
+		// what makes Peekdown the plain double-click handler.
 		k, _, err = registry.CreateKey(registry.CURRENT_USER, `Software\Classes\.`+ext+`\OpenWithProgids`, registry.SET_VALUE)
 		if err != nil {
 			return "", err
@@ -115,15 +140,36 @@ func registerFileAssociations() (note string, err error) {
 			}
 		}
 		k.Close()
-		// A UserChoice naming a ProgID whose key no longer exists leaves a
-		// double-click without a handler; drop it so Windows asks again.
-		if !deleteOrphanUserChoice(ext, progID) {
-			// Only the legacy ProgID is orphaned in the wild; the hint
-			// applies to the extension the failed choice guards.
-			note = "The current default for ." + ext + " points to the removed program (" + legacyProgID + "); it could not be cleared without elevation. Pick Peekdown once under Open With, or run this command again as administrator."
+		// An orphaned UserChoice shadows the HKCR chain with no handler
+		// behind it; deleting it lets the chain above take effect.
+		c := userChoice(ext, progID)
+		if c == choiceOrphan && !deleteOrphanUserChoice(ext, progID) {
+			return "", fmt.Errorf("the default for .%s points to the removed program %q and its registry key is write-protected; rerun as administrator", ext, legacyProgID)
+		}
+		if hint := choiceHint(ext, c); hint != "" {
+			notes = append(notes, hint)
 		}
 	}
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, `Software\Classes\Applications\Peekdown.exe\shell\open\command`, registry.SET_VALUE)
+	// The Applications entry makes Peekdown listed by name in Open With;
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, `Software\Classes\Applications\`+exeName, registry.SET_VALUE)
+	if err != nil {
+		return "", err
+	}
+	if err := k.SetStringValue("FriendlyAppName", "Peekdown"); err != nil {
+		k.Close()
+		return "", err
+	}
+	k.Close()
+	k, _, err = registry.CreateKey(registry.CURRENT_USER, `Software\Classes\Applications\`+exeName+`\shell\open`, registry.SET_VALUE)
+	if err != nil {
+		return "", err
+	}
+	if err := k.SetStringValue("FriendlyAppName", "Peekdown"); err != nil {
+		k.Close()
+		return "", err
+	}
+	k.Close()
+	k, _, err = registry.CreateKey(registry.CURRENT_USER, `Software\Classes\Applications\`+exeName+`\shell\open\command`, registry.SET_VALUE)
 	if err != nil {
 		return "", err
 	}
@@ -134,34 +180,58 @@ func registerFileAssociations() (note string, err error) {
 	k.Close()
 
 	notifyAssocChanged()
-	return note, nil
+	return strings.Join(notes, "\n"), nil
+}
+
+// choice tells where the FileExts UserChoice for ext points.
+type choice int
+
+const (
+	choiceMissing choice = iota
+	choiceOurs
+	choiceOrphan
+	choiceOther
+)
+
+// userChoice classifies the UserChoice for ext against progID. A choice
+// naming a ProgID another install still defines must be left alone.
+func userChoice(ext, progID string) choice {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.`+ext+`\UserChoice`, registry.QUERY_VALUE)
+	if err != nil {
+		return choiceMissing
+	}
+	progid, _, _ := k.GetStringValue("ProgId")
+	k.Close()
+	if progid == progID {
+		return choiceOurs
+	}
+	if k, err := registry.OpenKey(registry.CLASSES_ROOT, progid, registry.QUERY_VALUE); err == nil {
+		k.Close()
+		return choiceOther
+	}
+	return choiceOrphan
+}
+
+// choiceHint returns the CLI note for a UserChoice that needs the user's
+// attention; a missing choice or one already pointing here needs none.
+func choiceHint(ext string, c choice) string {
+	switch c {
+	case choiceOrphan:
+		return fmt.Sprintf("Removed a stale default for .%s; double-clicking now uses the registered Peekdown handler.", ext)
+	case choiceOther:
+		return fmt.Sprintf("The default for .%s is set by Windows UserChoice to another app; change it in Windows settings if you want Peekdown.", ext)
+	}
+	return ""
 }
 
 // deleteOrphanUserChoice removes the FileExts UserChoice for ext when it
 // names a ProgID with no defining key under HKCR: the hash binding means
 // it cannot be rewritten in place, and an orphan leaves a double-click
-// with no handler. It reports whether the choice is gone; deletion can
-// be denied by the key's DACL without elevation, which the caller turns
-// into a hint.
+// with no handler. It reports whether the choice is gone; the key's
+// DACL can deny deletion, and callers must not treat that as success.
 func deleteOrphanUserChoice(ext, progID string) bool {
-	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.`+ext+`\UserChoice`, registry.QUERY_VALUE)
-	if err != nil {
+	if userChoice(ext, progID) != choiceOrphan {
 		return true
 	}
-	progid, _, _ := k.GetStringValue("ProgId")
-	k.Close()
-	if progid == progID {
-		return true
-	}
-	// A choice naming a ProgID some install still defines is kept, so a
-	// Rust or installer build keeps working; the legacy ProgID itself is
-	// only kept when its key exists.
-	if k, err := registry.OpenKey(registry.CLASSES_ROOT, progid, registry.QUERY_VALUE); err == nil {
-		k.Close()
-		return true
-	}
-	if err := registry.DeleteKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.`+ext+`\UserChoice`); err != nil {
-		return false
-	}
-	return true
+	return registry.DeleteKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.`+ext+`\UserChoice`) == nil
 }
