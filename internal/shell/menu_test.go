@@ -392,17 +392,13 @@ func TestMenuButtonDrawsTheAppMenu(t *testing.T) {
 	}
 	tt.Frame()
 	var want []string
-	for _, it := range visibleItems(BuildMenu(s).Items()) {
+	// topItems drops macOS's role-built application menu, which the
+	// title bar's drawn tree does not carry.
+	for _, it := range visibleItems(topItems(BuildMenu(s).Items())) {
 		want = append(want, it.Label)
 	}
-	native := tt.Menu()
-	// macOS puts the application menu ahead of the window's tree; skip
-	// that leading entry so both lists name the same command items.
-	for len(native) > 0 && len(want) > 0 && native[0] != want[0] {
-		native = native[1:]
-	}
 	var got []string
-	for _, label := range native {
+	for _, label := range tt.Menu() {
 		if label != "-" {
 			got = append(got, label)
 		}
