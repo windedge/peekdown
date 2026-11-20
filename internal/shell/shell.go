@@ -976,6 +976,7 @@ func (s *Shell) Content(c *ui.Context) {
 	// gate the scroll-follow highlight on a view that is really wired,
 	// not on OpenURL happening to be set.
 	tab.State.OpenURL = func(url string) {
+		debugClick("openurl=%q", url)
 		if err := mygo.Shell.OpenExternal(url); err != nil {
 			c.Toast(locales.CouldNotOpenLink())
 		}
@@ -1083,10 +1084,11 @@ func (s *Shell) jumpButtons(c *ui.Context) {
 // openLocalLink resolves dest, as a document's link wrote it, against
 // base's directory and shows the target as a tab: an absolute path
 // stands as it is, anything else joins the document's directory. Only
-// markdown opens - directories and other files silently do nothing,
-// as do unreadable ones - so an image link never yanks the reader out
-// of the document. A "#anchor" tail scrolls the target file to that
-// heading once its model is ready; a missing anchor lands on top.
+// markdown opens as a tab; a directory or another kind of file is
+// revealed in the file manager instead of leaving the click answered
+// by nothing. A missing markdown target stays where it is. A "#anchor"
+// tail scrolls the target file to that heading once its model is
+// ready; a missing anchor lands on top.
 func (s *Shell) openLocalLink(base, dest string) {
 	path, anchor, _ := strings.Cut(dest, "#")
 	if path == "" {
@@ -1096,18 +1098,28 @@ func (s *Shell) openLocalLink(base, dest string) {
 		path = filepath.Join(filepath.Dir(base), path)
 	}
 	path = filepath.Clean(path)
-	if !strings.EqualFold(filepath.Ext(path), ".md") {
-		return
-	}
-	fi, err := os.Stat(path)
-	if err != nil || fi.IsDir() {
-		return
-	}
 	abs := path
 	if a, err := filepath.Abs(abs); err == nil {
 		abs = a
 	}
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		debugClick("local dest=%q path=%q branch=reveal", dest, abs)
+		s.OpenInFileManager(abs)
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		debugClick("local dest=%q path=%q branch=missing", dest, abs)
+		return
+	}
+	if fi.IsDir() {
+		debugClick("local dest=%q path=%q branch=dir", dest, abs)
+		s.OpenInFileManager(abs)
+		return
+	}
+	debugClick("local dest=%q path=%q branch=tab", dest, abs)
 	if err := s.OpenFile(abs); err != nil {
+		debugClick("localopen err=%q", err.Error())
 		return
 	}
 	if anchor == "" {

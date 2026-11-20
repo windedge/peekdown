@@ -3,6 +3,7 @@ package shell
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func linkFiles(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	write("a.md", "# A\n\nLinks: [bee](b.md), [bee anchor](b.md#sec), [missing](nope.md), [img](pic.png), [sub](sub/c.md), [upper](B.MD).\n")
+	write("a.md", "# A\n\nLinks: [bee](b.md), [bee anchor](b.md#sec), [missing](nope.md), [img](pic.png), [dir](sub), [sub](sub/c.md), [upper](B.MD).\n")
 	write("b.md", "# B\n\nbody text\n\n## Sec\n\nsec body\n")
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
@@ -121,7 +122,7 @@ func TestShellLocalLinkWithAnchorScrolls(t *testing.T) {
 	}
 }
 
-func TestShellLocalLinkDropsMissingAndNonMarkdown(t *testing.T) {
+func TestShellLocalLinkDropsMissingTarget(t *testing.T) {
 	dir := linkFiles(t)
 	s, _ := newShell(t)
 	tt := s.render(t)
@@ -130,14 +131,38 @@ func TestShellLocalLinkDropsMissingAndNonMarkdown(t *testing.T) {
 	}
 	tt.Frame()
 
-	for _, label := range []string{"missing", "img"} {
+	clickLink(t, tt, "missing", float32(settings.Default().FontSize))
+	if len(s.Tabs) != 1 {
+		t.Fatalf("tabs = %d, want 1", len(s.Tabs))
+	}
+	if tab := s.ActiveTab(); tab == nil || tab.Path != filepath.Join(dir, "a.md") {
+		t.Fatalf("active %v, want a.md untouched", tab)
+	}
+}
+
+func TestShellLocalLinkRevealsDirectoryAndNonMarkdown(t *testing.T) {
+	dir := linkFiles(t)
+	s, _ := newShell(t)
+	var revealed []string
+	s.ShowItemInFolder = func(path string) { revealed = append(revealed, path) }
+	tt := s.render(t)
+	if err := s.OpenFile(filepath.Join(dir, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	for _, label := range []string{"dir", "img"} {
 		clickLink(t, tt, label, float32(settings.Default().FontSize))
-		if len(s.Tabs) != 1 {
-			t.Fatalf("%s: tabs = %d, want 1", label, len(s.Tabs))
-		}
-		if tab := s.ActiveTab(); tab == nil || tab.Path != filepath.Join(dir, "a.md") {
-			t.Fatalf("%s: active %v, want a.md untouched", label, tab)
-		}
+	}
+	want := []string{filepath.Join(dir, "sub"), filepath.Join(dir, "pic.png")}
+	if !reflect.DeepEqual(revealed, want) {
+		t.Fatalf("revealed %v, want %v", revealed, want)
+	}
+	if len(s.Tabs) != 1 {
+		t.Fatalf("tabs = %d, want 1: a revealed target must not open a tab", len(s.Tabs))
+	}
+	if tab := s.ActiveTab(); tab == nil || tab.Path != filepath.Join(dir, "a.md") {
+		t.Fatalf("active %v, want a.md untouched", tab)
 	}
 }
 
